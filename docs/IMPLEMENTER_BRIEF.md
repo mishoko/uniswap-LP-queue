@@ -1,5 +1,9 @@
 # Implementer brief — start Hardcap with zero prior context
 
+**Superseded for the next session.** Use [`docs/NEXT_IMPLEMENTER.md`](./NEXT_IMPLEMENTER.md). This file is the v1-rail brief (5 bps tax). Judging product is now **ToB-spot claw** (`EXTRA_FEE_BPS = 0`). Plan wins on conflict.
+
+---
+
 You are implementing **Hardcap**, a Uniswap v4 hook, for UHI10 (theme: Sustainable Liquidity and MEV Protection). You have no prior chat. Do not invent a new product.
 
 ## 1. Single source of truth
@@ -105,7 +109,7 @@ Write the test files **first** (names are in the plan). Then make them pass.
 
 ```
 EXTRA_FEE_BPS <= MAX_TAKE_BPS   // both immutable
-notional = abs(actual input from afterSwap BalanceDelta)  // not amountSpecified
+notional = abs(unspecified afterSwap BalanceDelta)  // afterSwapReturnDelta is unspecified-only; not amountSpecified
 take = min(notional * EXTRA_FEE_BPS / 1e4,
            notional * MAX_TAKE_BPS / 1e4)
 ```
@@ -160,7 +164,7 @@ Prefer vault accounting **inside** the hook (no admin on a second contract).
 ## 11. First commands after clone
 
 1. Read the plan end-to-end, including “How Hardcap Is Used and By Whom” and “Implementation gotchas.”
-2. Spike (≤2 hours): who is `sender` in add/remove callbacks, and how `afterSwapReturnDelta` is signed in `FeeTakingHook`. Write the answer as a 10-line comment in `HardcapHook.sol` or a note in the plan.
+2. Spike (≤2 hours): who is `sender` in add/remove callbacks, and how `afterSwapReturnDelta` is signed in `FeeTakingHook`. Write the answer in [`docs/SPIKE-sender-and-afterSwapReturnDelta.md`](./SPIKE-sender-and-afterSwapReturnDelta.md) (and a short comment in `HardcapHook.sol`). Do not bury it only in chat.
 3. Add empty tests from the plan’s test-name list.
 4. Implement until those tests pass. Nothing else.
 

@@ -1,0 +1,17 @@
+# Foundry
+cache/
+out/
+broadcast/
+.forge-snapshots/
+
+# Env
+.env
+.env.*
+
+# Node
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+.DS_Store

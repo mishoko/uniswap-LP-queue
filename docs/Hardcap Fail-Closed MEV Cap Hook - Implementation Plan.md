@@ -1,6 +1,14 @@
 # Hardcap Fail-Closed MEV Cap Hook — Sceptic Checklist and Implementation Plan
 
-**Status:** this file is the only plan and source of truth. Do not invent a second design doc. Do not expand scope without editing this file first.
+**Status:** this file is the only **product / scope** plan. Do not invent a second design doc. Do not expand scope without editing this file first.
+
+Spike record (not a second design): [`docs/SPIKE-sender-and-afterSwapReturnDelta.md`](./SPIKE-sender-and-afterSwapReturnDelta.md).
+
+**Phase status (2026-08-18 evening pivot):** v1 rail (5 bps tax) is **implemented and stays as the envelope**. Product for judging is **v1+ ToB-spot claw**. `EXTRA_FEE_BPS = 0`. First swap of a block: take 0. Later in-range swaps that beat the block-open spot: claw `min(excess, cap)` to the aged vault. Tick-crossing swaps: take 0 (no OZ tick walk). Next implementer: [`docs/NEXT_IMPLEMENTER.md`](./NEXT_IMPLEMENTER.md).
+
+**Hackathon odds:** v1 rail cannot take first. Pivot is the official win shape (defense + recapture) without cloning OZ AntiSandwich, DualPool, FairFlow, MRLV (4 signals + 3% fee), or the cohort white-space slide. Still not DualPool. Still not Aerodrome. Highest-EV on-chain path that security firms can respect (no MemoryOOG).
+
+**Must not lie:** (1) tick-crossing sandwiches are not clawed; (2) native 0.30% still goes to in-range LPs; (3) this is not LVR recapture, not leftover auction, not FairFlow.
 
 ---
 
@@ -58,15 +66,41 @@ v4 native swap fees accrue inside `PoolManager` to **whoever is in range during 
 
 Hardcap only controls **hook take** (return-delta surplus / extra hook fee).
 
-v1 allowed surplus definitions, in order of honesty:
+Surplus definitions:
 
-1. **Preferred v1:** `EXTRA_FEE_BPS` immutable, `EXTRA_FEE_BPS <= MAX_TAKE_BPS`. Every swap pays that extra to the LP vault. The cap is a **safety rail** (bug → revert), not a toxicity detector. Pitch: “worst-case hook extraction is `MAX_TAKE_BPS` and the payee is LPs.” Do **not** call this leftover recapture.
+1. **Shipped v1 (envelope, keep the tests):** `EXTRA_FEE_BPS` tax. Useful as a rail. **Not** the judging product.
 
-2. **Optional v1+ if (1) is green:** surplus = excess vs a **start-of-block** simulated output (OZ AntiSandwich / `BaseDynamicAfterFee` pattern). Still no oracle. Still clamp to cap. Still no `donate()`.[^22][^23]
+2. **Current product (v1+ ToB-spot — this is the pivot):** `EXTRA_FEE_BPS = 0`. Surplus = taker’s unspecified amount beating a **block-open spot quote** computed with `SwapMath.computeSwapStep` on the snapshotted `(sqrtPriceX96, liquidity)` only. **No** `Pool.State` clone, **no** tick-bitmap walk (OZ AntiSandwich MemoryOOG). If **this swap** crossed a tick, surplus = 0. `take = min(surplus, notional * MAX_TAKE_BPS / 1e4)`. First swap of the block: take = 0 (snapshot only). Both directions. Still no oracle. Still no `donate()`.[^22][^23]
 
-3. **Forbidden in v1:** Chainlink/Pyth CEX gap, VPIN, Nezlobin overlay, manager auction, Flashblock clock.
+3. **Forbidden:** Chainlink/Pyth CEX gap, VPIN, Nezlobin overlay, manager auction, Flashblock clock, OZ tick-walk ToB, 4-signal “MEV detector” (MRLV), leftover *auction*.
 
 **Cap vs user swap:** if computed leftover *would* exceed the cap, **clamp take to cap**. Do not revert Alice’s swap because leftover is large. **Revert** only if internal math would credit the vault more than `notional * MAX_TAKE_BPS / 1e4` (bug path).
+
+---
+
+## v1+ ToB-spot (judging product — required)
+
+Keep the Hardcap envelope. Change only surplus.
+
+**State (one pool):** `openBlock`, `openSqrtPriceX96`, `openLiquidity`, `openTick`. Transient per-swap: `swapStartTick`.
+
+**`_beforeSwap`:** Cork checks. If `openBlock != block.number`, snapshot `getSlot0` + `getLiquidity` → open*. Always store `swapStartTick = current tick`. Return zero `BeforeSwapDelta`. No fee override.
+
+**`_afterSwap`:** Cork checks. `notional = abs(unspecified BalanceDelta)` (spike). If this is the first swap of the block → take 0. If `slot0.tick != swapStartTick` → take 0 (this swap crossed). If `getLiquidity() != openLiquidity` → take 0 (book changed; quote is a lie). Else quote unspecified at `(openSqrtPriceX96, openLiquidity)` via **one** `SwapMath.computeSwapStep` toward the open tick’s boundary (if the step would consume the boundary before filling, treat as would-cross-at-open → take 0).  
+`surplus = max(0, actualUnspecified − target)` on exact-in output, or `max(0, target − actualUnspecified)` on exact-out input.  
+`take = min(surplus, cap)`. Settle like FeeTakingHook.
+
+**Kill tests (new — FAIL = stop):**
+
+- `test_tob_firstSwapInBlock_takeIsZero`
+- `test_tob_secondSwapSameDir_inRange_clawsExcess`
+- `test_tob_tickCross_takeIsZero`
+- `test_tob_liquidityChangedSinceOpen_takeIsZero`
+- `test_tob_bothDirections`
+- `test_tob_largeExcess_clampedUserSwapSucceeds`
+- All existing Cork / cap-rail / JIT / vault tests stay green (`EXTRA=0` means cap tests use a test hook that still over-credits, or a forced surplus override).
+
+**Pitch:** “First swap of the block is vanilla. Same-block in-range fills better than the open are clawed to aged LPs, at most `MAX_TAKE_BPS`. Cork cannot call us. We do not walk ticks.”
 
 ---
 
@@ -78,6 +112,59 @@ To keep this buildable in 3 weeks and auditably safe:
 - No oracles, no off-chain analytics, no CEX price feeds.
 - No Flashblocks, Flashtestations, or chain-specific mempool tricks.
 - No AI agents, governance controllers, or auto-tuning of `EXTRA_FEE_BPS`.
+
+---
+
+## Vault accounting — now required (review catch, 2026-08-18)
+
+The first hook incrementing `shares` on add and never writing on remove **failed the vault kill**. An exited position could still `claim`. Recycle could stack rights. An unaged add could dilute an in-flight claim.
+
+These are **requirements**, not style. If any is missing, vault exclusivity is FAIL.
+
+| Requirement | Original plan expectation? | Status |
+|---|---|---|
+| New liquidity is **pending** until `OFFSET`. `_sync` lazy-matures that key on the next touch. | Implied (“denominator over aged positions”) but **not specified** as a pending bucket. First code put all L into `totalShares` immediately. | **Required. Implemented.** |
+| Claim **receipt** is aged-only. Claim **weight** is all live L (`totalShares + pendingTotal`). | “Aged denom only” is **not implementable** without iterating every position (`_sync` is per-key). Lazy aged-only denom lets the first claimer take 100% of other aged LPs who have not been touched. Two aged lockers must split. | **Required. Implemented.** |
+| Remove burns matured first, then pending (`_burnRights`). Full exit zeros both buckets. | Remove used to write matured only. Safe today only because `_sync` runs first. A later “same-block-only” JIT would reopen claim-after-exit. | **Required. Implemented.** |
+| Claim pays `min(recorded shares, live position L)`. Ghost shares cannot over-claim. | Asymmetry: claim read shares, never read PoolManager L. | **Required. Implemented.** |
+| `test_fullRemoveBurnsSharesCannotClaim` | **No** — added because the first suite could not see the hole. | **Required. Passing.** |
+| `test_recycleDoesNotStackShares` | **No** — same. | **Required. Passing.** |
+| `test_twoAgedLockersSplitVault` | Plan said pro-rata LP claims. First suite was one locker. | **Required. Passing.** |
+| `test_unagedDilutesButCannotClaim` | Replaces `test_unagedAddDoesNotDiluteAgedClaim`. Unaged L is in the weight (cannot iterate to exclude it) but cannot receive. | **Required. Passing.** |
+
+Do not revert to “shares += L on add, never burn.” That is the 1-wei-then-dump hole inverted.
+
+Share **unit** remains `liquidityDelta` (L), not token notional. That was the plan. Tight-range L-per-token inflation is a **known weakness**, not a second unit. See below.
+
+---
+
+## Known v1 weaknesses (do not sell past these)
+
+These are **accepted**. They are not bugs to “fix” into a new product. README and pitch must stay inside this list.
+
+| Weakness | Why it stays |
+|---|---|
+| 5 bps on every swap is a **tax**. | **No longer the judging product.** `EXTRA_FEE_BPS = 0`. ToB-spot is. |
+| Tick-crossing sandwiches are **not** clawed. | Honest skip. No OZ tick walk. |
+| JIT lock does **not** take the native 0.30%. A one-block LP still earns in-range fees. We only block same-block **exit** and **vault claim**. | v4 fee accounting is inside PoolManager. Hardcap cannot redirect it. |
+| `OFFSET = 1`. An LP who stays one block **and is still in the pool** can claim a capital-weighted slice. That is the model, not a lockup. | Same minimum as OZ `MIN_BLOCK_NUMBER_OFFSET`. Raising OFFSET is a parameter change, not a new feature, but do not market it as time-weighted. |
+| Share unit is `liquidityDelta`, not token notional. A tight-range position mints more L per token. | Plan said use L. Do not invent a second unit in v1. |
+| v1 `claim` is the **locker** (unlock caller), not the EOA behind a router. | Spike. Documented and tested (`test_claimRequiresPositionOwnerNotEoa`). |
+| Template `.gitignore` ignored `docs/`. | Process. Removed from `.gitignore`. Keep `docs/` committable. |
+
+---
+
+## Outstanding (not required to call v1 product-done)
+
+Do not add items here without editing this file. Do **not** start video or transcripts.
+
+| Item | Why it is still open | Required for v1 product? |
+|---|---|---|
+| Testnet deploy + hooklist | Needs RPC, keys, a real address. UHI10 does not require testnet. | No |
+| Tight-range L inflation documentation test | Known weakness. Do not change the share unit. | No |
+| Formal verification / second audit / monitoring | SDSF optional at this TVL. | No |
+| Human-voice demo recording | Gate 1. After ToB-spot is green. Human voice only. | Yes before 3 Sep |
+| ToB-spot implementation | **Current work.** Envelope is green. Surplus path is the pivot. | Yes |
 
 ---
 
@@ -286,7 +373,7 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
 2. **Formalize invariants:**
    - Access control: only `PoolManager` can call hook callbacks; only one configured `PoolKey` is valid.[^3][^1]
    - Surplus cap: for every swap, `take <= notional * MAX_TAKE_BPS / 1e4` and any attempt to set `take > cap` reverts.
-   - Vault exclusivity: vault balances can only be claimed by LPs that meet ageing criteria.
+   - Vault exclusivity: only aged, still-shareholding lockers can `claim`. Pending does not sit in the denom. Remove burns matching shares. No owner/rescue/sweep/`donate()`.
    - JIT block rule: same-block add→remove is forbidden.
 
 3. **Align with SDSF:**
@@ -296,7 +383,7 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
 4. **Define v1 surplus logic:**
    - For initial implementation, surplus is defined as a simple extra fee in bps (e.g., fixed 5 bps on each swap) rather than a complex MEV estimator.[^4][^3]
 
-**Milestone:** `SPEC.md` including threat model, invariants, SDSF mapping, and v1 surplus definition.
+**Milestone:** spike answers live in [`docs/SPIKE-sender-and-afterSwapReturnDelta.md`](./SPIKE-sender-and-afterSwapReturnDelta.md) plus a short comment in `HardcapHook.sol`. Do **not** create `SPEC.md`. This plan stays the only product/scope doc.
 
 ---
 
@@ -337,11 +424,11 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
 **Tasks:**
 
 1. **Surplus calculation (v1 = extra hook fee):**
-   - `notional` = actual executed input amount from `BalanceDelta` (absolute value of the specified input), **not** `amountSpecified` (partial fills / `sqrtPriceLimit` lie).[^\*]
+   - `notional` = absolute value of the **unspecified** `BalanceDelta` amount (see spike below). Not `amountSpecified` (partial fills / `sqrtPriceLimit` lie). Same currency as the take.[^\*]
    - `computedSurplus = notional * EXTRA_FEE_BPS / 1e4`.
    - Apply via `afterSwap` + `afterSwapReturnDelta` so `PoolManager`’s CL math still runs. **Do not** use `beforeSwapReturnDelta` to consume the whole swap in v1 (that is a NoOp/custom curve — SDSF high-risk, Bunni-class).[^\*][^7]
    - **Copy sign conventions** from OZ `BaseDynamicAfterFee` / test hooks (`FeeTakingHook`, `LPFeeTakingHook`) in v4-core. Do not invent delta signs.[^30]
-   - Take in the **input** currency unless a cited OZ pattern says otherwise. Exact-in vs exact-out both need a test.
+   - Take in the **unspecified** currency (OZ `BaseHookFee` / v4-core `FeeTakingHook`). Exact-in vs exact-out both need a test. See spike doc.
 
 2. **Cap enforcement:**
    - `take = min(computedSurplus, notional * MAX_TAKE_BPS / 1e4)`.
@@ -359,12 +446,13 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
 5. **Aged LP claims (v1 simplification):**
    - v1 assumes **direct LP interaction** with `PoolManager` (no complex router ownership model). The address that calls `modifyLiquidity` for a position is treated as its owner and must also call `claim`.
    - On add (`liquidityDelta > 0`):
-     - Compute `key = Position.calculatePositionKey(msg.sender, tickLower, tickUpper, salt)`.
+     - Compute `key = Position.calculatePositionKey(sender, tickLower, tickUpper, salt)` where `sender` is the **callback argument** (PoolManager unlock caller / position owner), **not** Solidity `msg.sender` (that is PoolManager) and **not** the EOA unless the EOA unlocked.
      - Set `lastAddBlock[key] = block.number`.
-     - If this is the first add for this key, set `shares[key] += liquidityDelta` and `totalShares += liquidityDelta`. (You can clamp or normalize if needed.)
+     - New liquidity is **pending** until `OFFSET` elapses (`pendingShares[key] += liquidityDelta`). `_sync` lazy-matures **that key** on the next touch. There is no global census.
+     - On remove (after the JIT check): burn `min(removed, shares[key])`. Full exit zeros claim rights. Recycle cannot stack shares.
    - On claim:
-     - Require `block.number >= lastAddBlock[key] + OFFSET`.
-     - Compute `payout = vault * shares[key] / totalShares`.
+     - Require `block.number >= lastAddBlock[key] + OFFSET`, then `_sync`.
+     - Compute `payout = vault * shares[key] / (totalShares + pendingTotal)` (all live L). Age gates receipt. Do **not** use matured-only denom: first claimer would take 100%.
      - Transfer `payout` to `msg.sender`.
      - **Single-shot claim:** set `totalShares -= shares[key]` and `shares[key] = 0`. The position can later accrue new shares via new adds.
    - Pro-rata denominator = `totalShares` over aged positions; you do **not** recompute based on current in-range liquidity (that would pay JIT who stayed).
@@ -429,6 +517,8 @@ This v1 design deliberately allows **one claim per position key per accrual cycl
    - Official rule: tests **or** frontend. Prefer a Foundry script that prints the four kill tests over a web UI.
    - If a UI is built at all: swap + vault balance + claim. No marketing dashboard.
 
+**Decision (2026-08-18):** do **not** require a testnet deploy for UHI10. Official rule is tests **or** frontend. Local `forge test --match-contract Hardcap` is the demo. Hooklist / Sepolia only after a real mined address exists. Do not submit a placeholder.
+
 **Milestone:** Hardcap compiles and kill tests pass locally; optional testnet deploy; hooklist submission only if there is a real address.
 
 ---
@@ -462,6 +552,12 @@ This v1 design deliberately allows **one claim per position key per accrual cycl
 ## Implementation gotchas (session-derived — do not rediscover)
 
 These burned review time. Implementers should treat them as given.
+
+### Spike results (2026-08-18)
+
+Full write-up: [`docs/SPIKE-sender-and-afterSwapReturnDelta.md`](./SPIKE-sender-and-afterSwapReturnDelta.md).
+
+Do not rediscover: unlock caller owns the position; `afterSwapReturnDelta` is unspecified-only; notional = `abs(unspecified BalanceDelta)`; no `donate()`.
 
 ### v4 API and deploy
 
@@ -508,6 +604,17 @@ These burned review time. Implementers should treat them as given.
 - `test_increaseLiquidityUpdatesLastAddBlock`
 - `test_differentSaltIsDifferentPosition`
 - `test_vanillaVsHardcap_sameSwaps_vaultAccruesExtra`
+- `test_fullRemoveBurnsSharesCannotClaim`
+- `test_recycleDoesNotStackShares`
+- `test_unagedDilutesButCannotClaim`
+- `test_twoAgedLockersSplitVault`
+- `test_take_oneForZero_chargesUnspecifiedOutput`
+- `test_partialRemoveThenClaimRemaining`
+- `test_partialRemoveThenAddSameBlockRefreshesLock`
+- `test_offsetWindow_blocksUntilOffsetElapses`
+- `test_constructor_rejectsNativeExtraAboveMaxAndZeroOffset`
+- `test_hookBalanceMatchesVaultAccrued`
+- `test_take_exactOut_oneForZero`
 
 ---
 
@@ -530,10 +637,10 @@ No VRF, no TEE attestations, no FHE. Correct. Flashtestations are not a foundati
 
 **What is still missing (real gaps, not flavor):**
 
-1. **Position owner vs router `sender`** — in v1 you explicitly assume direct LP → PoolManager interaction. That must be documented in README so nobody mistakes this for router-compatible general infra.
-2. **Currency of `take` on exact-out swaps** — needs one test or accounting will leak.
-3. **SDSF self-score worksheet** — 30 minutes, required for the README, not a new feature.[^49]
-4. **Comparison baseline** — `test_vanillaVsHardcap_sameSwaps_vaultAccruesExtra` so the video has a concrete number. Do not fabricate APY.
+1. **Position owner vs router `sender`** — **done** (spike doc + README + `test_claimRequiresPositionOwnerNotEoa`).
+2. **Currency of `take` on exact-out swaps** — **done** (`test_take_exactOut_chargesUnspecifiedInput`).
+3. **SDSF self-score worksheet** — **done** (README).
+4. **Comparison baseline** — **done** (`test_vanillaVsHardcap_sameSwaps_vaultAccruesExtra`). Do not fabricate APY.
 
 **Panel verdict:** the plan is allowed to proceed. It is a **bounded, security-first hook**, not a category-winning AMM. Quality of the four Foundry replays decides whether it places. Expanding into leftover oracles, Flashblocks, or “yesterday’s fee ownership” is how this becomes slop again.
 
