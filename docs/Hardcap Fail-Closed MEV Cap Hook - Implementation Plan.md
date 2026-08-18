@@ -78,6 +78,58 @@ To keep this buildable in 3 weeks and auditably safe:
 - No oracles, no off-chain analytics, no CEX price feeds.
 - No Flashblocks, Flashtestations, or chain-specific mempool tricks.
 - No AI agents, governance controllers, or auto-tuning of `EXTRA_FEE_BPS`.
+
+---
+
+## How Hardcap Is Used and By Whom
+
+v4 rule: **each pool has exactly one hook address.** A protocol that also wants limit orders, DualPool vaults, or a custom curve cannot “add Hardcap beside” those. They either inherit Hardcap and merge callbacks, or they do not use Hardcap. There is no hook middleware bus in v4-core.[^3]
+
+### Who would attach this hook as-is (no extra features)
+
+These users want a **pool**, not a library:
+
+| User | Why they would bother | Why security alone can be enough |
+|---|---|---|
+| LP / vault curator on a volatile pair | After Cork (~$11–12M) and Bunni (~$8.4M), “the hook can take unbounded value or get exploited” is a reason **not** to deposit. A printed `MAX_TAKE_BPS` and no owner drain is a number they can underwrite. | Yes, if they were going to use a **vanilla** or lightly customized pool anyway. Hardcap replaces the hook slot. |
+| Token / memecoin launcher | They already lock LP (pools.trade, Doppler). They still get blamed for a malicious or buggy hook. Immutable cap + fail-closed callbacks is a cheap “we cannot silently raise take to 50%” story. | Yes for simple launch pools that do not need a second hook. |
+| Integrator who is afraid of their **own** hook | Teams shipping return-delta / extra fees. SDSF says those paths extract. Hardcap is the fee path with a hard ceiling and LP-only payee. | Yes if their product **is** “take a bit, give it to LPs, don’t steal.” |
+| UHI judges / demo | Replay Cork + JIT + vault drain. | N/A |
+
+Security is **enough** when the alternative is: no hook, or a hook they wrote themselves with the same attack surface and no cap. It is **not** enough when the protocol’s product is DualPool, a custom curve, UniswapX-only flow, or Kyber-exclusive FairFlow. Those already occupy the single hook slot. They will not drop DualPool to get Hardcap.
+
+Honest limit: Hardcap does not make sandwiches −EV, does not recapture CEX–DEX LVR, and a 5 bps extra on all flow is a tax. Users who want “beat Aerodrome” will not pick this over Angstrom/FairFlow/Aegis. Users who want “this hook cannot Cork us and cannot raise take” might.
+
+### How people start v4 hooks today (checked)
+
+Official path is **not** “npm install a production hook and compose.” It is:
+
+1. Clone [uniswapfoundation/v4-template](https://github.com/uniswapfoundation/v4-template) (Foundry + v4-core + periphery, example `Counter.sol`).[^14]
+2. `import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol"` (or OZ `BaseHook`). Implement `getHookPermissions` + internal `_beforeSwap` / `_afterSwap`.[^1]
+3. Mine CREATE2 address so flags match. Deploy. `initialize` a pool with `hooks = that address`.
+
+OpenZeppelin’s library is the same shape: inherit `BaseHook`, optionally `BaseDynamicAfterFee`, not a diamond proxy of many hooks.
+
+So Hardcap should ship the **same way as v4-template + OZ general hooks**:
+
+| Mode | Who | How |
+|---|---|---|
+| **A. Attach as the pool hook** | Launchers, simple volatile pools, the UHI demo | Deploy `HardcapHook`, mine flags, `initialize(poolKey with hook=Hardcap)`. Same as attaching `Counter` or `AntiSandwichHook`. |
+| **B. Inherit as a base (the real reuse path)** | Teams that need *another* feature | `contract MyHook is HardcapHook { ... }` override `_afterSwap` / liquidity hooks, call `super`, **never** widen take above `MAX_TAKE_BPS`, never add `owner.withdraw`, never honor `hookData` unless they accept leaving Hardcap’s threat model. Re-mine address if permissions bits change. |
+| **C. Copy-paste the four checks** | Teams already committed to another parent (DualPool, custom curve) | They will not use Hardcap as the hook. They can copy I1–I6 (only PoolManager, ignore hookData, validate PoolKey, cap take, no donate, JIT exit revert). That is a checklist, not this product. Do not pretend C is Hardcap. |
+
+v1 of **this repo** is mode A: one deployable hook, tests, README. Mode B is the intended post-hackathon shape (abstract `HardcapHook` + `HardcapHookFinal` that only sets constants). Do not build a HookManager or multi-hook router in v1 (not in v4-core; SDSF complexity).
+
+### When they should **not** use Hardcap
+
+- They need DualPool / custom curve / TWAMM / limit orders as the hook — inherit or don’t use Hardcap.
+- They need `hookData` for permits, referrers, or protect flags — v1 rejects nonempty `hookData`. Forking that back in undoes Cork hardening.
+- They want native ETH, fee-on-transfer, or multi-pool one hook — out of v1 scope.
+- They think attaching Hardcap *and* their hook works. It does not.
+
+### Product sentence for README
+
+“Hardcap is a **pool hook you attach like any v4-template hook**, and a **base contract you inherit if you must add features**. It is not a second hook you compose at the PoolManager. Use it when the main risk you care about is unbounded hook extraction and callback trust, not when you need a different AMM.”
 - No second chain; one v4-enabled chain is enough.
 - No router integration beyond the minimal patterns tested in Foundry.
 - No admin controls or upgradability; new behavior requires new deployments.
