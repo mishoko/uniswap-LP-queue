@@ -1,8 +1,70 @@
 # Hardcap Fail-Closed MEV Cap Hook — Sceptic Checklist and Implementation Plan
 
+**Status:** this file is the only plan and source of truth. Do not invent a second design doc. Do not expand scope without editing this file first.
+
 ## Overview
 
 This document specifies a security-focused Uniswap v4 hook (“Hardcap”) that enforces an immutable cap on hook-level value extraction and guarantees that any extracted surplus can only be credited to liquidity providers (LPs), while fail-closing against known Uniswap v4 hook exploit patterns. It first applies a sceptic checklist over four critical test cases; conditional on passing these, it outlines a detailed implementation plan, milestones, validation steps, and references.[^1][^2][^3][^4]
+
+## Honest rating of this plan (as of 2026-08-18)
+
+| Axis | Score | Why |
+|---|---|---|
+| Theme fit (Sustainable Liquidity + MEV Protection) | 3.5 / 5 | Bounds *hook* extraction and JIT hit-and-run. Does **not** kill sandwiches, LVR, or CEX–DEX arb. Liquidity thesis is “LPs can size in because worst-case hook take is printed.” |
+| Originality (30% of judging) | 3.5–4 / 5 | Empty-ish lane (executable SDSF/ToB/Cork, not another fee curve). Not a new AMM. Loses if pitched as “yesterday’s LPs get today’s swap fees.” |
+| Unique execution (25%) | 4 / 5 **if** Cork + OZ-donate + JIT + vault-drain tests are the demo. 2 / 5 if README-only. |
+| Impact (20%) | 3.5 / 5 | Real for “I will not LP a hooked pool after Cork/Bunni.” Not a venue that beats Aerodrome on volume. |
+| 3-week shipability | 4 / 5 | No oracle, no searchers, no Flashblocks, no upgrade proxy. Dies if surplus accounting is invented from scratch instead of copying a known `afterSwapReturnDelta` pattern. |
+| Honesty of v1 surplus | **Weak unless scoped** | A fixed extra bps on *every* swap is a tax, not MEV recapture. See “Surplus honesty.” |
+
+**Verdict:** proceed as a **security-as-liquidity** hook with four kill tests. Do not upgrade the slogan. Do not add auctions, delays, VPIN, Flashblocks, or an AI agent.
+
+## What this is not (killed in prior review — do not revive)
+
+Do not spend tokens re-deriving these. They are dead unless this file is explicitly amended with new evidence.
+
+- Hermes / off-chain parameter agent / public decision log as the product
+- VPIN-as-title (course homework; 57% of 2025 UHI projects were LP/dynamic fee)
+- Stock-hours / Robinhood Session AMM (RH sells 24/7; they will not adopt a student hook; stocks ~10% of RH DEX vol)
+- Leftover *auction* that needs searchers to bid
+- Diamond / generic first-in-block LVR auction (official avoid; 53 prior)
+- FlashClear “kill sandwiches on Unichain” (Gogol 2026: sandwiches rare on private-mempool L2s; Flashtestations not production)
+- “Donate leftover from sr-AMM” (`donate` pays *current* in-range LPs; failed-sandwich inventory never left the pool)
+- Public FairFlow @ start-of-block (= OZ AntiSandwich)
+- DualPool + JIT lock (DualPool already blocks external add/remove)
+- Fill warranty vs start-of-block (pays every second swap)
+- Lottery / Feeling Lucky as the product
+- Nezlobin-as-title (taught this cohort)
+- am-AMM / delay / TWAMM-first as the *title* (user rejected as overcrowded categories)
+- Two OZ hooks on one pool (v4 allows **one hook address** per pool)
+- Two-sided Umbra in v1 (OZ left one direction off on purpose)
+- On-chain census of every LP at block start (cannot iterate positions)
+
+Official UHI10 white-space (VRF settlement, builder-attested flow, searcher bonds, LP-governed auction) was published to the whole cohort. Do not file those as-is.
+
+## Surplus honesty (read before writing Solidity)
+
+v4 native swap fees accrue inside PoolManager to **whoever is in range during the swap**. Hardcap **cannot** redirect that 0.30% to “yesterday’s LPs” without replacing v4 fee accounting. Do not claim that.
+
+Hardcap only controls **hook take** (return-delta surplus / extra hook fee).
+
+v1 allowed surplus definitions, in order of honesty:
+
+1. **Preferred v1:** `EXTRA_FEE_BPS` immutable, `EXTRA_FEE_BPS <= MAX_TAKE_BPS`. Every swap pays that extra to the LP vault. The cap is a **safety rail** (bug → revert), not a toxicity detector. Pitch: “worst-case hook extraction is `MAX_TAKE_BPS` and the payee is LPs.” Do **not** call this leftover recapture.
+2. **Optional v1+ if (1) is green:** surplus = excess vs a **start-of-block** simulated output (OZ AntiSandwich / `BaseDynamicAfterFee` pattern). Still no oracle. Still clamp to cap. Still no `donate()`.
+3. **Forbidden in v1:** Chainlink/Pyth CEX gap, VPIN, Nezlobin overlay, manager auction, Flashblock clock.
+
+**Cap vs user swap:** if computed leftover *would* exceed the cap, **clamp take to cap**. Do not revert Alice’s swap because leftover is large. **Revert** only if internal math would credit the vault more than `notional * MAX_TAKE_BPS / 1e4` (bug path).
+
+## Judging constraints (UHI10)
+
+- Weighted score: 30% original / 25% execution / 20% impact / 15% function / 10% pitch.
+- Video ≤5 min, **no AI voice** (AI voice = score hit + Demo Day block).
+- Tests **or** frontend. Prefer tests. Frontend is optional; do not burn Phase 4 on UI before kill tests are green.
+- Testnet deploy is **not** mandatory.
+- Returning-team / prior capstone: VPIN repo code does **not** count. All Hardcap code must be new.
+- Partner integrations: README must list them or say `No partner integrations.` Do not claim Flashbots/CoW/Aegis unless the code calls them.
+- Hookathon window: 17 Aug–3 Sep 2026 23:59 PST; Demo Day 11 Sep 2026.
 
 ## Sceptic Checklist — Four Kill Tests
 
@@ -14,9 +76,10 @@ The project only proceeds if a concrete implementation can pass these four class
 
 **Required properties for Hardcap:**
 
-- All hook callbacks (`beforeSwap`, `afterSwap`, `beforeModifyPosition`, etc.) must enforce `require(msg.sender == address(poolManager))`.
-- Hook must reject or ignore non-empty `hookData` entirely in v1; no business logic may depend on user-provided hookData.
-- Hook must validate the `PoolKey` to ensure it only operates on the configured pool.
+- All hook callbacks must be unreachable except via PoolManager. Prefer inheriting `BaseHook` (OZ or v4-periphery), which already gates `msg.sender`; still **test** direct calls. Do not hand-roll a broken `onlyPoolManager`.
+- Callbacks to implement in v1 (and only these): `beforeSwap`, `afterSwap` (+ `afterSwapReturnDelta`), `beforeAddLiquidity` or `afterAddLiquidity`, `beforeRemoveLiquidity`. There is **no** `beforeModifyPosition` hook in current v4 `IHooks`. PoolManager’s `modifyLiquidity` dispatches to add vs remove hooks. Params type is `ModifyLiquidityParams` (`tickLower`, `tickUpper`, `liquidityDelta`, `salt`).
+- Hook must reject non-empty `hookData` in v1 (`hookData.length == 0` or revert). No business logic may depend on user-provided hookData (Cork class).
+- Hook must validate `PoolKey` equals the single immutable configured key (ToB: do not trust a caller-supplied key). v1 is **one pool per hook deployment**.
 
 **Validation plan:**
 
@@ -37,7 +100,7 @@ If any of the above assertions fails, the project is killed.
 - The hook defines an immutable `MAX_TAKE_BPS` constant in the constructor (e.g., 15 basis points).
 - On each swap, the hook computes a `computedSurplus` and then sets:
   \(\text{take} = \min(\text{computedSurplus}, \text{notional} \cdot \text{MAX\_TAKE\_BPS} / 10^4)\).
-- If internal math attempts to set `take > cap`, the hook must revert; no unlock or surplus transfer occurs.
+- If computed surplus *exceeds* the cap, **clamp** `take` to the cap (user swap still succeeds). If any code path would *credit* more than the cap, **revert** the unlock (bug). These are different.
 
 **Validation plan:**
 
@@ -54,9 +117,11 @@ If any scenario allows `take > MAX_TAKE_BPS * notional / 10^4` without revert, t
 
 **Required properties for Hardcap:**
 
-- The hook tracks `lastAddBlock[lp]` for LP positions.
-- `beforeRemoveLiquidity` enforces that if `block.number == lastAddBlock[lp]`, the removal reverts.
-- Vault surplus must not be payable to short-lived JIT positions.
+- Track `lastAddBlock[positionKey]`, **not** `lastAddBlock[lp]`. Position key is `Position.calculatePositionKey(owner, tickLower, tickUpper, salt)` (OZ PenaltyHook). The same address can open a second position with a different salt and bypass an address-keyed lock.
+- On **any** liquidity increase (`liquidityDelta > 0`), including `increaseLiquidity` on an existing range, update `lastAddBlock` for that key. Honest LPs who top up look like JIT until `OFFSET` elapses. Document this; do not hide it.
+- `beforeRemoveLiquidity`: if `block.number == lastAddBlock[positionKey]`, revert.
+- Vault `claim` only if `lastAddBlock[positionKey] + OFFSET <= block.number`. `OFFSET` default `1` (same minimum as OZ `MIN_BLOCK_NUMBER_OFFSET`).
+- Partial remove then add in the same block still updates last-add; keep the rule local and stupid.
 
 **Validation plan:**
 
@@ -109,7 +174,7 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
 - **Normal swaps:** execute as usual; if there is minimal or no surplus (e.g., little arb or priority-fee), `take` is 0 and the hook does nothing beyond enforcing callback access control.
 - **Toxic or high-margin flows:** the hook calculates a surplus (in v1 this can be a fixed extra fee in bps) and caps extraction at `MAX_TAKE_BPS` of notional, sending that amount to the LP vault.
 - **JIT liquidity:** same-block add→remove reverts, and LP vault claims are restricted to aged positions.
-- **Exploits / misconfigurations:** direct callback calls, non-empty hookData, and attempts to exceed the extraction cap all result in revert.
+- **Exploits / misconfigurations:** direct callback calls, non-empty hookData, and *bug-path* attempts to credit more than the cap all result in revert. Large leftover is clamped, not used to revert the user.
 
 
 ## Implementation Plan — Phases, Steps, and Milestones
@@ -148,22 +213,24 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
 **Tasks:**
 
 1. **Hook contract skeleton:**
-   - Implement v4 hook interface with `beforeSwap`, `afterSwap`, `beforeModifyPosition`, `afterModifyPosition`, and any other required callbacks.[^14][^12]
-   - Store immutable `poolManager` and `PoolKey` in the constructor.
-   - Store immutable `MAX_TAKE_BPS` and LP vault address.
+   - Inherit `BaseHook` from OpenZeppelin uniswap-hooks or Uniswap `v4-periphery`. Do not implement `IHooks` from scratch.
+   - Enable **only** these permission bits (must match mined address): `beforeSwap`, `afterSwap`, `afterSwapReturnDelta`, `beforeAddLiquidity` (or `afterAddLiquidity`), `beforeRemoveLiquidity`.
+   - Store immutable `poolManager`, `PoolKey` (or currency0/1 + fee + tickSpacing + hook self-check), `MAX_TAKE_BPS`, `EXTRA_FEE_BPS` (`<= MAX_TAKE_BPS`), `OFFSET`, vault address.
+   - **Hook address mining:** deploy via CREATE2 / `HookMiner` so the address flags match `getHookPermissions()`. A flag mismatch means PoolManager never calls you (or calls a function you did not implement → revert). This is a day-1 task, not a deploy surprise.
 
 2. **Callback gating:**
-   - Add `require(msg.sender == address(poolManager))` in every callback.[^1][^3]
-   - Validate `PoolKey` on relevant callbacks.
-   - Reject or ignore non-empty `hookData`.
+   - Rely on `BaseHook` + explicit tests that raw `hardcap.beforeSwap(...)` reverts.
+   - Validate `key.toId()` / currencies against the immutable pool.
+   - Revert on `hookData.length != 0`.
 
-3. **LP vault skeleton:**
-   - Implement a simple ERC-20-like vault or accounting structure that tracks surplus attributable to the pool.
-   - No `owner` or `admin` withdraw functions.
-   - Implement an `onlyLP`-style modifier based on LP positions for later use in `claim`.
+3. **LP vault:**
+   - Prefer **accounting inside the hook** (balances + claim) over a second privileged contract, unless the vault has **zero** admin. Two contracts = two steal surfaces.
+   - No `owner` / `rescue` / `sweep` that can move vault tokens. If a rescue is added later, the project has failed test 4.
+   - Do **not** use `poolManager.donate()` to pay LPs.
 
 4. **Foundry environment:**
-   - Set up Foundry with v4-core / v4-periphery dependencies and basic test harness for hooks.[^15][^14]
+   - Use official v4-template / OZ hooks remappings. Copy test deploy patterns from OZ hook tests (`Deployers`, `PoolSwapTest`, `PoolModifyLiquidityTest`).
+   - Do not write a custom PoolManager mock.
 
 **Milestone:** `HardcapHook.sol` and `LPVault.sol` compile; basic access control tests passing (PoolManager-only, PoolKey binding).
 
@@ -174,24 +241,32 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
 
 **Tasks:**
 
-1. **Surplus calculation:**
-   - Implement a v1 version where `computedSurplus = notional * EXTRA_FEE_BPS / 1e4` for a fixed `EXTRA_FEE_BPS`.
-   - Use `AfterSwapReturnDelta` or equivalent to apply surplus without disrupting core swap math.[^12][^3]
+1. **Surplus calculation (v1 = extra hook fee):**
+   - `notional` = actual executed input amount from `BalanceDelta` (absolute value of the specified input), **not** `amountSpecified` (partial fills / `sqrtPriceLimit` lie).
+   - `computedSurplus = notional * EXTRA_FEE_BPS / 1e4`.
+   - Apply via `afterSwap` + `afterSwapReturnDelta` so PoolManager’s CL math still runs. **Do not** use `beforeSwapReturnDelta` to consume the whole swap in v1 (that is a NoOp/custom curve — SDSF high-risk, Bunni-class).
+   - **Copy sign conventions** from OZ `BaseDynamicAfterFee` / `FeeTakingHook` / `LPFeeTakingHook` in v4-core test hooks. Do not invent delta signs. User-perspective: negative = user paid.
+   - Take in the **input** currency unless a cited OZ pattern says otherwise. Exact-in vs exact-out both need a test.
 
 2. **Cap enforcement:**
-   - Set `take = min(computedSurplus, notional * MAX_TAKE_BPS / 1e4)`.
-   - Add safety checks: if any path tries to set `take > cap`, revert.
+   - `take = min(computedSurplus, notional * MAX_TAKE_BPS / 1e4)`.
+   - If `take` after min() still `>` cap (overflow / bad cast) → revert.
+   - Use `uint256` then `SafeCast` to `int128`. OZ PenaltyHook already does this.
 
 3. **Vault crediting:**
-   - Add internal function to credit `take` amount to LP vault.
-   - Ensure no donation calls (`poolManager.donate()`) to avoid second-account redirect risks.[^11]
+   - Hook keeps the taken amount (return-delta credits the hook; settle into hook-owned balances).
+   - Credit `vaultAccrued0/1` or a single surplus token. No `donate()`.
 
 4. **JIT rule:**
-   - Track `lastAddBlock[lp]` on `beforeModifyPosition` when adding liquidity.
-   - In `beforeRemoveLiquidity`, if `block.number == lastAddBlock[lp]`, revert.
+   - `afterAddLiquidity` or `beforeAddLiquidity`: if `params.liquidityDelta > 0`, set `lastAddBlock[Position.calculatePositionKey(sender, tickLower, tickUpper, salt)] = block.number`.
+   - `beforeRemoveLiquidity`: same key; revert if `block.number == lastAddBlock[key]` (or more generally `block.number < lastAddBlock + OFFSET` if you want PenaltyHook-style window on *exit*, not only same-block).
+   - Sender in the callback is the **modifyLiquidity caller** (router), not always the EOA. If tests use `PoolModifyLiquidityTest`, `sender` is the router. Key must use the **position owner** Uniswap uses. Read `Position.calculatePositionKey` and what PoolManager passes as `sender` before coding. **Wrong sender = lock does not bind the real position.** Verify against v4-core `PoolManager.modifyLiquidity` (it keys positions by `msg.sender` of the unlock caller, typically the router). Treat “who is `sender`?” as a week-1 spike, not an assumption.
 
 5. **Aged LP claims:**
-   - Implement `claim()` that allows LPs with positions where `lastAddBlock + OFFSET <= block.number` to withdraw pro-rata vault surplus.
+   - `claim(tickLower, tickUpper, salt)`: load key from `msg.sender` (the position owner who must call via the same router identity that owns the position — this is awkward). Practical v1: claim is invoked with the same `sender` identity PoolManager used, **or** store shares at add time keyed by `(owner, ticks, salt)` and have the owner claim.
+   - Pro-rata denominator = sum of **aged** position notionals you recorded, not current in-range liquidity (that would pay JIT who stayed).
+   - Record `shares[positionKey]` at last add (liquidity amount). On claim, `payout = vault * shares[key] / totalAgedShares`.
+   - Rounding: last wei can stick in the vault. Do not “sweep” to owner.
 
 **Milestone:** surplus cap and JIT rule implemented; unit tests for cap enforcement and JIT behavior passing.
 
@@ -239,14 +314,11 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
    - Submit hook details to public registries like Uniswap’s `hooklist` and relevant analytics providers.[^16][^17]
    - Document flags, chain ID, and hook behavior clearly.
 
-4. **Simple frontend/demo:**
-   - Implement a minimal frontend showing:
-     - Swaps into the Hardcap pool.
-     - Vault balance growth from surplus.
-     - LP claim interface with ageing rule.
-   - Include visual traces of JIT and Cork-attack attempts failing.
+4. **Demo surface:**
+   - Official rule: tests **or** frontend. Prefer a Foundry script that prints the four kill tests over a web UI.
+   - If a UI is built at all: swap + vault balance + claim. No marketing dashboard.
 
-**Milestone:** Hardcap deployed on testnet with one pool; registry entries created; basic frontend operational.
+**Milestone:** Hardcap compiles and kill tests pass locally; optional testnet deploy; hooklist submission only if there is a real address.
 
 
 ### Phase 5 — Documentation, Video, and Pitch (2–3 days)
@@ -274,6 +346,76 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
 **Milestone:** README, video script, and pitch deck complete.
 
 
+## Implementation gotchas (session-derived — do not rediscover)
+
+These burned review time. Implementers should treat them as given.
+
+### v4 API and deploy
+- Hook callbacks are `beforeAddLiquidity` / `afterAddLiquidity` / `beforeRemoveLiquidity` / `afterRemoveLiquidity`, not `beforeModifyPosition`.
+- `getHookPermissions()` bits must match the CREATE2 address. Use `HookMiner.find`.
+- One hook contract per pool in v1. One hook **address** per `PoolKey`. You cannot attach AntiSandwichHook *and* LiquidityPenaltyHook; merge behavior yourself.
+- `BaseHook` already checks PoolManager. Still write the direct-call test (Cork).
+- Do not support native ETH in v1 if it adds `msg.value` / refund surface (SDSF token hazards). WETH/USDC-style ERC20 only. No fee-on-transfer, rebasing, ERC-777.
+
+### Accounting
+- `amountSpecified` is the request, not the fill. Use `BalanceDelta` from `afterSwap`.
+- `afterSwapReturnDelta` is the v1 take path. `beforeSwapReturnDelta` consuming the swap = custom curve = out of scope.
+- `poolManager.donate()` is banned. OZ PenaltyHook donates to *current* in-range LPs; a second account at an empty tick can catch the donate on a thin pool (OZ natspec admits this).
+- Vault tokens sit on the hook. There is no “yesterday census.” Aged `shares[positionKey]` is the honest approximation.
+- Router vs EOA: PoolManager keys positions by the unlock `msg.sender` (usually a periphery router). JIT locks keyed by the user’s EOA will silently not fire. Confirm against `v4-core` `PoolManager.modifyLiquidity` before writing `lastAddBlock`.
+
+### Economics / pitch
+- Hardcap does **not** make sandwiches −EV (that is Umbra/OZ, one direction, incomplete). Do not say “kill the sandwich.”
+- Do not pitch Unichain-specific sandwich protection (Gogol 2026).
+- Do not pitch Robinhood or Uniswap Labs adoption.
+- FairFlow (exclusive + signed price), Angstrom (priority-gas tax), Aegis (surge fee), DualPool (vault JIT, external LP blocked) already exist. Hardcap’s difference is **immutable public cap + LP-only payee + fail-closed callbacks**. If the README does not say that in one sentence, the pitch is slop.
+- Extra fee on *all* flow hurts the “sustainable **low** fee” theme. Keep `EXTRA_FEE_BPS` small (e.g. 5) and `MAX_TAKE_BPS` the rail (e.g. 15). Say it is a bound, not a toxicity oracle.
+
+### Process
+- Week 1 = four kill tests only. No frontend, no second hook, no oracle branch.
+- If a kill test is still red at end of Phase 3, **stop**. Do not patch-narrate.
+- Video: ≤5 minutes, human voice, exploit replay first, comparison second. No AI voice.
+- Tests are sufficient to be judged.
+
+### Suggested Foundry test names (write these first)
+- `test_revert_directCallback`
+- `test_revert_nonEmptyHookData`
+- `test_revert_wrongPoolKey`
+- `test_take_clampedToMaxBps`
+- `test_take_neverExceedsCap_fuzz`
+- `test_revert_sameBlockAddRemove`
+- `test_jitCannotClaimVault`
+- `test_agedLpCanClaim`
+- `test_ownerCannotDrainVault` (no owner function exists)
+- `test_increaseLiquidityUpdatesLastAddBlock`
+- `test_differentSaltIsDifferentPosition`
+
+## Expert panel review of this plan (honest, no invented data)
+
+**LVR / MEV quant.**  
+Hardcap as specified does **not** recapture LVR. A flat extra bps is a transfer from all swappers to aged LPs. That can still help *hook-trust* and JIT fee theft; it does not mark the book to Binance. Do not put “LVR recapture” in the README unless surplus definition (2) (start-of-block excess) is implemented and tested. Theme fit is **partial** and must be sold as extraction-bounded hooked liquidity, not as FairFlow.
+
+**Hook security / ToB / SDSF.**  
+The four kill tests match real incidents (Cork, OZ donate, Umbra JIT). Using `BaseHook` + banning `donate` + banning `hookData` + no proxy is the correct SDSF posture (immutability, no external deps, price-impact path is the take). Missing from v1 and acceptable if documented: no formal verification, no second audit, no monitoring. Feature trigger “price impacting behavior” still applies because you take a hook fee — treat `afterSwapReturnDelta` as the dangerous permission and fuzz it. **Do not** add `beforeSwapReturnDelta` in v1.
+
+**Agentic / 2026 hook-AI.**  
+Stay out. Aeon/Sentinel/Hermes patterns are the wrong cohort (UHI11 curation) and add an operator.
+
+**Complex systems.**  
+The useful homeostasis is fail-closed + a printed cap, not a controller. Do not add autonomous fee updates (SDSF autonomy trigger).
+
+**Crypto primitives.**  
+No VRF, no TEE attestations, no FHE. Correct. Flashtestations are not a foundation.
+
+**What is still missing (real gaps, not flavor):**
+1. **Position owner vs router `sender`** — must be resolved in Phase 1 with a 20-line spike reading PoolManager, or the JIT lock is fiction.
+2. **Claim identity** — same spike; otherwise nobody can claim.
+3. **Currency of `take`** on exact-out swaps — needs one test or accounting will leak.
+4. **SDSF self-score worksheet** — 30 minutes, required for the README, not a new feature.
+5. **Comparison baseline** — one test vs a vanilla pool (same swaps, show extra vault vs no vault) so the video has a number. Do not fabricate APY.
+
+**Panel verdict:** the plan is allowed to proceed. It is a **bounded, security-first hook**, not a category-winning AMM. Quality of the four Foundry replays decides whether it places. Expanding into leftover oracles, Flashblocks, or “yesterday’s fee ownership” is how this becomes slop again.
+
 ## Good Practices and References from Uniswap and Security Ecosystem
 
 ### Uniswap v4 Security Framework
@@ -299,7 +441,7 @@ Hardcap is a single Uniswap v4 hook attached to a volatile pool that:
 
 ## Conclusion
 
-Hardcap is a security-first Uniswap v4 hook that aims to make hooked pools safer by bounding hook-level extraction and enforcing LP-only surplus distribution, while closing known exploit vectors like Cork-style callbacks, JIT liquidity, and donation redirection. The sceptic checklist and implementation plan in this document define a concrete path: if the implementation passes the four kill tests, the project proceeds; if any fails, the project is honestly killed rather than patched into another fragile hook.[^8][^2][^11][^1][^3]
+Hardcap is a security-first Uniswap v4 hook that aims to make hooked pools safer by bounding **hook-level** extraction and enforcing LP-only surplus distribution, while closing known exploit vectors like Cork-style callbacks, same-block JIT exit, and donation redirection. It is not a sandwich AMM, not FairFlow, and not “yesterday’s LPs get today’s 0.30%.” The sceptic checklist is the path: if the implementation passes the four kill tests, proceed; if any fails, kill the project rather than narrate it.[^8][^2][^11][^1][^3]
 
 ---
 
@@ -344,4 +486,24 @@ Hardcap is a security-first Uniswap v4 hook that aims to make hooked pools safer
 19. [Uniswap Hook Incubator: 2025 Wrapped - Atrium Academy](https://blog.atrium.academy/uniswap-hook-incubator-2025-wrapped) - With hooks, we can finally build AMMs that protect liquidity providers while unlocking sustainable o...
 
 20. [Auditing Uniswap V4 Hooks: Risks, Exploits, and Secure Implementation](https://hacken.io/discover/auditing-uniswap-v4-hooks/) - Uniswap V4 Hooks offer unprecedented flexibility for developers, enabling custom logic within liquid...
+
+21. [Gogol et al., How to Serve Your Sandwich? (arXiv:2601.19570)](https://arxiv.org/abs/2601.19570) — sandwiches endemic on L1; rare/unprofitable on private-mempool L2s. Do not pitch Unichain sandwich-killing.
+
+22. [OpenZeppelin AntiSandwichHook.sol (v1.2.0)](https://github.com/OpenZeppelin/uniswap-hooks/blob/master/src/general/AntiSandwichHook.sol) — one swap direction only; `_handleCollectedFees` is the inheritor’s problem.
+
+23. [OpenZeppelin LiquidityPenaltyHook.sol (v1.2.0)](https://github.com/OpenZeppelin/uniswap-hooks/blob/master/src/general/LiquidityPenaltyHook.sol) — `donate` to current in-range; natspec admits second-account redirect.
+
+24. [Kyber FairFlow](https://blog.kyberswap.com/introducing-fairflow/) — exclusive router leftover skim; not Hardcap.
+
+25. [Angstrom L2](https://docs.angstrom.xyz/l2/intro) — priority-fee tax; not Hardcap.
+
+26. [DualPool hook](https://blog.uniswap.org/dualpool-hook-is-now-live) — Labs+Spark vault JIT; already blocks external LP; do not clone.
+
+27. [Umbra sandwich-resistant AMM](https://www.umbraresearch.xyz/writings/sandwich-resistant-amm) — JIT hole still open; Hardcap only takes the same-block remove revert, not full sr-AMM.
+
+28. [Atrium 2025 Wrapped / UHI10 theme](https://blog.atrium.academy/uniswap-hook-incubator-2025-wrapped) — Fair Flow Frontier; official avoid FHE and generic LVR auctions.
+
+29. [Uniswap hooklist](https://github.com/Uniswap/hooklist) — registry only; not routing allowlist.
+
+30. [v4-core IHooks / PoolManager](https://github.com/Uniswap/v4-core) — callback names, `ModifyLiquidityParams`, position keying by unlock sender.
 
