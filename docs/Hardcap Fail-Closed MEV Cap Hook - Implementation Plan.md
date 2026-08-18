@@ -29,7 +29,7 @@ It first applies a sceptic checklist over four critical test cases; conditional 
 | Unique execution (25%) | 4 / 5 **if** Cork + OZ-donate + JIT + vault-drain tests are the demo. 2 / 5 if README-only. |
 | Impact (20%) | 3.5 / 5 | Real for “I will not LP a hooked pool after Cork/Bunni.” Not a venue that beats Aerodrome on volume. |
 | 3-week shipability | 4 / 5 | No oracle, no searchers, no Flashblocks, no upgrade proxy. Dies if surplus accounting is invented from scratch instead of copying a known `afterSwapReturnDelta` pattern. |
-| Honesty of v1 surplus | **Weak unless scoped** | A fixed extra bps on *every* swap is a tax, not MEV recapture. See “Surplus honesty.” |
+| Honesty of v1 surplus | **Scoped (ToB-spot)** | Tax path remains for envelope tests. Production surplus is backrun-vs-open, not same-dir, not tick-cross. |
 
 **Verdict:** proceed as a **security-as-liquidity** hook with four kill tests. Do not upgrade the slogan. Do not add auctions, delays, VPIN, Flashblocks, or an AI agent.
 
@@ -93,14 +93,36 @@ Keep the Hardcap envelope. Change only surplus.
 **Kill tests (new — FAIL = stop):**
 
 - `test_tob_firstSwapInBlock_takeIsZero`
-- `test_tob_secondSwapSameDir_inRange_clawsExcess`
+- `test_tob_secondSwapSameDir_inRange_clawsExcess` — **name kept; assertion is take = 0.** Same-dir cannot beat the open quote (price already moved against the taker). Do not invent surplus.
+- `test_tob_backrunOppositeDir_inRange_clawsExcess` — this is the real claw (classic backrun, stays in-tick).
 - `test_tob_tickCross_takeIsZero`
 - `test_tob_liquidityChangedSinceOpen_takeIsZero`
 - `test_tob_bothDirections`
 - `test_tob_largeExcess_clampedUserSwapSucceeds`
-- All existing Cork / cap-rail / JIT / vault tests stay green (`EXTRA=0` means cap tests use a test hook that still over-credits, or a forced surplus override).
+- All existing Cork / cap-rail / JIT / vault tests stay green (`extraFeeBps > 0` keeps the tax path for those tests; cap-rail still uses `HardcapOverSurplusHook` / `HardcapBugTakeHook`).
 
 **Pitch:** “First swap of the block is vanilla. Same-block in-range fills better than the open are clawed to aged LPs, at most `MAX_TAKE_BPS`. Cork cannot call us. We do not walk ticks.”
+
+### Spike answers (2026-08-19, Variant A shipped — do not rediscover)
+
+Read `SwapMath.computeSwapStep` + `test/libraries/SwapMath.t.sol` + `Pool.swap` in this repo's v4-core.
+
+| Arg | Decision | Why |
+|---|---|---|
+| `sqrtPriceCurrentX96` | `openSqrtPriceX96` | Block-open snapshot, not current spot |
+| `sqrtPriceTargetX96` | `TickMath.getSqrtPriceAtTick(openTick ± tickSpacing)` | Direction is **inferred** (`current >= target` ⇒ zeroForOne). Do not pass a direction flag. |
+| `liquidity` | `openLiquidity` | If live L changed, skip (quote is a lie) |
+| `amountRemaining` | executed specified `BalanceDelta`, same sign as `amountSpecified` | Request lies on partial fills |
+| `feePips` | `PoolKey.fee` (**3000** = 0.30% = 3000/1e6) | Include LP fee. Omit-fee **under-claws** exact-in (`targetOut` inflates). The brief's "omit-fee ⇒ phantom surplus" is backwards for this surplus formula. |
+| would-cross | `sqrtPriceNextX96 == target` | Step hit the open-tick spaced boundary before filling |
+| exact-in target | `amountOut` | Unspecified is output |
+| exact-out target | `amountIn + feeAmount` | Unspecified is input; Pool.sol charges both |
+
+**Honesty the named DoD test gets wrong:** a second **same-direction** swap cannot beat the open quote (price is monotonic). `test_tob_secondSwapSameDir_inRange_clawsExcess` asserts take = 0. The claw is `test_tob_backrunOppositeDir_inRange_clawsExcess`. Do not invent same-dir surplus.
+
+**Tick-cross skip is tight:** any `zeroForOne` from an exact tick bound (`SQRT_PRICE_1_1` = tick 0 lower edge) decrements `slot0.tick`. A 1e16 backrun after a 1e16 dump from 1:1 recrosses. Claw sizes in tests are `DUMP=1e18` then `CLAW=1e15` so the *second* swap stays in-tick. Tick-crossing sandwiches are not clawed. That is the product, not a bug.
+
+Variant A works. B/C not used.
 
 ---
 
@@ -164,7 +186,7 @@ Do not add items here without editing this file. Do **not** start video or trans
 | Tight-range L inflation documentation test | Known weakness. Do not change the share unit. | No |
 | Formal verification / second audit / monitoring | SDSF optional at this TVL. | No |
 | Human-voice demo recording | Gate 1. After ToB-spot is green. Human voice only. | Yes before 3 Sep |
-| ToB-spot implementation | **Current work.** Envelope is green. Surplus path is the pivot. | Yes |
+| ToB-spot implementation | **Done (Variant A).** Envelope green. Same-dir does not claw (honest). | Shipped |
 
 ---
 

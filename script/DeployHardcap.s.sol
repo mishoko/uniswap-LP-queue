@@ -20,14 +20,14 @@ contract DeployHardcapScript is BaseScript {
         );
 
         bytes memory constructorArgs =
-            abi.encode(poolManager, currency0, currency1, FEE, TICK_SPACING, uint16(5), uint16(15), uint48(1));
+            abi.encode(poolManager, currency0, currency1, FEE, TICK_SPACING, uint16(0), uint16(15), uint48(1));
 
         (address hookAddress, bytes32 salt) =
             HookMiner.find(CREATE2_FACTORY, flags, type(HardcapHookFinal).creationCode, constructorArgs);
 
         vm.startBroadcast();
         HardcapHookFinal hook = new HardcapHookFinal{salt: salt}(
-            poolManager, currency0, currency1, FEE, TICK_SPACING, uint16(5), uint16(15), uint48(1)
+            poolManager, currency0, currency1, FEE, TICK_SPACING, uint16(0), uint16(15), uint48(1)
         );
         vm.stopBroadcast();
 

@@ -1,8 +1,12 @@
 # Next-session implementer prompt — Hardcap v1+ ToB-spot
 
+**Status (2026-08-19):** Variant A is implemented. `HardcapHook` snapshots open spot; `extraFeeBps = 0` is ToB-spot; envelope tests still use extra = 5. See the plan spike section. Do not re-spike. Remaining: video (human voice, later), not a second product.
+
 You are a **new** agent. There is no prior chat. Do not invent a second product. Do not write a second design doc.
 
 **Win goal:** UHI10 first is not promised. This pivot is the highest-EV on-chain path that (a) matches official “defense + recapture,” (b) ToB/OZ/Certora can respect (no tick-walk OOG), (c) is not MRLV / DualPool / FairFlow / cohort white-space. Execute it brutally well.
+
+**Status 2026-08-18:** Variant A ToB-spot is implemented (`extraFeeBps = 0`). Spike answers are in the Implementation Plan. Envelope (42 unit + 3 invariants) stays on the `extraFeeBps = 5` tax path. Next: human-voice video, not a second product. Do not "fix" same-dir into a claw.
 
 ---
 

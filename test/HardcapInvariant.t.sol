@@ -74,7 +74,8 @@ contract HardcapHandler {
                 tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(liq), salt: salt
             }),
             Constants.ZERO_BYTES
-        ) {} catch {}
+        ) {}
+            catch {}
     }
 
     function remove(uint256 liq, uint256 saltSeed) external {
@@ -86,7 +87,8 @@ contract HardcapHandler {
                 tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: -int256(liq), salt: salt
             }),
             Constants.ZERO_BYTES
-        ) {} catch {}
+        ) {}
+            catch {}
     }
 
     function claim(uint256 saltSeed) external {

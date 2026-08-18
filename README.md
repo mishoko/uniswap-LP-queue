@@ -14,7 +14,7 @@ Video script: [`docs/VIDEO_SCRIPT.md`](docs/VIDEO_SCRIPT.md).
 
 A single Uniswap v4 hook on one pool:
 
-- May take a hook-level amount on a swap, at most `MAX_TAKE_BPS` of unspecified notional. **Judging product:** first swap of the block is vanilla; later in-range fills better than the block-open spot are clawed to aged LPs. Tick-cross → take 0. Default `EXTRA_FEE_BPS = 0`. Rail is still 15 bps.
+- May take a hook-level amount on a swap, at most `MAX_TAKE_BPS` of unspecified notional. **Judging product (ToB-spot):** first swap of the block is vanilla. Later same-block in-range fills that beat a one-step `SwapMath.computeSwapStep` quote at the block-open `(sqrtPrice, liquidity)` are clawed to aged LPs, at most `MAX_TAKE_BPS`. Production `extraFeeBps = 0`.
 - That take can only go to an in-hook LP vault with **no owner, rescue, sweep, or `donate()`**.
 - Callbacks fail closed: only `PoolManager`, empty `hookData`, bound `PoolKey`.
 - Same-block add → remove reverts. Vault `claim` requires the position to age `OFFSET` blocks.
@@ -22,19 +22,23 @@ A single Uniswap v4 hook on one pool:
 
 v4 native 0.30% fees still go to whoever is in range. Hardcap does **not** redirect those. It only controls hook take.
 
-## What it is not
+## What it is not (must not lie)
 
-Not a sandwich AMM, FairFlow, Angstrom, DualPool, VPIN, leftover auction, LVR recapture, or “yesterday’s LPs get today’s 0.30%.” A 5 bps extra on all flow is a tax with a printed ceiling, not a toxicity detector. JIT lock delays exit and blocks vault claim; it does not steal the native 0.30% back from a one-block LP.
+1. Tick-crossing sandwiches are **not** clawed. If this swap's `slot0.tick` moved, take is 0. We do not walk the tick bitmap.
+2. Native 0.30% still goes to whoever is in range during the swap, including a one-block JIT LP.
+3. This is not LVR recapture, not a leftover auction, not FairFlow, not OZ AntiSandwich.
+
+Same-direction second fills are worse than the open. They do not generate surplus. The claw is the opposite-direction backrun that stays inside one tick. Cork cannot call us.
 
 ## Defaults
 
 | Constant | Value |
 |---|---|
-| `EXTRA_FEE_BPS` | 5 |
+| `extraFeeBps` (production) | 0 (ToB-spot) |
 | `MAX_TAKE_BPS` | 15 |
 | `OFFSET` | 1 block |
 
-`EXTRA_FEE_BPS <= MAX_TAKE_BPS` is enforced in the constructor.
+`extraFeeBps <= MAX_TAKE_BPS` is enforced in the constructor. Envelope tests still deploy `extraFeeBps = 5` to keep the tax-path cap rail.
 
 ## How to use
 
@@ -52,13 +56,16 @@ Claim **receipt** requires `OFFSET`. Claim **weight** is recorded rights + still
 
 ## Flows
 
-**Normal swap**
+**Normal swap (production, extraFeeBps = 0)**
 
 ```text
-Alice -> PoolManager -> Hardcap.beforeSwap (PoolKey + empty hookData)
+Alice -> PoolManager -> Hardcap.beforeSwap (snapshot open if new block)
                      -> CL math (native 0.30% still to in-range LPs)
                      -> Hardcap.afterSwap + afterSwapReturnDelta
-                          take = min(notional * EXTRA, notional * MAX)   // unspecified currency
+                          first swap of block          -> take = 0
+                          this swap crossed a tick     -> take = 0
+                          liquidity != openLiquidity   -> take = 0
+                          else take = min(open-quote surplus, cap)
                           vaultAccrued += take
 ```
 
@@ -94,7 +101,7 @@ donate  => never called
 forge test --match-contract Hardcap -vv
 ```
 
-Kill suites: Cork (direct callback / `hookData` / wrong `PoolKey`), cap (clamp + bug-path revert + fuzz), JIT (same-block remove + salt + top-up), vault (no owner drain, aged claim only, burn-on-remove, no unaged dilution).
+Kill suites: Cork (direct callback / `hookData` / wrong `PoolKey`), cap (clamp + bug-path revert + fuzz), JIT (same-block remove + salt + top-up), vault (no owner drain, aged claim only, burn-on-remove, no unaged dilution), ToB-spot (first-of-block 0, same-dir no claw, opposite-dir in-range claw, tick-cross 0, L-changed 0, both dirs, clamp).
 
 ## SDSF self-score (honest, 2026-08-18)
 
@@ -103,7 +110,7 @@ Uniswap v4 Self-Directed Security Framework. UF does not certify this. Higher = 
 | Dimension | Score | Why |
 |---|---|---|
 | Complexity | 2 / 5 | Five callbacks, pending/aged shares, no modes or oracles |
-| Custom math | 1 / 5 | `mulDiv` bps only. No curve, no TWAMM |
+| Custom math | 2 / 5 | Cap `mulDiv` plus one `SwapMath.computeSwapStep` at open. No tick walk |
 | External dependencies | 0 / 3 | `PoolManager` only |
 | External liquidity exposure | 1 / 3 | Hook holds vault ERC-20 until `claim` |
 | TVL potential | 1 / 5 | Hackathon / curator pool, not a farm |
@@ -112,7 +119,7 @@ Uniswap v4 Self-Directed Security Framework. UF does not certify this. Higher = 
 | Autonomous parameter updates | 0 / 3 | Constants fixed in constructor |
 | Price impacting behavior | 2 / 3 | `afterSwapReturnDelta` extra fee |
 
-**Tier:** medium (sum 10 / 33).
+**Tier:** medium (sum 11 / 33).
 
 **Feature triggers that still fire:**
 

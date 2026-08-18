@@ -523,7 +523,10 @@ contract HardcapTest is BaseTest {
         tightLp.modifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
-                tickLower: tightLo, tickUpper: tightHi, liquidityDelta: int256(uint256(lTight)), salt: bytes32(uint256(52))
+                tickLower: tightLo,
+                tickUpper: tightHi,
+                liquidityDelta: int256(uint256(lTight)),
+                salt: bytes32(uint256(52))
             }),
             Constants.ZERO_BYTES
         );

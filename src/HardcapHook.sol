@@ -31,7 +31,16 @@ import {HardcapMath} from "./libraries/HardcapMath.sol";
 /// 3. take() during afterSwap then return +feeAmount. Signs copied from FeeTakingHook, not invented.
 /// 4. Never poolManager.donate(). Never honor hookData. Never beforeSwapReturnDelta.
 ///
-/// v1 is not a sandwich AMM. Native 0.30% still goes to whoever is in range. This hook only bounds hook take.
+/// ToB-spot (SwapMath.computeSwapStep — v4-core SwapMath.t.sol + Pool.swap):
+/// 5. feePips = PoolKey.fee (3000 = 0.30% = 3000/1e6). Include LP fee or the quote is not comparable.
+///    Direction is inferred: target < current ⇒ zeroForOne. amountRemaining < 0 ⇒ exact-in.
+///    Target = getSqrtPriceAtTick(openTick ± tickSpacing). wouldCross iff sqrtNext == target.
+///    Exact-in unspecified target = amountOut. Exact-out unspecified target = amountIn + feeAmount.
+///    Same-dir after a same-dir fill cannot beat open. The claw is the opposite-dir backrun.
+///    Any zeroForOne from an exact tick bound decrements slot0.tick — that swap is a tick-cross skip.
+///
+/// extraFeeBps > 0 keeps the v1 tax path (envelope tests). Production extraFeeBps = 0 is ToB-spot.
+/// Native 0.30% still goes to whoever is in range. Tick-crossing sandwiches are not clawed.
 contract HardcapHook is BaseHook, ReentrancyGuard {
     using CurrencySettler for Currency;
     using SafeCast for uint256;
@@ -59,6 +68,14 @@ contract HardcapHook is BaseHook, ReentrancyGuard {
     mapping(Currency currency => uint256 amount) public vaultAccrued;
     uint256 public totalShares;
     uint256 public pendingTotal;
+
+    /// @dev Block-open snapshot. Written on the first `_beforeSwap` of `block.number`.
+    uint48 public openBlock;
+    uint160 public openSqrtPriceX96;
+    uint128 public openLiquidity;
+    int24 public openTick;
+    int24 transient swapStartTick;
+    bool transient firstSwapOfBlock;
 
     error NativeCurrencyNotSupported();
     error InvalidCurrencyOrder();
@@ -144,9 +161,7 @@ contract HardcapHook is BaseHook, ReentrancyGuard {
         if (recorded == 0) revert NoShares();
 
         // Ghost-share rail: if remove accounting ever drifts, do not pay more than live L.
-        (uint128 liveL,,) = poolManager.getPositionInfo(
-            boundPoolKey().toId(), msg.sender, tickLower, tickUpper, salt
-        );
+        (uint128 liveL,,) = poolManager.getPositionInfo(boundPoolKey().toId(), msg.sender, tickLower, tickUpper, salt);
         uint256 owned = recorded < uint256(liveL) ? recorded : uint256(liveL);
         if (owned == 0) revert NoShares();
 
@@ -169,11 +184,11 @@ contract HardcapHook is BaseHook, ReentrancyGuard {
 
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata, bytes calldata hookData)
         internal
-        view
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         _validateCallback(key, hookData);
+        _snapshotOpen(key);
         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
@@ -189,7 +204,8 @@ contract HardcapHook is BaseHook, ReentrancyGuard {
         (Currency unspecified, uint256 notional) = _unspecifiedNotional(key, params, delta);
         if (notional == 0) return (this.afterSwap.selector, 0);
 
-        uint256 surplus = _computeSurplus(notional);
+        // extraFeeBps > 0: envelope tax / test overrides. extraFeeBps == 0: ToB-spot.
+        uint256 surplus = extraFeeBps > 0 ? _computeSurplus(notional) : _computeToBSurplus(key, params, delta, notional);
         uint256 cap = HardcapMath.capOf(notional, maxTakeBps);
         uint256 take = _boundTake(notional, surplus);
 
@@ -304,6 +320,51 @@ contract HardcapHook is BaseHook, ReentrancyGuard {
         if (x >= 0) return uint256(uint128(x));
         if (x == type(int128).min) return uint256(1) << 127;
         return uint256(uint128(-x));
+    }
+
+    function _snapshotOpen(PoolKey calldata key) private {
+        (uint160 sqrtPriceX96, int24 tick,,) = poolManager.getSlot0(key.toId());
+        swapStartTick = tick;
+        if (openBlock == uint48(block.number)) {
+            firstSwapOfBlock = false;
+            return;
+        }
+        openBlock = uint48(block.number);
+        openSqrtPriceX96 = sqrtPriceX96;
+        openLiquidity = poolManager.getLiquidity(key.toId());
+        openTick = tick;
+        firstSwapOfBlock = true;
+    }
+
+    /// @dev ToB-spot: later in-range fill beating the block-open one-step quote.
+    /// First swap, this-swap tick change, L change since open, or would-cross-at-open → 0.
+    function _computeToBSurplus(PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, uint256 notional)
+        internal
+        view
+        returns (uint256)
+    {
+        if (firstSwapOfBlock) return 0;
+
+        (, int24 tickAfter,,) = poolManager.getSlot0(key.toId());
+        if (tickAfter != swapStartTick) return 0;
+        if (poolManager.getLiquidity(key.toId()) != openLiquidity) return 0;
+        if (openLiquidity == 0) return 0;
+
+        int256 remaining = _executedSpecified(params, delta);
+        (, uint256 amountIn, uint256 amountOut, uint256 feeAmount, bool wouldCross) = HardcapMath.quoteOpenStep(
+            openSqrtPriceX96, openLiquidity, openTick, tickSpacing, params.zeroForOne, remaining, fee
+        );
+        if (wouldCross) return 0;
+
+        bool exactIn = params.amountSpecified < 0;
+        uint256 target = exactIn ? amountOut : amountIn + feeAmount;
+        return HardcapMath.tobSurplus(exactIn, notional, target);
+    }
+
+    /// @dev Specified-currency executed amount, signed like SwapParams.amountSpecified.
+    function _executedSpecified(SwapParams calldata params, BalanceDelta delta) private pure returns (int256) {
+        int128 specifiedAmount = (params.amountSpecified < 0 == params.zeroForOne) ? delta.amount0() : delta.amount1();
+        return int256(specifiedAmount);
     }
 
     /// @dev v1 surplus = extraFeeBps of notional. Virtual so a test hook can feed a huge leftover (clamp path)
