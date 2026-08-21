@@ -201,6 +201,12 @@ contract HardcapInvariantTest is BaseTest {
         selectors[3] = HardcapHandler.claim.selector;
         selectors[4] = HardcapHandler.roll.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: selectors}));
+        // Without this, the default fuzz target set is EVERY contract deployed in setUp -- including
+        // the MockERC20s. A run that called MockERC20.burn(hook, ...) directly broke
+        // invariant_vaultCoveredByHookBalance, which is a defect in the harness, not in the hook:
+        // nothing on-chain lets an attacker burn another account's balance. targetSelector alone
+        // constrains WHICH selectors of the handler are called, not WHICH contracts are targeted.
+        targetContract(address(handler));
     }
 
     function invariant_vaultCoveredByHookBalance() public view {

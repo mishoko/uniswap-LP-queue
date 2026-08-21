@@ -1,138 +1,111 @@
-# Hardcap
+# Assay
 
-Hardcap is a **pool hook you attach like any v4-template hook**, and a **base contract you inherit if you must add features**. It is not a second hook you compose at the PoolManager. Use it when the main risk you care about is unbounded hook extraction and callback trust, not when you need a different AMM.
-
-Worst-case hook extraction is `MAX_TAKE_BPS` and the payee is LPs.
+**A Uniswap v4 hook can prove things about itself that no other contract on Ethereum can.** Assay is the machinery that makes it do so: hooks that carry a machine-checked spec they cannot violate, capital staked behind that spec, and a public record anyone can read.
 
 **No partner integrations.**
 
-Plan: [`docs/Hardcap Fail-Closed MEV Cap Hook - Implementation Plan.md`](docs/Hardcap%20Fail-Closed%20MEV%20Cap%20Hook%20-%20Implementation%20Plan.md).  
-Spike: [`docs/SPIKE-sender-and-afterSwapReturnDelta.md`](docs/SPIKE-sender-and-afterSwapReturnDelta.md).  
-Video script: [`docs/VIDEO_SCRIPT.md`](docs/VIDEO_SCRIPT.md).
+---
 
-## What it does
+## The problem
 
-A single Uniswap v4 hook on one pool:
+A v4 hook runs on every swap, holds the most authority in the system, and is the least reviewed code in it. Today a hook asks you to trust it. The README says what it does; nothing checks. Cork was a callback-authorization bug. Bunni was rebalancing math. Neither was visible from outside before it fired, and neither was compensated after.
 
-- May take a hook-level amount on a swap, at most `MAX_TAKE_BPS` of unspecified notional. **Judging product (ToB-spot):** first swap of the block is vanilla. Later same-block in-range fills that beat a one-step `SwapMath.computeSwapStep` quote at the block-open `(sqrtPrice, liquidity)` are clawed to aged LPs, at most `MAX_TAKE_BPS`. Production `extraFeeBps = 0`.
-- That take can only go to an in-hook LP vault with **no owner, rescue, sweep, or `donate()`**.
-- Callbacks fail closed: only `PoolManager`, empty `hookData`, bound `PoolKey`.
-- Same-block add → remove reverts. Vault `claim` requires the position to age `OFFSET` blocks.
-- Positions are keyed by `Position.calculatePositionKey(owner, tickLower, tickUpper, salt)`. The owner is the PoolManager unlock caller, not the EOA behind a router.
+The usual response is to enumerate bug classes and write a detector for each. That fails at the next bug class.
 
-v4 native 0.30% fees still go to whoever is in range. Hardcap does **not** redirect those. It only controls hook take.
+## What Assay does instead
 
-## What it is not (must not lie)
+**It bounds the damage at the ledger, and does not care what caused it.**
 
-1. Tick-crossing sandwiches are **not** clawed. If this swap's `slot0.tick` moved, take is 0. We do not walk the tick bitmap.
-2. Native 0.30% still goes to whoever is in range during the swap, including a one-block JIT LP.
-3. This is not LVR recapture, not a leftover auction, not FairFlow, not OZ AntiSandwich.
+Uniswap v4 keeps every account's live flash-accounting delta in *transient* storage, at `keccak256(abi.encode(account, currency))`, and exposes transient storage through `exttload`, which is `external view`. So mid-callback, from outside, anyone can read **exactly how much a hook is into the pool for right now** — from PoolManager's ledger, not from the hook's own accounting.
 
-Same-direction second fills are worse than the open. They do not generate surplus. The claw is the opposite-direction backrun that stays inside one tick. Cork cannot call us.
+That is a number the hook does not own and cannot misreport. Any defect — authorization, arithmetic, reentrancy, a lying oracle — whose *effect* is the hook extracting beyond a declared budget becomes unexecutable, whatever its cause.
 
-## Defaults
+A hook's permissions are also encoded in the low 14 bits of its **address**, which PoolManager enforces. So what a hook is *permitted* to do is provable with zero calls, zero bytecode, and zero trust — for any address, deployed or not.
 
-| Constant | Value |
+No other class of contract offers either property.
+
+## Three parts
+
+| | Contract | Role |
+|---|---|---|
+| **Prevent** | `AssayBaseHook` / `AssayHook` | Declared invariants evaluated **inside the callbacks**, fail-closed. The violation cannot complete. |
+| **Meter** | `AssayFlowMeter` | Per-block extraction ceiling. A per-transaction bound is defeated by repetition; this is not. |
+| **Back** | `HookBond` | Capital staked **per assertion**. Anyone can prove one predicate false and take a bounty out of that assertion's tranche; the others stay backed. |
+| **Publish** | `AssayRegistry` | One view call: what a hook is permitted to do, what it claims, whether the claim holds, and how much money stands behind each individual claim. |
+| **Compose** | `AssayStack` | Several untrusted hooks on one pool, each inside a bounded budget. |
+
+Prevention handles what is cheap enough to check on every swap. Bonding covers the rest. Neither is sufficient alone, and the README does not pretend otherwise.
+
+### Enforcement is not optional
+
+`AssayBaseHook` implements every value-capable callback **without `virtual`**. A subclass physically cannot override them — it implements `_assayX` instead, and the assertion runs whether or not the author remembers it exists. `test_enforcementSurvivesAnIntegratorWhoNeverCallsIt` deploys a hook that declares a spec, drains on every swap, and never calls the assertion anywhere. It cannot complete a single swap.
+
+### Cost
+
+Measured like-for-like on a warm second swap (`test_gasCostOfRuntimeEnforcement`, `test_gasCostOfLedgerInvariant`, `test_gasCostOfMetering`):
+
+| | gas |
 |---|---|
-| `extraFeeBps` (production) | 0 (ToB-spot) |
-| `MAX_TAKE_BPS` | 15 |
-| `OFFSET` | 1 block |
+| `AssayHook` machinery, zero invariants | 192 |
+| one balance-floor invariant | 3,497 |
+| one ledger-budget invariant | 4,509 |
+| per-block flow metering | 5,766 |
 
-`extraFeeBps <= MAX_TAKE_BPS` is enforced in the constructor. Envelope tests still deploy `extraFeeBps = 5` to keep the tax-path cap rail.
+## What this is not (must not lie)
 
-## How to use
+1. **The bond does not cover losses.** A bond smaller than the value a hook controls does not deter a rational attacker. It is a costly signal plus challenger funding. The registry reports `bondedWei` next to what the hook is permitted to take, deliberately instead of a grade — a grade invites you to outsource the judgement, a price does not.
+2. **Only present-state invariants are provable.** One staticcall, public state, no privileged input, no history. "This swap was unfairly priced" and "the hook stole from a user in block N" are not expressible and are never claimed.
+3. **Assay binds hooks that chose to bind themselves.** A deliberately malicious author simply would not inherit it. The guarantee is against *defects* in hooks that opted in; what makes opting in credible to a third party is capital at risk and a public, machine-readable record.
+4. **Fail-closed means a bad invariant can brick a pool's trading.** Stated trade-off, not an oversight: a hook whose claim is "I cannot violate my spec" must not proceed while unable to tell. Mitigations are a capped, immutable invariant set and a small per-invariant gas budget — **plus one deliberate asymmetry: LP exits never fail closed.** The invariant set is immutable with no recovery path, so failing closed on withdrawal would trap LP capital permanently whenever a predicate broke. An un-evaluable spec is recorded and the withdrawal proceeds; a genuinely VIOLATED one still blocks, because a violation during a withdrawal is the hook extracting from the LP who is leaving.
+5. **A spec can still be padded with cheap claims.** Capital is staked per assertion, so slashing one settles that claim and leaves the rest backed — but nothing forces an author to put real money on the assertion that matters. `AssayRegistry.bondBreakdown` therefore publishes the stake behind *each* predicate: "40 ETH on never exceeding its budget, 0.01 ETH on its codehash" is legible in a way a single total is not. The defence is disclosure, not prevention.
+6. **Proxy upgrades are not detectable on-chain.** A contract cannot read another contract's storage, so the EIP-1967 implementation slot is off-chain only. `CodehashPredicate` catches selfdestruct-and-redeploy, not a proxy upgrade, and says so.
+7. **Challenge front-running is reduced, not eliminated.** Commit-reveal defeats a reactive mempool copier. A searcher who blanket pre-commits across every (bond, predicate) pair can still race the reveal — asserted in `test_knownLimit_preCommittedSearcherCanStillRace`. The slash still happens; only the payee changes.
 
-**Mode A (this repo):** mine flags, deploy `HardcapHookFinal`, `initialize` a pool with that hook.
+## Predicate library
 
-**Mode B:** `contract MyHook is HardcapHook`. Call `super` on callbacks. `_creditVault` is not virtual — do not add a second take path. Do not add `owner.withdraw`. Do not honor `hookData` unless you leave this threat model. Re-mine the address if permission bits change.
+| Predicate | Calls | Catches |
+|---|---|---|
+| `DeltaBudgetPredicate` | PoolManager only | extraction beyond budget, from PoolManager's own ledger |
+| `BalanceFloorPredicate` | token only | a hook's holdings dropping below a floor |
+| `NoSwapDeltaPredicate` | **none** | a hook whose address says it can move a swap delta |
+| `PermissionMatchPredicate` | **none** | authority a hook holds but never advertised |
+| `CodehashPredicate` | none | code swapped out from under the bond |
+| `TickBandPredicate` | PoolManager only | spot price leaving a declared band (stable pairs; a circuit breaker) |
+| `SolvencyPredicate` | hook + token | hook holding less than it says it owes |
 
-v4 allows **one hook address per pool**. You cannot attach Hardcap beside DualPool.
+`SolvencyPredicate` trusts the hook's own number, so a hook that under-reports satisfies it vacuously. That is not a flaw to hide — it is the reason `DeltaBudgetPredicate` exists, and `test_sameBugSameHook_solvencyPassesItLedgerStopsIt` is the controlled differential proving it: one hook, one bug, two declared specs, only the invariant varies.
 
-v1 assumes **direct LP → PoolManager** interaction. If a router is the unlock caller, that router owns the position and must call `claim`. Top-up (`increaseLiquidity`) refreshes `lastAddBlock` and increases vault shares; honest LPs who add more wait `OFFSET`. Claim is **single-shot** per position key: after claiming, add again to earn a share of later surplus.
+## Composition — `AssayStack`
 
-v1 tokens: standard ERC-20 only. No native ETH, fee-on-transfer, rebasing, or ERC-777.
+v4 allows exactly one hook address per pool, so a pool picks one behaviour and forgoes every other. Composing has meant trusting a second body of code with the full authority of the first — and unbounded authority is precisely what the rest of Assay fixes. Once extraction is bounded at the ledger, hosting a stranger's hook stops being reckless.
 
-Claim **receipt** requires `OFFSET`. Claim **weight** is recorded rights + still-pending L. After a claim, remaining in-range L is **not** in the next weight until that key adds again (single-shot). Unaged L dilutes the split but cannot be paid. Two aged lockers split even if only one has been touched. Remove burns matured then pending. Full exit forfeits unclaimed surplus (claim first). `OFFSET` is 1 block; that is not time-weighted.
+- **Guests never touch PoolManager.** A sub-hook observes a swap and *returns a requested amount*. It holds no authority to take, settle, or reenter, so its request is a number to be clamped rather than an action to be trusted.
+- **Per-guest budget**, plus a stack-wide ceiling that binds even when the individual budgets sum higher.
+- **Fail-open for the guest, fail-closed for the pool.** A sub-hook that reverts or burns its gas stipend is skipped and logged. One broken guest must not brick a pool other people's liquidity sits in.
+- **Immutable guest list, no admin.** Nobody can slip a new guest into a live pool.
+- The stack is itself an `AssayBaseHook`, so the whole arrangement sits inside one ledger-enforced budget however its guests behave.
 
-## Flows
+`test_fourGuestsOneHostileAndThePoolStillWorks` runs four guests on one pool — one asking for `type(uint256).max`, one that reverts, one that burns all its gas — and the pool works. The hostile guest receives exactly its budget, to the wei. A guest returning 128KB of data does not charge the swapper for it, and a guest reentering mid-dispatch only forfeits its own turn.
 
-**Normal swap (production, extraFeeBps = 0)**
+## AssaySuite
 
-```text
-Alice -> PoolManager -> Hardcap.beforeSwap (snapshot open if new block)
-                     -> CL math (native 0.30% still to in-range LPs)
-                     -> Hardcap.afterSwap + afterSwapReturnDelta
-                          first swap of block          -> take = 0
-                          this swap crossed a tick     -> take = 0
-                          liquidity != openLiquidity   -> take = 0
-                          else take = min(open-quote surplus, cap)
-                          vaultAccrued += take
-```
+`src/assay/testing/` ships a drop-in invariant campaign. Inherit `AssaySuite`, write a `setUp` and two getters, and thousands of randomised swaps and liquidity operations spend the campaign trying to make your declared spec false. It also asserts the campaign *did something* — a run in which every operation reverted satisfies every other invariant while proving nothing.
 
-**Cork-style callback**
+## Hardcap
 
-```text
-Attacker -> Hardcap.beforeSwap(...)     => NotPoolManager
-Attacker -> PoolManager.swap(hookData!=0) => HookDataNotAllowed
-Attacker -> other PoolKey + this hook   => InvalidPoolKey
-```
+`src/HardcapHook.sol` is the reference hook: a fail-closed, single-pool hook with a sealed callback envelope, an immutable take cap, and an LP vault with no owner, rescue, or sweep. It publishes its liability through `assayAccrued` and is bonded in `test/assay/AssayHardcap.t.sol`.
 
-**JIT add → swap → remove**
+Its own address defeats it in one place, which is the point: Hardcap takes a fee through `afterSwapReturnDelta`, so `NoSwapDeltaPredicate` **refuses to let its author bond a claim to the contrary**, whatever this README says. Zero external calls establish that.
 
-```text
-Bob add  => lastAddBlock[key]=N, pendingShares += L
-swap     => vault may grow
-Bob remove same block => RemoveTooSoon
-Bob claim same block  => PositionNotAged
-```
-
-**Vault (after the review fix)**
-
-```text
-add     => pending until OFFSET; not in claim denom
-remove  => burn min(removed, aged shares); full exit => cannot claim
-claim   => locker only, aged only, single-shot
-donate  => never called
-```
+Hardcap's earlier MEV-recapture framing has been withdrawn. It bounded hook extraction honestly; it did not recapture MEV in any sense worth claiming.
 
 ## Tests
 
 ```bash
-forge test --match-contract Hardcap -vv
+forge test
 ```
 
-Kill suites: Cork (direct callback / `hookData` / wrong `PoolKey`), cap (clamp + bug-path revert + fuzz), JIT (same-block remove + salt + top-up), vault (no owner drain, aged claim only, burn-on-remove, no unaged dilution), ToB-spot (first-of-block 0, same-dir no claw, opposite-dir in-range claw, tick-cross 0, L-changed 0, both dirs, clamp).
-
-## SDSF self-score (honest, 2026-08-18)
-
-Uniswap v4 Self-Directed Security Framework. UF does not certify this. Higher = more risk.
-
-| Dimension | Score | Why |
-|---|---|---|
-| Complexity | 2 / 5 | Five callbacks, pending/aged shares, no modes or oracles |
-| Custom math | 2 / 5 | Cap `mulDiv` plus one `SwapMath.computeSwapStep` at open. No tick walk |
-| External dependencies | 0 / 3 | `PoolManager` only |
-| External liquidity exposure | 1 / 3 | Hook holds vault ERC-20 until `claim` |
-| TVL potential | 1 / 5 | Hackathon / curator pool, not a farm |
-| Team maturity | 3 / 3 | No prior production hook |
-| Upgradeability | 0 / 3 | Immutable. New behavior = new deploy |
-| Autonomous parameter updates | 0 / 3 | Constants fixed in constructor |
-| Price impacting behavior | 2 / 3 | `afterSwapReturnDelta` extra fee |
-
-**Tier:** medium (sum 11 / 33).
-
-**Feature triggers that still fire:**
-
-- **Price impacting** — hook take. Cap + fuzz + bug-path revert are the mitigation. Treat `afterSwapReturnDelta` as the dangerous bit.
-- **Hook holds tokens** — vault ERC-20 on the hook. Accounting is `vaultAccrued`, not `balanceOf`. No owner drain.
-
-**Triggers that do not fire:** custom curve / NoOp, oracle, autonomy, proxy, TVL-5.
-
-**Not done and not claimed:** formal verification, second audit, on-chain monitor, bug bounty. Acceptable at this TVL if documented. Re-score if anyone actually LPs size.
-
-## SDSF posture (short)
-
-Immutable, no proxy, no oracle, no `hookData`, no `beforeSwapReturnDelta`, no `donate()`. Price-impact trigger applies because `afterSwapReturnDelta` takes a hook fee. Feature trigger “hook holds tokens” applies: vault ERC-20 sits on the hook and is paid only via `claim`.
+Kill suites: predicate sandbox (revert / OOG / mutation / reentrancy / returndata bomb / malformed return all read INCONCLUSIVE, never VIOLATED), bond mechanics (exit race, self-slash, griefing, commit-reveal, conservation, growth attacks), runtime enforcement (drain refused, forgetful integrator, bricked-spec hook), ledger budget, flow metering, registry, and the original Hardcap envelope (Cork / cap / JIT / vault).
 
 ## License
 

@@ -8,6 +8,8 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Position} from "@uniswap/v4-core/src/libraries/Position.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -81,6 +83,8 @@ contract HardcapHook is BaseHook, ReentrancyGuard {
     error InvalidCurrencyOrder();
     error ExtraFeeExceedsCap();
     error InvalidMaxTakeBps();
+    error InvalidFee();
+    error InvalidTickSpacing();
     error OffsetTooLow();
     error HookDataNotAllowed();
     error InvalidPoolKey();
@@ -106,6 +110,13 @@ contract HardcapHook is BaseHook, ReentrancyGuard {
             revert NativeCurrencyNotSupported();
         }
         if (!(_currency0 < _currency1)) revert InvalidCurrencyOrder();
+        // `fee` is fed straight to SwapMath.computeSwapStep as feePips by the ToB quote, so an
+        // out-of-range value is unvalidated input reaching math. A dynamic-fee pool (0x800000) is
+        // also rejected here: its key.fee is a flag, not a rate, and the quote would be garbage.
+        if (_fee > LPFeeLibrary.MAX_LP_FEE) revert InvalidFee();
+        if (_tickSpacing < TickMath.MIN_TICK_SPACING || _tickSpacing > TickMath.MAX_TICK_SPACING) {
+            revert InvalidTickSpacing();
+        }
         if (_maxTakeBps > HardcapMath.BPS_DENOMINATOR) revert InvalidMaxTakeBps();
         if (_extraFeeBps > _maxTakeBps) revert ExtraFeeExceedsCap();
         if (_offset < MIN_OFFSET) revert OffsetTooLow();
@@ -136,6 +147,13 @@ contract HardcapHook is BaseHook, ReentrancyGuard {
             afterAddLiquidityReturnDelta: false,
             afterRemoveLiquidityReturnDelta: false
         });
+    }
+
+    /// @notice Liability this hook declares it owes to others in `token`, for Assay's
+    /// SolvencyPredicate. Reporting the accounting counter (not `balanceOf`) is the point: the hook
+    /// publishes a liability, the chain publishes the asset, and anyone can compare them.
+    function assayAccrued(address token) external view returns (uint256) {
+        return vaultAccrued[Currency.wrap(token)];
     }
 
     function boundPoolKey() public view returns (PoolKey memory) {
