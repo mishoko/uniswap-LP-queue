@@ -133,7 +133,7 @@ PDCA: spike SwapMath **before** wiring vault. Existing kill tests stay green **b
 | Cap | `take <= notional * MAX_TAKE_BPS / 1e4`. Over-credit reverts. Large surplus **clamped**, user swap succeeds. |
 | JIT | Same-block add→swap→remove: remove reverts. JIT cannot claim. Salt. Top-up refreshes lock. |
 | Vault | No owner drain. Aged claim only. Burn on full exit. Two aged lockers split. No `donate()`. |
-| **ToB-spot** | First swap take 0. Second same-dir in-range claws excess. Tick-cross take 0. Liquidity changed since open → take 0. Both dirs. Clamp. |
+| **ToB-spot** | First swap take 0. Same-dir does **not** claw (open is better). Opposite-dir in-tick backrun claws. Size-matched sandwich take 0. Tick-cross take 0. L change since open → take 0. Both dirs. Clamp. |
 
 Also keep: `test_oneBlockLpStillEarnsNativeFee` (0.30% still to JIT). That is honesty, not a bug.
 

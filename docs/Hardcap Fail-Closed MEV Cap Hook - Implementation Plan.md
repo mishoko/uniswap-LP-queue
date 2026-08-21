@@ -95,6 +95,7 @@ Keep the Hardcap envelope. Change only surplus.
 - `test_tob_firstSwapInBlock_takeIsZero`
 - `test_tob_secondSwapSameDir_inRange_clawsExcess` — **name kept; assertion is take = 0.** Same-dir cannot beat the open quote (price already moved against the taker). Do not invent surplus.
 - `test_tob_backrunOppositeDir_inRange_clawsExcess` — this is the real claw (classic backrun, stays in-tick).
+- `test_tob_sizeMatchedSandwich_takeIsZero` — dump + equal opposite recrosses; **not** clawed. Honesty test.
 - `test_tob_tickCross_takeIsZero`
 - `test_tob_liquidityChangedSinceOpen_takeIsZero`
 - `test_tob_bothDirections`
@@ -167,7 +168,8 @@ These are **accepted**. They are not bugs to “fix” into a new product. READM
 | Weakness | Why it stays |
 |---|---|
 | 5 bps on every swap is a **tax**. | **No longer the judging product.** `EXTRA_FEE_BPS = 0`. ToB-spot is. |
-| Tick-crossing sandwiches are **not** clawed. | Honest skip. No OZ tick walk. |
+| Tick-crossing sandwiches are **not** clawed. Size-matched dump+backrun recrosses. | Honest skip. No OZ tick walk. |
+| A same-block 1-wei add after the open snapshot sets `getLiquidity() != openL` and blinds ToB for the rest of the block. | Spec: L change ⇒ quote is a lie ⇒ take 0. JIT still cannot exit. Do not invent a materiality threshold. |
 | JIT lock does **not** take the native 0.30%. A one-block LP still earns in-range fees. We only block same-block **exit** and **vault claim**. | v4 fee accounting is inside PoolManager. Hardcap cannot redirect it. |
 | `OFFSET = 1`. An LP who stays one block **and is still in the pool** can claim a capital-weighted slice. That is the model, not a lockup. | Same minimum as OZ `MIN_BLOCK_NUMBER_OFFSET`. Raising OFFSET is a parameter change, not a new feature, but do not market it as time-weighted. |
 | Share unit is `liquidityDelta`, not token notional. A tight-range position mints more L per token. | Plan said use L. Do not invent a second unit in v1. |

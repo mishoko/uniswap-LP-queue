@@ -97,6 +97,16 @@ contract HardcapToBTest is BaseTest {
         assertLt(take, notional, "user still receives output");
     }
 
+    /// @dev Size-matched sandwich: dump then equal opposite. Backrun recrosses; take stays 0.
+    /// This is the MEV the slogan points at. We do not claw it.
+    function test_tob_sizeMatchedSandwich_takeIsZero() public {
+        _swap(true, DUMP);
+        assertEq(hook.vaultAccrued(currency0) + hook.vaultAccrued(currency1), 0);
+        _swap(false, DUMP);
+        assertEq(hook.vaultAccrued(currency0), 0, "size-matched backrun recrosses; not clawed");
+        assertEq(hook.vaultAccrued(currency1), 0);
+    }
+
     function test_tob_tickCross_takeIsZero() public {
         _swap(true, DUMP);
         (, int24 tickBefore,,) = poolManager.getSlot0(poolKey.toId());
