@@ -47,6 +47,34 @@ The thesis that follows, and the sentence to lead every conversation with:
 This answers "name a real exploit you would have stopped" without having to predict the exploit,
 which is where every enumerate-the-bug-classes tool fails.
 
+## 1.5 Scorecard — original review findings vs. what actually shipped
+
+The 2026-08-21 review of `HardcapHook` raised eight findings. Their status now, so nobody assumes
+"we pivoted" means "we fixed them":
+
+| # | Finding | Status |
+|---|---|---|
+| F1 | Vault is a pot, not an accrual index: late depositors capture surplus accrued before they arrived | **Open, deliberate.** Fairness is not a present-state property, so it can never be a predicate. The response was to stop claiming it. Fix with accrual-index accounting *before* Hardcap is ever presented as a product again. |
+| F2 | Dust in-range liquidity add zeroes the ToB claw for a whole block, for the price of gas | **Moot** — the claw is no longer claimed to do anything. |
+| F3 | Canonical v4 `PositionManager` LPs can never call `claim`, so their surplus is stranded | **Open.** Still a real defect in the reference hook. `claimFor` is roughly half a day. |
+| F4 | Shares are raw `liquidityDelta`, so tick-wide positions dominate the vault | **Moot** with F1's claim withdrawn; returns if F1 is ever fixed. |
+| F5/F6 | First-swap-of-block exemption subsidises the top-of-block race; the claw taxed uninformed retail | **Resolved by withdrawal**, not by code. |
+| F7 | Constructor accepted out-of-range `fee` (incl. the dynamic-fee flag) and `tickSpacing` | **Fixed.** |
+| F8 | `claim` mis-accounts when `liveL < recorded`; minor gas | **Open, low value.** |
+
+And the three ideas proposed as the way out of the MEV lane:
+
+| Idea | Status |
+|---|---|
+| A — hook risk registry / permission decoding | **Shipped, better than proposed:** on-chain and stateless (`AssayRegistry`) rather than an off-chain table. The off-chain sweep that *populates* it is still missing — see §4.3. |
+| B — bonded hook, permissionless slashing ("Immunefi in the hook") | **Shipped and hardened:** commit-reveal, exit gated on the spec, per-assertion tranches. |
+| HookStack — capability-sandboxed multi-hook composition | **Shipped as `AssayStack`.** It was correctly refused as a *second product* in August and became viable only once extraction was bounded at the ledger. |
+
+The largest thing in the repo — **runtime enforcement** (`AssayHook` / `AssayBaseHook`) — was in
+none of those proposals. It came from the panel objection "name a real exploit you would have
+stopped", which the bonding-only design could not answer. Post-hoc compensation cannot help with a
+drain: by the time insolvency is provable the tokens are gone.
+
 ## 2. What exists (do not rewrite)
 
 | Contract | What it does |
@@ -96,22 +124,54 @@ was an artefact of comparing a hook that transfers against one that does not.
 9. `IHookPredicate.check(address)` selector is **`0xc23697a8`**, hardcoded in assembly and pinned by
    a test. A guessed selector silently turns every verdict into INCONCLUSIVE.
 
-## 4. What to build next, in order
+## 4. What is still missing, in order
 
-1. **Video** (see §0), if it is in fact required.
-2. **Deploy scripts + a testnet deployment.** `script/DeployAssay.s.sol`: `HookBond`,
-   `AssayRegistry`, the predicate library, one `AssayBaseHook` reference deployment, one bonded.
-   Nothing is deployed today; a live address is worth a great deal in judging.
-3. **`AssayReport` script.** Sweep `Initialize` logs (`cast logs`) for hook addresses, feed them to
-   `AssayRegistry.reportMany`, print the table. The headline is the gap: N deployed hooks, X of them
-   able to move a swap delta, **0 declaring a spec and 0 bonded**. That table is the argument.
-4. **Two-phase challenge auction** — award the oldest valid commit rather than the first reveal.
-   Closes the residual in `test_knownLimit_preCommittedSearcherCanStillRace`.
-5. **A victim-claim path for `forfeited`.** Slashed capital is currently locked forever, which is
-   deliberate (it must leave the author's reach) but is not compensation. Do not claim otherwise
-   until this exists.
-6. **More predicates**, in value order: per-block price deviation (stateful, needs a meter-style
-   mixin); a Cork-class callback-authorization attestation; ERC-6909 claim-balance solvency.
+The code is strong and **the evidence around it is thin**. Everything below is about making the work
+legible to someone who will spend eight minutes on it, which is the actual scoring condition.
+
+1. **Video** (see §0), if it is in fact required. Nothing else matters if this gates the entry.
+
+2. **Nothing is deployed.** There is no Assay deploy script and no live address; `script/` still
+   only deploys the old hook. Write `script/DeployAssay.s.sol` — `HookBond`, `AssayRegistry`, the
+   predicate library, one reference `AssayBaseHook`, bonded — and deploy to a v4 testnet. "It exists
+   on chain" is cheap to obtain and disproportionately convincing.
+
+3. **The gap table does not exist, and it is the strongest single artifact available.** Sweep
+   PoolManager `Initialize` logs (`cast logs`) for hook addresses, decode permission bits with zero
+   calls, feed them to `AssayRegistry.reportMany`, print it. The headline writes itself: *N deployed
+   hooks, X of them able to move a swap delta, **zero** declaring a spec, **zero** bonded.* That
+   sentence is the argument for the whole project, it is measured rather than asserted, and it is
+   perhaps a day's work.
+
+4. **Every demo uses hooks we wrote.** `LeakyHook`, `GreedyHook`, `DrippingHook`, `PoliteSubHook` —
+   all straw men, and a skeptic will say so. Wrap a **real third-party hook** (an OZ
+   `uniswap-hooks` example is the obvious candidate) in `AssayBaseHook`, declare a spec for it, show
+   the diff and the gas. That converts "a base contract you could inherit" into "a base contract
+   that demonstrably wraps someone else's real code."
+
+5. **We do not dogfood.** `AssaySuite` runs against one demo hook. Point it at `HardcapHook` and at
+   `AssayStack` and let it attack our own work. If it finds nothing, that is a result worth
+   reporting; if it finds something, better us than a judge.
+
+6. **`describeSpec()` is not surfaced by the registry.** The report carries predicate addresses; a
+   human reads sentences. Add the strings to `bondBreakdown` output — "40 ETH on *hook's outstanding
+   debt to PoolManager stays within its declared budget*" is the readable form of the price signal.
+
+7. **Two-phase challenge auction** — award the oldest valid commit rather than the first reveal.
+   Closes the residual asserted in `test_knownLimit_preCommittedSearcherCanStillRace`.
+
+8. **A victim-claim path for `forfeited`.** Slashed capital is locked forever today. That is
+   deliberate — it must leave the author's reach — but it is not compensation, and must not be
+   described as such until this exists.
+
+9. **`HardcapHook` F3 (`claimFor`)**, so the reference hook is not visibly broken for LPs using the
+   canonical `PositionManager`. Half a day.
+
+10. **More predicates**, in value order: per-block price deviation (stateful, needs a meter-style
+    mixin, `TickBandPredicate` is the present-state version); a Cork-class callback-authorization
+    attestation; ERC-6909 claim-balance solvency.
+
+CI now runs on push and pull request (it was `workflow_dispatch`-only, so it had never run).
 
 ## 5. Open, honestly
 

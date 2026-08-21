@@ -1,3 +1,10 @@
+> [!WARNING]
+> **SUPERSEDED 2026-08-21 — do not follow the instructions in this file.**
+> It describes Hardcap framed as MEV recapture, a framing that was reviewed and withdrawn. Every
+> "win goal", "judging product" and "do not build X" instruction below is void. The current plan is
+> [`NEXT_SESSION_ASSAY.md`](./NEXT_SESSION_ASSAY.md); start at [`docs/README.md`](./README.md).
+> Kept because its v4 mechanics and spike results are still accurate.
+
 # Implementer brief — start Hardcap with zero prior context
 
 **Superseded for the next session.** Use [`docs/NEXT_IMPLEMENTER.md`](./NEXT_IMPLEMENTER.md). This file is the v1-rail brief (5 bps tax). Judging product is now **ToB-spot claw** (`EXTRA_FEE_BPS = 0`). Plan wins on conflict.

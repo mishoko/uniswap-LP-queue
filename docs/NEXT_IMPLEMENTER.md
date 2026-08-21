@@ -1,3 +1,10 @@
+> [!WARNING]
+> **SUPERSEDED 2026-08-21 — do not follow the instructions in this file.**
+> It describes Hardcap framed as MEV recapture, a framing that was reviewed and withdrawn. Every
+> "win goal", "judging product" and "do not build X" instruction below is void. The current plan is
+> [`NEXT_SESSION_ASSAY.md`](./NEXT_SESSION_ASSAY.md); start at [`docs/README.md`](./README.md).
+> Kept because its v4 mechanics and spike results are still accurate.
+
 # Next-session implementer prompt — Hardcap v1+ ToB-spot
 
 **Status (2026-08-19):** Variant A is implemented. `HardcapHook` snapshots open spot; `extraFeeBps = 0` is ToB-spot; envelope tests still use extra = 5. See the plan spike section. Do not re-spike. Remaining: video (human voice, later), not a second product.

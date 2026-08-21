@@ -1,3 +1,10 @@
+> [!WARNING]
+> **SUPERSEDED 2026-08-21 — do not follow the instructions in this file.**
+> It describes Hardcap framed as MEV recapture, a framing that was reviewed and withdrawn. Every
+> "win goal", "judging product" and "do not build X" instruction below is void. The current plan is
+> [`NEXT_SESSION_ASSAY.md`](./NEXT_SESSION_ASSAY.md); start at [`docs/README.md`](./README.md).
+> Kept because its v4 mechanics and spike results are still accurate.
+
 # Hardcap Fail-Closed MEV Cap Hook — Sceptic Checklist and Implementation Plan
 
 **Status:** this file is the only **product / scope** plan. Do not invent a second design doc. Do not expand scope without editing this file first.

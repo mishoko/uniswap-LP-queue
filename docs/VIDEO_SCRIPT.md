@@ -1,3 +1,10 @@
+> [!WARNING]
+> **SUPERSEDED 2026-08-21 — do not follow the instructions in this file.**
+> It describes Hardcap framed as MEV recapture, a framing that was reviewed and withdrawn. Every
+> "win goal", "judging product" and "do not build X" instruction below is void. The current plan is
+> [`NEXT_SESSION_ASSAY.md`](./NEXT_SESSION_ASSAY.md); start at [`docs/README.md`](./README.md).
+> Kept because its v4 mechanics and spike results are still accurate.
+
 # Hardcap demo video script (≤5 minutes)
 
 **Rules:** human voice only. No AI voice (UHI10 score hit + Demo Day block). Kill-test replay first. Comparison second. Do not say leftover recapture, LVR recapture, or “yesterday’s LPs get today’s 0.30%.”
