@@ -385,3 +385,118 @@ Green on the first run is a reason for suspicion, so both hooks were deliberatel
 - **SWITCHBACK's actual fee curve, the JIT-refund attack (§2.4d), and the dust-poison cap (§2.4c).** This spike tested a flat 5% skim purely as a router-compatibility probe. The `OutputSkimHook` here is a stand-in and proves nothing about SWITCHBACK's economics.
 - **Multi-hop routing** (`SWAP_EXACT_IN`, path-based) and **exact-output** swaps against either hook. Single-pool exact-in only.
 - **Gas.** Nothing here is a like-for-like measurement and no number from this spike should be quoted (§9).
+
+---
+
+# ECONOMICS 2026-08-26 — HASTE's free-option and separating-premium test
+
+> The experiment I named as HASTE's most likely killer (§1.4b). Model + Monte Carlo:
+> `docs/research/data/haste_economics.py` (seeded, reproducible), output frozen at `docs/research/data/haste_economics.out`.
+> Every assumption is listed in the script's docstring; the four that matter are restated below.
+
+## VERDICT: **GO-WITH-CAVEATS.** The free option is real but it is not where the objection said it was, and it is fixable on-chain. Two *other* things nearly killed HASTE instead, and one of them is not in the ideas doc.
+
+## The sanity gate, first
+
+Any model of arbitrage that cannot reproduce the textbook LVR rate is worthless. At zero fee the simulated arb profit per block must equal `σ_b²·V/8`:
+
+| Regime | σ_block | theory | simulated | error |
+|---|---|---|---|---|
+| calm ~40% ann | 2.47 bps | $0.0152/blk | $0.0152/blk | 0.2% |
+| normal ~60% ann | 3.70 bps | $0.0342/blk | $0.0342/blk | 0.2% |
+| stressed ~120% ann | 7.40 bps | $0.1370/blk | $0.1371/blk | 0.1% |
+| long-tail ~300% ann | 18.51 bps | $0.8562/blk | $0.8620/blk | 0.7% |
+
+Independently, the Part-4 Monte Carlo is cross-checked against the closed form `φ(z) − z·Φ(−z)` at every point and agrees to four decimals. **A sign error in that payoff (value rising with moneyness — impossible) was caught by adding that cross-check, not by inspection.** Both gates are in the script and print on every run.
+
+## 1. The crossover, and it is not the one that was expected
+
+Fitted over all four vol regimes and three fee tiers: **the arbitrageur's edge is `0.581 × σ_block` per unit notional** (range 0.576–0.614), and it is **essentially independent of the LP fee** — a higher fee makes arbs trade less often, not less profitably per unit.
+
+Retail's cost of waiting `E[T] = (N+1)/2` blocks is `λ · σ_block · √E[T]`.
+
+Separation needs `λ·σ_b·√E[T] < premium < 0.581·σ_b`. **σ_block cancels from both sides.**
+
+> ### `N_max = 2·(0.581/λ)² − 1`
+> **The viability boundary is retail's impatience, not volatility.** This directly contradicts the framing of the question, and it is the most useful thing the model produced.
+
+| λ | N_max (blocks) | on 12s blocks | on Unichain 200ms | |
+|---|---|---|---|---|
+| 0.05 | 269 | 54 min | 54 s | comfortable |
+| 0.10 | 66.6 | 13 min | 13 s | comfortable |
+| 0.15 | 29.1 | 5.8 min | 5.8 s | comfortable |
+| 0.25 | 9.8 | 2.0 min | 2.0 s | tight |
+| 0.35 | 4.5 | 54 s | 0.9 s | **DEAD** |
+| 0.50 | 1.7 | 20 s | 0.3 s | **DEAD** |
+
+**The mean-variance parameterisation never binds** — `(γ/2)σ_b²E[T]` is second-order in σ, giving N_max in the thousands of blocks even at γ=50. That is a finding, not a modelling convenience: **at per-block volatility scales, variance aversion cannot be what makes a trader impatient.** Whatever λ represents, it is a behavioural/UX parameter, not a utility curvature — which means **λ is not something we can derive; it must be measured, and we have not measured it.** It is the single biggest unvalidated number in this analysis.
+
+## 2. Does a separating premium exist? **Yes, and comfortably, for λ ≤ 0.15.**
+
+At λ = 0.15 and N = 29 the band is `0.58·σ_b > premium > 0.55·σ_b`… no — concretely, on the normal ~60% regime (σ_b = 3.70 bps): the arb will pay up to **2.14 bps**, and retail at λ=0.15, N=10 charges itself **1.29 bps**. A premium anywhere in **(1.3, 2.1) bps** separates. That is a real band, not a knife edge. At λ=0.35 the band is empty at any N ≥ 5 and HASTE does not work.
+
+**Where the premium actually comes from, and this is uncomfortable.** Part 4b: the arb's per-notional edge is fee-invariant, so **the premium is not paid out of the arbitrageur's pocket — it is paid by widening the no-arb band.** Staleness tracks total friction almost 1:1 (5 bps friction → 3.3 bps divergence; 100 bps → 51 bps). LPs still gain — LVR falls faster than arb revenue rises (normal regime, arb flow only: net +0.0075/blk at 5 bps friction → +0.0298/blk at 100 bps) — but the honest statement is that **the urgent trader's true cost of the immediate lane is premium + staleness ≈ 2× the premium**, and staleness is borne partly by everyone. §1.4d was a correct worry and it is now quantified.
+
+## 3. Is the deferred order an option? **No — not unless we make it one.**
+
+Part 3, 400k paths per cell: for an irrevocable order with no minOut filling at the maturity spot, `E[P_T] − P_0` is **±0.1 bps against standard deviations of 5.8–227 bps** — indistinguishable from zero at every vol and every N. **The payoff is linear in `P_T`. Zero expected gain, zero gamma. It is a forward with random delivery, not an option.**
+
+This kills question #4 (the adversarial delta-neutral placer) directly: **a linear payoff has no gamma, so a delta-neutral placer harvests nothing.** They pay gas and receive exactly the hedge they already had. There is no structural subsidy. The AMM's own concavity makes it slightly *worse* than flat for the placer.
+
+**#4 and #1 are the same problem, and the problem is convexity — which only the refund creates.**
+
+## 4. The refund IS the free option, and it has an enforceable fix
+
+Part 4, in units of `z = tol / (σ_b·√E[T])` — how many standard deviations out of the money the refund trigger sits. One table covers every vol regime because that ratio is the only thing that matters:
+
+| z | free put / arb edge (N=10) | (N=50) | refund fires | verdict |
+|---|---|---|---|---|
+| 0.00 | **1.61×** | **3.46×** | 49.9% | FATAL — the option is worth more than the entire premium |
+| 0.25 | 1.15× | 2.48× | 40.1% | FATAL |
+| 0.50 | 0.80× | 1.72× | 30.9% | DANGEROUS |
+| 1.00 | 0.34× | 0.72× | 15.9% | DANGEROUS |
+| 1.50 | 0.12× | 0.25× | 6.6% | safe |
+| 2.00 | 0.03× | 0.07× | 2.3% | safe |
+
+A "fill me only if the price improved" order (z = 0) is worth **1.6–3.5× the arbitrageur's entire edge, for free.** That would be a straddle written by the LPs and it is strictly worse than the LVR it was built to stop — the objection was exactly right about the mechanism, just wrong about which feature causes it.
+
+> **DESIGN RULE (enforceable on-chain, and cheap):** reject any deferred order whose `minOut` sits closer than **≈2 standard deviations of the interim move**, i.e. `tol ≥ 2·σ_b·√E[T]`. The hook already measures `σ_b` for the premium, so this costs one comparison. At z ≥ 2 the free put is worth <7% of the arb edge and fires <3% of the time.
+
+Note what this rule *is*: **a volatility-scaled bound on how tight a deferred order's slippage protection may be** — which is W6 arriving as a derived result rather than a bolt-on feature. The delay window and the tolerance floor are the same parameter seen twice.
+
+## 5. Cranking — and the hole that is not in the ideas doc
+
+§1.4a assumed the attacker must guess the maturity block. **That is wrong if the filler chooses when to crank.** Any keeper who cranks a matured order *knows* the fill block, because it is their own transaction. A searcher-filler can bundle front-run → crank → back-run and sandwich the order they are settling, with certainty, for the price of gas. **The randomised maturity buys nothing against the filler.** This is a genuine hole, it is the closest thing here to Hardcap's shape, and I did not have it before running this pass.
+
+The fix that works, and it is cheap: **fill matured orders at the block's OPENING price, not the instant spot.** Then a filler who front-runs their own crank does not move the fill price and has nothing to unwind against. This requires a block-open reference tick — **which is exactly the state SWITCHBACK already keeps.** The two candidates share machinery; that is worth knowing whichever way the decision goes.
+
+Remaining crank issues, stated not solved: the filler must be paid a rent that exceeds gas, which implies a **minimum viable deferred order size ≈ gas/premium**. Below it, small retail cannot reach the free lane and pays the toll. **HASTE is regressive: it protects large retail and taxes small retail.** That belongs in the pitch, not in a footnote. An un-crankable dust order is a de facto cancellation and restores the option, so the minimum size is a correctness requirement, not a nicety.
+
+## 6. The dominance check (Hardcap shape)
+
+*Is placing ever strictly dominant for everyone?* Under A3 (competitive arb): no. Placing is weakly dominant for **risk-neutral non-urgent** flow — which is the mechanism working, since the premium is only supposed to come from urgent flow. Arbs cannot place because their edge is gone by maturity.
+
+**Under A3 relaxed, it inverts.** Part 5, monopolist arb (arb_prob = 0.05, normal vol): the surviving edge rises from 2.14 bps to **11.66 bps** — the edge does not decay, because nobody is racing for it. A monopolist arb places into the free lane, pays nothing, and still collects. **On a pool with no arb competition HASTE collects nothing and defends nothing.** This is the same shape as Hardcap's first-swap exemption: a state in which the behaviour the mechanism exists to deter becomes the cheapest behaviour available.
+
+**HASTE therefore has a scope condition that must be stated on camera: it works on competitively-arbitraged pairs and degrades to nothing on long-tail pairs with a single searcher.** The organizers' theme is volatile *major* pairs, which is the competitive case — but the mechanism cannot be sold as universal.
+
+## 7. Straight answer
+
+**GO-WITH-CAVEATS**, conditional on three things, in this order:
+
+1. **λ ≤ 0.15.** Unmeasured, behavioural, and the whole mechanism rests on it. Cheapest validation available: measure the observed slippage tolerances and deadline settings on real v4 swaps — a trader who sets a 12-second deadline has revealed λ high; one who sets 30 minutes has revealed λ low. **Do this before writing the fee curve.**
+2. **`minOut` floored at 2σ_b√E[T].** One comparison, dissolves the free-option objection.
+3. **Fill at the block-open price.** Otherwise the filler sandwiches the order it settles, and the randomised maturity is decoration.
+
+What did **not** kill it: the option objection as posed (payoff is linear — §3), and the delta-neutral placer (no gamma to harvest — §3). What nearly did: the filler-sandwich hole (§5, new) and the monopolist-arb inversion (§6, new). Both are now stated; neither is fatal on the target pair class.
+
+**Ranking is unchanged. Confidence is up on the economics and down on the scope** — HASTE is not a universal MEV hook, it is a mechanism for competitively-arbitraged volatile pairs, and it should be pitched as exactly that. The deadline question (§8) still decides HASTE vs SWITCHBACK, and §5's finding that both need a block-open reference price makes the fallback cheaper than it looked.
+
+## UNTESTED / MODELLED-BUT-NOT-SIMULATED — do not quote as validated
+
+- **λ itself.** Not measured, not simulated, assumed. Everything in §1 and §2 is conditional on it.
+- **The separating band under retail flow that moves the price.** A4 assumes retail is a price-taker; a large retail order is not.
+- **The filler-sandwich fix.** §5's block-open-price settlement is reasoned, **not simulated and not implemented.** It is the next experiment if HASTE proceeds.
+- **Multi-arb strategic behaviour.** Part 5 models arb competition as a Bernoulli arrival rate, not as a game. A real searcher chooses lanes strategically; that is a game-theoretic model I did not build.
+- **Concentrated liquidity.** A2 is constant-product. Depth changes the constants; I assert but have not shown that it leaves the ratios intact.
+- **Gas.** Not modelled anywhere. The minimum-order-size threshold in §5 is dimensional reasoning, not a measurement.

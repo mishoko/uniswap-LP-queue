@@ -1,0 +1,119 @@
+====================================================================================================
+PART 1 - the arbitrageur's edge, and the LVR it extracts.
+  SANITY GATE: at fee=0 the arb's profit per block must equal the textbook LVR rate
+  sigma_b^2 * V / 8. If this line does not match, nothing below is trustworthy.
+====================================================================================================
+  calm      ~40% ann: sigma_b=  2.47bps  theory=$  0.0152/blk  simulated=$  0.0152/blk  err=  0.2%  PASS
+  normal    ~60% ann: sigma_b=  3.70bps  theory=$  0.0342/blk  simulated=$  0.0342/blk  err=  0.2%  PASS
+  stressed ~120% ann: sigma_b=  7.40bps  theory=$  0.1370/blk  simulated=$  0.1371/blk  err=  0.1%  PASS
+  longtail ~300% ann: sigma_b= 18.51bps  theory=$  0.8562/blk  simulated=$  0.8620/blk  err=  0.7%  PASS
+
+regime                    sb    fee     edge  edge/sb  trades/blk   LVR/blk  feerev/blk  staleness
+calm      ~40% ann     2.47b     1b    1.44b    0.582       0.705     0.012       0.006      0.85b
+calm      ~40% ann     2.47b     5b    1.43b    0.579       0.273     0.006       0.012      3.10b
+calm      ~40% ann     2.47b    30b    1.42b    0.576       0.056     0.003       0.015     15.67b
+normal    ~60% ann     3.70b     1b    2.18b    0.589       0.794     0.030       0.011      0.90b
+normal    ~60% ann     3.70b     5b    2.14b    0.579       0.367     0.017       0.024      3.34b
+normal    ~60% ann     3.70b    30b    2.14b    0.578       0.082     0.008       0.032     16.10b
+stressed ~120% ann     7.40b     1b    4.45b    0.602       0.894     0.139       0.025      0.95b
+stressed ~120% ann     7.40b     5b    4.29b    0.579       0.563     0.090       0.074      3.88b
+stressed ~120% ann     7.40b    30b    4.26b    0.576       0.154     0.043       0.121     17.03b
+longtail ~300% ann    18.51b     1b   11.37b    0.614       0.957     0.989       0.070      0.98b
+longtail ~300% ann    18.51b     5b   10.90b    0.589       0.794     0.789       0.272      4.48b
+longtail ~300% ann    18.51b    30b   10.71b    0.579       0.322     0.423       0.639     19.37b
+
+====================================================================================================
+PART 2 - THE SEPARATING BAND.  Need   retail's cost of waiting  <  premium  <  arb edge.
+====================================================================================================
+  Fitted: arb edge = 0.581 * sigma_block, essentially independent of the LP fee.
+  Retail cost      = lam * sigma_block * sqrt(E[T]),  E[T] = (N+1)/2.
+  => sigma CANCELS. Separation exists iff  lam*sqrt((N+1)/2) < 0.581,
+     i.e.  N_max = 2*(0.581/lam)^2 - 1.   THE BOUNDARY IS RISK AVERSION, NOT VOLATILITY.
+
+    lam=0.05 -> N_max =    269.5 blocks  (  3234.0s on 12s blocks,    53.9s on Unichain 200ms)   comfortable
+    lam=0.10 -> N_max =     66.6 blocks  (   799.5s on 12s blocks,    13.3s on Unichain 200ms)   comfortable
+    lam=0.15 -> N_max =     29.1 blocks  (   348.7s on 12s blocks,     5.8s on Unichain 200ms)   comfortable
+    lam=0.25 -> N_max =      9.8 blocks  (   117.8s on 12s blocks,     2.0s on Unichain 200ms)   tight
+    lam=0.35 -> N_max =      4.5 blocks  (    54.2s on 12s blocks,     0.9s on Unichain 200ms)   DEAD
+    lam=0.50 -> N_max =      1.7 blocks  (    20.5s on 12s blocks,     0.3s on Unichain 200ms)   DEAD
+
+  PART 2b - mean-variance alternative, for completeness:
+    calm      ~40% ann gam=  1: N_max =          4,694 blocks  -> variance aversion is second-order in sigma at block scale and never binds
+    calm      ~40% ann gam=  5: N_max =            939 blocks  -> variance aversion is second-order in sigma at block scale and never binds
+    calm      ~40% ann gam= 50: N_max =             94 blocks  -> variance aversion is second-order in sigma at block scale and never binds
+
+====================================================================================================
+PART 3 - is an IRREVOCABLE, no-minOut deferred order an OPTION or a FORWARD?
+====================================================================================================
+  calm      ~40% ann N=  10  E[P_T]-P_0 =  -0.0008 bps   sd =     5.79 bps
+  calm      ~40% ann N=  50  E[P_T]-P_0 =  -0.0032 bps   sd =    12.48 bps
+  calm      ~40% ann N= 300  E[P_T]-P_0 =  +0.1101 bps   sd =    30.30 bps
+  normal    ~60% ann N=  10  E[P_T]-P_0 =  +0.0047 bps   sd =     8.65 bps
+  normal    ~60% ann N=  50  E[P_T]-P_0 =  -0.0424 bps   sd =    18.66 bps
+  normal    ~60% ann N= 300  E[P_T]-P_0 =  -0.0416 bps   sd =    45.41 bps
+  stressed ~120% ann N=  10  E[P_T]-P_0 =  +0.0104 bps   sd =    17.37 bps
+  stressed ~120% ann N=  50  E[P_T]-P_0 =  +0.0895 bps   sd =    37.42 bps
+  stressed ~120% ann N= 300  E[P_T]-P_0 =  -0.1278 bps   sd =    90.64 bps
+  longtail ~300% ann N=  10  E[P_T]-P_0 =  -0.0202 bps   sd =    43.44 bps
+  longtail ~300% ann N=  50  E[P_T]-P_0 =  -0.0550 bps   sd =    93.55 bps
+  longtail ~300% ann N= 300  E[P_T]-P_0 =  +0.0833 bps   sd =   227.11 bps
+  => payoff is LINEAR in P_T. Zero expected gain, zero gamma. It is a forward with
+     random delivery, NOT an option. A delta-neutral placer harvests nothing.
+
+====================================================================================================
+PART 4 - value of a FREE minOut refund. THIS is the actual option.
+  Value above an unconditional fill = E[(K - P_T)+], a free PUT struck at the tolerance.
+  The ONLY thing that matters is z = tol / (sigma_b * sqrt(E[T])) - how many standard
+  deviations out of the money the refund trigger sits. Value below is in units of the
+  interim move sigma_b*sqrt(E[T]), so one table covers every vol regime.
+====================================================================================================
+ z (tol in sd)  put/sd MC closed form    @N=10    @N=50  refund rate   verdict
+          0.00     0.3984      0.3989    1.61x    3.46x        49.9%   FATAL - free option dwarfs the premium
+          0.25     0.2856      0.2863    1.15x    2.48x        40.1%   FATAL - free option dwarfs the premium
+          0.50     0.1976      0.1978    0.80x    1.72x        30.9%   DANGEROUS
+          1.00     0.0835      0.0833    0.34x    0.72x        15.9%   DANGEROUS
+          1.50     0.0291      0.0293    0.12x    0.25x         6.6%   safe - refund is deep OTM
+          2.00     0.0085      0.0085    0.03x    0.07x         2.3%   safe - refund is deep OTM
+          3.00     0.0004      0.0004    0.00x    0.00x         0.1%   safe - refund is deep OTM
+          4.00     0.0000      0.0000    0.00x    0.00x         0.0%   safe - refund is deep OTM
+
+  => DESIGN RULE, and it is enforceable on-chain because the hook already measures
+     sigma_b for the premium: REJECT any deferred order whose minOut sits closer than
+     ~2 sd of the interim move. At z>=2 the free put is worth <7% of the arb edge and
+     the refund fires <3% of the time. At z=0 (fill-only-if-improved) it is worth more
+     than the entire arb edge and HASTE is a straddle written by the LPs.
+
+====================================================================================================
+PART 4b - does the premium actually help LPs, or does it just buy price staleness?
+  LP net vs ARB FLOW ONLY = fee+premium revenue - LVR. Retail revenue is excluded
+  because retail's response to the premium is the thing under test elsewhere.
+====================================================================================================
+regime               total friction  arb rev/blk   LVR/blk  LP net/blk  staleness
+normal    ~60% ann               5b       0.0240    0.0165      0.0075      3.34b
+normal    ~60% ann              10b       0.0284    0.0122      0.0162      5.95b
+normal    ~60% ann              20b       0.0312    0.0092      0.0220     11.06b
+normal    ~60% ann              50b       0.0330    0.0073      0.0257     25.98b
+normal    ~60% ann             100b       0.0346    0.0048      0.0298     51.34b
+stressed ~120% ann               5b       0.0740    0.0900     -0.0161      3.88b
+stressed ~120% ann              10b       0.0964    0.0676      0.0288      6.69b
+stressed ~120% ann              20b       0.1137    0.0502      0.0635     11.90b
+stressed ~120% ann              50b       0.1274    0.0361      0.0913     27.22b
+stressed ~120% ann             100b       0.1320    0.0306      0.1013     52.08b
+  => staleness tracks the friction almost 1:1. The premium is NOT paid out of the
+     arb's per-notional edge (which is fee-invariant, Part 1); it is paid by widening
+     the no-arb band. LPs still gain, because LVR falls faster than arb revenue, but
+     the immediate lane's true cost to an urgent trader is premium + staleness ~ 2x premium.
+
+====================================================================================================
+PART 5 - A3 RELAXED. If arbitrage is NOT competitive (one bot, no race), is the arb
+         still forced to pay for immediacy, or can it defer for free?
+====================================================================================================
+regime                arb_prob     edge  staleness                                        note
+normal    ~60% ann        1.00    2.14b      3.34bcompetitive: edge decays, must pay to be first
+normal    ~60% ann        0.50    3.35b      4.37b                                    marginal
+normal    ~60% ann        0.20    5.65b      6.45b   edge survives waiting -> deferral is free
+normal    ~60% ann        0.05   11.66b     12.09b   edge survives waiting -> deferral is free
+longtail ~300% ann        1.00   10.90b      4.48bcompetitive: edge decays, must pay to be first
+longtail ~300% ann        0.50   16.77b     12.38b                                    marginal
+longtail ~300% ann        0.20   28.17b     25.43b   edge survives waiting -> deferral is free
+longtail ~300% ann        0.05   58.18b     56.29b   edge survives waiting -> deferral is free
