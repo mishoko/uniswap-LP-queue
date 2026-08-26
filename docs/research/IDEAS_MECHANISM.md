@@ -640,12 +640,22 @@ no-arb band is set by the *fee*, not by σ, which is the same result `haste_econ
 | 3.0 | 44.6% | 3.79 | 38% | 24.6% |
 | 6.0 | 48.5% | 5.23 | 30% | 26.7% |
 
-**Decomposition — how much of the false positive is the stale reference at all?** Replacing `T0` with
-the true market tick (an oracle; not implementable on-chain, used purely as a counterfactual) moves
-honest cost 3.79 → **2.13 bps** and escape 24.6 → 29.4%. So **~44% of the honest false positive is
-the reference channel and ~56% is intrinsic** — ordinary two-sided honest flow inside one block,
-which is §2.4f and has nothing to do with staleness. Control NC2 confirms it independently: with a
-*perfect* reference and strictly alternating honest flow, 51.2% of swaps pay 2.36 bps.
+**Decomposition — how much of the false positive is the stale reference at all?** The LIFO
+attribution says **38.0%** of the honest fee consumes extension created by the corrective arb (the
+reference channel) and **62%** is intrinsic — ordinary two-sided honest flow inside one block, which
+is §2.4f and has nothing to do with staleness. Control NC2 confirms the second number independently:
+with a *perfect* reference and strictly alternating honest flow, 51.2% of swaps pay 2.36 bps, i.e.
+62% of 3.79.
+
+> ⚠ **CORRECTION, 2026-08-26 (later the same day), found by my own follow-up run.** An earlier draft
+> of this paragraph quoted an oracle-reference counterfactual at 2.13 bps and concluded a perfect
+> reference would *help*. **That row was defective**: it moved `T0` to the true market tick but left
+> the extension budget empty at block open, so the standing displacement was not chargeable. With the
+> budget seeded consistently the same row reads **4.39 bps, escape 21.3%, arb shortfall 67.5%** — a
+> market-anchored reference is **worse**, because "retracement toward `T0`" then means "moving toward
+> the market price", which is what price discovery *is*. The 38/62 split above is the number that
+> stands. **Fourth defective result caught by distrusting a green run in this repo, and the first one
+> that was mine.**
 
 > ### 4.1 A HEADLINE CLAIM IN THE BRIEF IS FALSE AND MUST BE RETRACTED
 > `CANDIDATE_BRIEF.md` §1: *"**Ordinary traders** — Unaffected. A one-way trade pays nothing extra.
@@ -813,3 +823,251 @@ JIT-refund fix, and ahead of the dust-poison test (which §2 has already settled
 - **The JIT-refund attack (§2.4d)** and the next-block donation that is supposed to defeat it. Not
   touched here — the fee's *destination* is not modelled at all, only its size.
 - **Gas.** Not modelled. The one-slot finding in §2 is a state-count argument, not a measurement.
+
+---
+
+# REFERENCE-CARRY 2026-08-26 — can `T0` cross a block boundary without a new exemption?
+
+> Follow-on to REFLEXIVITY §5 (the cross-block unwind). Same script, same seed:
+> `docs/research/data/switchback_reflexivity.py`, PARTS 10–14. LVR gate still PASSES.
+> **NEGATIVE CONTROL: α=1, reset_every=1 reproduces every number in the REFLEXIVITY section
+> bit-for-bit — asserted in-script, and the run halts if it does not.**
+
+## VERDICT: **FIXABLE.** One EMA parameter closes the cross-block route for ~nothing. The multi-block-window variant is dead.
+
+---
+
+## 1. The mechanism of the fix, before the numbers
+
+The hole exists because `T0` re-sets to the pool's **own displaced tick**, so the unwind leg at the
+top of block N+1 starts *at* `T0` and every move from there is an extension. Replace the reset with
+
+```
+T0_new = T0_old + α · (tick_at_block_open − T0_old)
+```
+
+and the unwind at N+1 starts a distance `(1−α)·displacement` **above** `T0`, so walking it back is a
+retracement and is charged. α=1 is the shipped hook. The extension budget is seeded at block open
+with the standing displacement `|tick − T0|`, which is what keeps the M2′ identity (§2 of REFLEXIVITY)
+true under a carried reference — and which is exactly 0 at α=1, hence the exact control.
+
+**It is still one storage slot.**
+
+---
+
+## 2. THE ANSWER: α ≈ 0.5 (per 12s half-life) closes it, and costs essentially nothing
+
+γ=1, normal vol, 5 bps pool, 3 retail swaps/block. "IN" = in-block sandwich, "XB" = the cross-block
+unwind, with the front-run **re-optimised for the route the attacker intends to run** (an earlier
+draft sized it for the in-block route and understated XB by 17×).
+
+| policy | ref lag | honest charged | honest bps | arb shortfall | IN keeps | **XB keeps** |
+|---|---|---|---|---|---|---|
+| **α=1.00 (shipped)** | 0.00 t | 44.6% | **3.79** | 26.3% | 1.6% | **87.3%** |
+| α=0.75 | 3.80 t | 49.4% | 3.50 | 40.7% | 1.6% | 3.2% |
+| **α=0.50** | 7.34 t | 49.0% | **3.63** | 48.5% | 1.6% | **1.6%** |
+| α=0.25 | 11.41 t | 49.2% | 4.14 | 53.7% | 1.6% | 1.6% |
+| α=0.10 | 15.20 t | 49.2% | 4.64 | 56.8% | 1.3% | 1.3% |
+| α=0.00 (fixed anchor) | 129.66 t | 49.7% | **10.05** | 46.8% | 1.8% | 1.8% |
+
+> **At α ≤ 0.5 the XB column equals the IN column exactly. The cross-block route confers zero
+> advantage — it is not merely taxed, it is made pointless.** And it costs honest flow **nothing**:
+> 3.63 bps at α=0.5 versus 3.79 at α=1. Slightly *cheaper*, because the carried reference sits closer
+> to where price actually is than a reference the top-of-block arb has just walked away from.
+
+α=0 (a fixed anchor, i.e. "never reset") is not the answer: 10.05 bps and a 130-tick lag.
+**The parameter has an interior optimum, which is the useful finding — "carry it further" is wrong.**
+
+### 2.1 Block time is not a free parameter — and the tick numbers survive it
+
+The EMA decays per **block**. On Unichain's 200 ms blocks, α=0.5 is a 200 ms half-life, i.e. 60×
+weaker in wall-clock terms. **α must be specified as a wall-clock half-life.** For a 12s half-life:
+**α = 0.5000 on Ethereum, α = 0.0115 on Unichain.**
+
+The steady-state lag is *invariant* to block time under that rule, so every tick figure above carries
+over unchanged: `lag_sd ≈ σ_block/√(2α)`, with `σ_block ∝ 1/√B` and `α ∝ 1/B`, so `lag_sd ∝ constant`.
+**This is analytic, not simulated** — the rig runs 12s blocks throughout.
+
+---
+
+## 3. WHAT NEW EXEMPTION DOES IT CREATE? — four checked, none fatal, one real residual
+
+### 3.1 Trend taxation — **REAL, but BOUNDED, and the fear does not materialise**
+
+A lagging reference means the pool sits persistently on one side of `T0` in a trend, so counter-trend
+honest flow is charged against the standing lag.
+
+| drift | α=1 | α=0.5 | α=0.25 | α=0.10 | α=0 |
+|---|---|---|---|---|---|
+| 0 t/blk | 3.79 b | 3.63 | 4.14 | 4.64 | 10.05 |
+| 2 t/blk | 3.16 | 3.24 | 3.90 | 5.51 | 9.65 |
+| 5 t/blk | 2.57 | **3.16** | 4.50 | 6.52 | 7.40 |
+
+**At α=0.5, a 5 tick/block trend costs honest flow +0.6 bps over the shipped hook.** The brief's
+worry — "a fix that closes a 1.9% attack by taxing trend-following retail 40 bps is not a fix" — does
+not happen, and the reason is structural, not lucky:
+
+> **The charge on any swap is `min(its own tick impact, the standing displacement)`** — that is the
+> same M2′ identity. A swap can only be charged for distance it actually walks. With a 5-tick median
+> retail impact, retail can never pay more than ~5 bps at γ=1 **no matter how stale `T0` is**. The
+> lag column reaching 10,120 ticks at α=0 and honest cost still only 7.40 bps is that cap being
+> visible. **Reference staleness cannot produce an unbounded bill. This should have been obvious from
+> §2 of REFLEXIVITY and was not — it is the strongest single property the mechanism has.**
+
+The exposed party is not retail but **large** swaps, whose own impact is big enough that the lag never
+binds. Volume-weighted numbers above already include that tail.
+
+### 3.2 Reference steering (the §2.4c dust-poison aimed at `T0`) — **~5× underwater at α=0.5**
+
+Biasing `T0` by Δ ticks requires holding the tick `Δ/α` away when the reference is sampled, then
+unwinding — and under α<1 that unwind is itself charged. Measured cost of a **+5 tick** bias:
+
+| α | push required | LP fees | SWITCHBACK on the unwind | total |
+|---|---|---|---|---|
+| 1.00 | 5 t | $5 | $0 | **$5** |
+| 0.50 | 10 t | $10 | $5 | **$15** |
+| 0.25 | 20 t | $20 | $30 | **$50** |
+| 0.10 | 50 t | $50 | $225 | **$275** |
+| 0.02 | 250 t | $248 | $6,159 | **$6,407** |
+
+Against that, measured from the α-sweep: `d(honest bps)/d(ref lag) = 0.125 bps/tick`, honest notional
+$24,731/block, so a 1-tick bias earns **$0.31/block**; a 5-tick bias decaying at α=0.5 is ~10
+tick-blocks ⇒ **$3.09 total**, versus a $15 cost, and the steerer receives only their **LP share** of
+even that. **≈5× underwater.** REASONED FROM MEASURED OUTPUTS, NOT SIMULATED — no steering agent was
+run, and this rig does not model the fee's destination (§2.4d) anywhere.
+
+Note the cost scales as 1/α, so **steering resistance and cross-block closure both want small α while
+trend cost wants large α.** α=0.5 is comfortably inside all three.
+
+### 3.3 "Just wait" — **THE REAL RESIDUAL, and it is §2.4a made true**
+
+Under an EMA the reference catches up geometrically, so holding k blocks leaves only `(1−α)^k` of the
+charge. Share of untaxed gross retained (**attacker-favourable upper bound: this probe assumes nobody
+trades during the wait, so the displacement is still standing when they unwind**):
+
+| α | k=1 | k=2 | k=3 | k=5 | k=10 | in-block |
+|---|---|---|---|---|---|---|
+| 1.00 | 90.7% | 91.7% | 92.4% | 87.8% | 91.4% | 1.9% |
+| 0.75 | 3.2% | 25.7% | 73.4% | 88.7% | 84.3% | 1.3% |
+| **0.50** | **1.5%** | **5.4%** | **9.8%** | 52.9% | 91.2% | 1.8% |
+| 0.25 | 1.7% | 1.4% | 1.5% | 3.2% | 28.6% | 1.7% |
+
+At α=0.5 the attacker needs to hold **~3–5 half-lives (~36–60 s of wall clock)** before the route pays.
+And they cannot: **the top-of-block corrective arb at N+1 takes the displacement they are sitting on.**
+
+> **This is exactly §2.4a's mitigation — "holding inventory across a block turns a risk-free atomic
+> sandwich into a directional position" — which REFLEXIVITY §5 refuted at α=1 because the wait was one
+> 200 ms block boundary. At α=0.5 with a wall-clock half-life the wait is ~30–60 seconds and is
+> contested by every arb bot on the pair. The fix does not eliminate the route; it restores the
+> economic argument the doc had already claimed and could not previously support.** Say it that way.
+
+### 3.4 Impaired price correction — **a cost, not an exemption: 7.2% of LP P&L**
+
+α<1 means the corrective arb is more often a retracement, so it is taxed and under-corrects: shortfall
+27.2% → 48.5%. Isolated with sandwiches switched off entirely (so there is no extraction to prevent
+and no sandwich fee revenue to lose), pool-vs-HODL per block:
+
+| α | ref lag | arb shortfall | pool vs HODL | SWITCHBACK rev | LP total |
+|---|---|---|---|---|---|
+| 1.00 | 0.00 t | 27.2% | **15.59** | 13.07 | 28.65 |
+| 0.75 | 3.67 t | 41.3% | 14.91 | 16.19 | 31.10 |
+| **0.50** | 7.05 t | 48.5% | **14.47 (−7.2%)** | 17.36 | 31.82 |
+| 0.25 | 10.91 t | 54.5% | 14.20 (−8.9%) | 19.04 | 33.24 |
+
+**−7.2% of LP P&L is the price of the fix**, and it is a genuine cost, not a transfer we can wave at.
+It is more than the 1.4% that block-reset staleness cost (REFLEXIVITY §3) and it must be disclosed.
+It is not an *exemption* — no attacker can steer into it.
+
+---
+
+## 4. VARIANT 2 — the multi-block extension budget: **DEAD, and strictly dominated**
+
+Carrying unspent extension for N blocks is the *same object* as holding `T0` for N blocks (M2′ proved
+the budget **is** the displacement from `T0`), so it was tested as "reset every N blocks".
+
+| N | honest bps | **XB keeps at a boundary** | × 1/N frequency | in-block keeps | better route |
+|---|---|---|---|---|---|
+| 1 | 3.79 | 87.3% | 87.3% | 1.6% | CROSS-BLOCK |
+| 2 | 4.43 | 82.0% | 41.0% | 1.4% | CROSS-BLOCK |
+| 5 | 5.25 | 81.0% | 16.2% | 1.5% | CROSS-BLOCK |
+| 10 | 5.55 | 78.1% | 7.8% | 1.4% | CROSS-BLOCK |
+| 30 | 6.16 | 69.6% | 2.3% | 1.0% | CROSS-BLOCK |
+| 60 | 6.82 | 69.3% | 1.15% | 1.1% | CROSS-BLOCK |
+
+> **A window never closes the route; it only rations it — and it hands the attacker a *scheduled*
+> exemption.** `block.number % N` is public, so the reset boundary is not raced, it is diarised: the
+> attacker picks a victim in the last block of a window and unwinds at the first block of the next,
+> keeping 69–87% of gross every time. The cross-block route stays strictly better than the in-block
+> route out to **N ≈ 60 blocks (12 minutes)** — by which point honest flow is paying 6.82 bps (+80%).
+>
+> **This is the Hardcap shape in its purest form yet: a periodic, publicly-scheduled amnesty.** It is
+> worse than the α=1 hole it was meant to fix, because it is *predictable*. Kill it and do not revisit it.
+
+---
+
+## 5. Option 4 — is "atomic in-block only" a product? **No, and the reason is a logic error in the question**
+
+We do not need this answer any more, but it was asked and it generalises.
+
+**The historical atomic share is the wrong number.** A defence whose bypass costs ~nothing does not
+get bypassed by *some* extraction — it gets bypassed by *all* of it, because the searchers running
+this are already running priority-fee auctions. At α=1 the bypass break-even was **q\*=1.9%**
+(REFLEXIVITY §5). So whatever fraction of extraction is atomic *today* is an **upper bound that decays
+toward zero on adoption**. Measuring it would tell us what we prevented in the first week, not the
+tenth. **A mechanism that redistributes rather than eliminates the attack has to be priced on the
+post-adoption equilibrium, and that equilibrium is "everybody uses the free lane".**
+
+The one thing that could rescue option 4 is the unmeasured top-of-block auction cost (REFLEXIVITY §5's
+open item). **That is still unmeasured, and the fix in §2 makes it moot — which is the better outcome,
+because it removes a load-bearing dependency on a number nobody on this team has.**
+
+Corroborating, from evidence the brief already holds: Gogol et al. (Jan 2026) find sandwiches rare and
+>95% of sandwich-shaped patterns false positives on private-mempool rollups; §2.2 already concedes
+CEX-DEX/LVR is one-way and untouchable. **The atomic-only slice was thin before the migration argument
+and negligible after it.** Do not pitch it.
+
+---
+
+## 6. STRAIGHT ANSWER
+
+**FIXABLE.** Ship the EMA reference at **a 12-second half-life** (α=0.5 on 12s blocks, **α=0.0115 on
+Unichain — the parameter must be wall-clock, not per-block**).
+
+| | shipped (α=1) | fixed (α=0.5) |
+|---|---|---|
+| cross-block unwind keeps | **87.3%** | **1.6%** (= in-block; no advantage at all) |
+| in-block sandwich keeps | 1.6% | 1.6% |
+| honest flow | 44.6% charged, 3.79 bps | 49.0% charged, **3.63 bps** |
+| honest flow, 5 t/blk trend | 2.57 bps | 3.16 bps |
+| LP P&L (staleness only) | baseline | **−7.2%** |
+| reference steering | $5 per +5 t | $15, ≈5× underwater |
+| escape by waiting | 1 block boundary (200 ms on Unichain) | ~3–5 half-lives, contested by the arb |
+
+**What this changes in the pitch:** REFLEXIVITY §5's demand to *"measure the cost of a top-of-block
+slot on Unichain before committing four weeks"* is **withdrawn** — the fix removes the dependency.
+§2.4a's inventory-risk mitigation can be reinstated, but **only with the EMA and only stated in
+wall-clock**. Impact can go back up from 2–3 toward 3–4.
+
+**What does NOT change:** every retraction in REFLEXIVITY §8 stands. "The honest path is free" is
+still false (it is *more* false at α=0.5: 49.0% of honest swaps charged). The published fee cap is
+still Hardcap-shaped. The watermarks are still dead weight. γ≈0.5 is still the right slope, and the
+OZ-convergence problem at γ=1 (§7) is untouched by any of this.
+
+**One new cost to disclose on camera:** the fix taxes the price-correcting arb harder, and that costs
+LPs **7.2%** of their P&L. It buys closing a route worth 87% of gross to an attacker. That is a good
+trade and it should be presented as a trade, not as a free lunch.
+
+## UNTESTED / MODELLED-BUT-NOT-SIMULATED
+
+- **The wall-clock invariance argument (§2.1).** Analytic. The rig runs 12s blocks only; **nothing here
+  was simulated at 200 ms.** This is now the load-bearing unsimulated claim of the fix — if the lag is
+  *not* invariant, α on Unichain is not 0.0115 and §2's table does not transfer. **Re-run the α sweep
+  at Unichain block parameters before building.** Cheap: one constant.
+- **Reference steering (§3.2).** Cost measured, revenue inferred from the α-sweep derivative, LP
+  capture not modelled at all. §2.4d (JIT refund) is still untouched by any run in this document.
+- **§3.3's "just wait" table is an attacker-favourable upper bound** — no flow at all during the wait.
+  The claim that the corrective arb takes the displacement is reasoned, not simulated.
+- **Flow calibration** (3 swaps/block, 5-tick median impact) is still the most load-bearing unmeasured
+  input, unchanged from REFLEXIVITY.
+- **Concentrated liquidity, gas, and the fee's destination** — none of these are modelled anywhere in
+  this rig, at any point.

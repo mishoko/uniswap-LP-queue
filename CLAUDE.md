@@ -211,7 +211,17 @@ These cost real time. Violating one silently produces a green test that proves n
     produced **zero** candidates and a vocabulary (autopoiesis, homeostasis, apoptosis, membrane,
     metabolism). Three sessions prompted for mechanisms plus adversarial kill-rounds produced five.
     **Always demand: state kept / trigger / settlement path.** And run the delete test on the answer.
-16. **Fairness is not a present-state property** and therefore can never be a predicate. "This swap
+16. **A v4 hook CANNOT bind an allowlist to the party that receives the tokens.** `sender` in
+    `beforeSwap` is the **router** (asserted, `test_Q3_senderIsTheRouterNotTheTrader`), `hookData` is
+    **caller-supplied** and empty by default, and the hook **never sees the recipient** — the router
+    calls `poolManager.take(currency, recipient, amt)` *after* the hook's last callback. So any
+    KYC / ZK / lockup / trading-hours gate proves *"some allowlisted address appeared in the
+    calldata"*, **not** *"the recipient is allowlisted"*. Three escapes: be the periphery (kills
+    aggregator routing); an issuer signature per trade (a live off-chain censor on the swap path); or
+    **the token enforces it itself (ERC-3643/1400) — which makes the hook redundant.**
+    ⇒ **The entire hook-based compliance-gate lane fails the delete test.** True of all 78
+    compliance-tagged submissions in the directory; none of them say it. **Publish this.**
+17. **Fairness is not a present-state property** and therefore can never be a predicate. "This swap
     was unfairly priced", "the hook stole in block N" are not expressible. Do not claim them.
 
 ### The two v4-only properties the whole Assay thesis rests on

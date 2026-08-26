@@ -52,6 +52,7 @@ SEC_PER_BLOCK = 12.0
 BLOCKS_PER_YEAR = 365 * 24 * 3600 / SEC_PER_BLOCK
 LN_TICK = math.log(1.0001)
 def sb(annual): return annual / math.sqrt(BLOCKS_PER_YEAR)
+def sb_at(annual, spb): return annual / math.sqrt(365 * 24 * 3600 / spb)
 
 VOLS = [("calm      ~40% ann", 0.40), ("normal    ~60% ann", 0.60),
         ("stressed ~120% ann", 1.20), ("longtail ~300% ann", 3.00)]
@@ -224,20 +225,50 @@ def best_sandwich(pool, meter, victim_side, victim_amt, gamma, cap_bps, grid=18)
         if prof > best[0]: best = (prof, a)
     return best
 
+def best_sandwich_xb(pool, meter, T0, victim_side, victim_amt, gamma, cap_bps,
+                     alpha, boundary, deadband=0.0, uncapped='', grid=18, delay=1):
+    """Front-run + victim in block N, unwind at the TOP of block N+1 under the live reference
+       policy.  The front-run size is optimised FOR THIS ROUTE - an attacker planning a
+       cross-block unwind does not use the in-block optimum.  Returns (profit, front_amt)."""
+    best = (-1e18, 0.0)
+    bs = "xin" if victim_side == "yin" else "yin"
+    for i in range(1, grid + 1):
+        a = victim_amt * (i * 0.5)
+        p = pool.copy(); m = meter.copy(); fees = 0.0
+        got, fe, _, _ = do_swap(p, m, victim_side, a, gamma, cap_bps, "atk"); fees += fe
+        do_swap(p, m, victim_side, victim_amt, gamma, cap_bps, "hon")
+        tclose = p.tick()
+        if boundary:
+            T0n = tclose
+        else:
+            T0n = T0
+            for _ in range(delay):        # the reference keeps decaying while the attacker waits
+                T0n = T0n + alpha * (tclose - T0n)
+        mN = Meter(T0n, deadband, uncapped)
+        d = tclose - T0n
+        if d > 1e-15:   mN.up.append([d, 'carry'])
+        elif d < -1e-15: mN.dn.append([-d, 'carry'])
+        back, fe2, _, _ = do_swap(p, mN, bs, got, gamma, cap_bps, "atk"); fees += fe2
+        prof = (back - a - fees) if victim_side == "yin" else ((back - a) * p.price() - fees)
+        if prof > best[0]: best = (prof, a)
+    return best
+
 # ============================================================ THE SIMULATION
 def simulate(ann_vol, gamma, cap_bps=1e9, deadband=0.0, f=0.0005, V0=40_000_000.0,
              blocks=4000, retail_per_block=3.0, retail_med=5_000.0, retail_sd=1.0,
              sandwich_prob=0.35, arb_on=True, arb_suppress=0.0, market_moves=True,
              seed=20260826, two_sided_only=False, one_way_only=False,
-             oracle_reference=False, uncapped=''):
+             oracle_reference=False, uncapped='', alpha=1.0, reset_every=1,
+             mu_ticks=0.0, spb=12.0):
     rng = random.Random(seed)
-    s = sb(ann_vol) if market_moves else 0.0
+    s = sb_at(ann_vol, spb) if market_moves else 0.0
     pool = Pool(V0, f); S = pool.price()
     st = dict(hon_n=0, hon_chg_n=0, hon_bps_sum=0.0, hon_notional=0.0, hon_fee_y=0.0,
               hon_from_arb=0.0, hon_from_hon=0.0, hon_from_atk=0.0,
               arb_opp=0, arb_deterred=0, arb_partial=0.0,
               sw_att=0, sw_n=0, sw_escape=0, sw_gross=0.0, sw_netpos=0.0,
-              stale_open=0.0, stale_close=0.0, feerev=0.0, swb_rev=0.0, hist=[])
+              stale_open=0.0, stale_close=0.0, feerev=0.0, swb_rev=0.0, hist=[],
+              hon_from_carry=0.0, ref_lag=0.0, sw_xb_ok=0, sw_xb_prof=0.0, sw_xb_fee=0.0)
     x0, y0 = pool.x, pool.y
 
     def run_arb(meter):
@@ -264,17 +295,32 @@ def simulate(ann_vol, gamma, cap_bps=1e9, deadband=0.0, f=0.0005, V0=40_000_000.
         tot = sum(attrib.values())
         if tot > 0:
             for k_, v in attrib.items():
-                st['hon_from_' + k_] += b * v / tot
+                st['hon_from_' + k_] = st.get('hon_from_' + k_, 0.0) + b * v / tot
 
-    for _ in range(blocks):
-        T0 = pool.tick()
-        st['stale_open'] += abs(T0 - math.log(S) / LN_TICK)
+    T0_prev = None
+    for _blk in range(blocks):
+        # ---- REFERENCE POLICY.  alpha=1 and reset_every=1 is the shipped behaviour and MUST
+        #      reproduce the pre-existing numbers exactly (negative control).
+        if T0_prev is None:
+            T0 = pool.tick()
+        elif reset_every > 1:
+            T0 = pool.tick() if (_blk % reset_every == 0) else T0_prev
+        else:
+            T0 = T0_prev + alpha * (pool.tick() - T0_prev)
+        st['ref_lag'] += abs(pool.tick() - T0)
+        st['stale_open'] += abs(pool.tick() - math.log(S) / LN_TICK)
         if oracle_reference:
             # DIAGNOSTIC ONLY - not implementable on-chain.  Replaces the block-open tick
             # with the true market tick, i.e. a reference that is fresh by construction.
             T0 = math.log(S) / LN_TICK
         meter = Meter(T0, deadband, uncapped)
-        if market_moves: S *= math.exp(rng.gauss(-0.25 * s * s, s / math.sqrt(2)))
+        # Seed the budget with the displacement already standing at block open, so that the
+        # M2' identity (budget == |tick - T0|) still holds under a carried reference.
+        # At alpha=1 this seed is exactly 0, hence the control is exact.
+        _d = pool.tick() - T0
+        if _d > 1e-15:   meter.up.append([_d, 'carry'])
+        elif _d < -1e-15: meter.dn.append([-_d, 'carry'])
+        if market_moves: S *= math.exp(0.5*mu_ticks*LN_TICK + rng.gauss(-0.25*s*s, s/math.sqrt(2)))
         if arb_on and rng.random() >= arb_suppress: run_arb(meter)
 
         n_ret = 0; u = rng.random(); cum = math.exp(-retail_per_block); pk = cum
@@ -297,6 +343,12 @@ def simulate(ann_vol, gamma, cap_bps=1e9, deadband=0.0, f=0.0005, V0=40_000_000.
                 else:
                     st['sw_n'] += 1; st['sw_gross'] += gross
                     prof, front = best_sandwich(pool, meter, side, amt, gamma, cap_bps)
+                    # --- counterfactual: unwind at the TOP of the next block, under the live
+                    #     reference policy, with the front-run sized FOR that route.
+                    pr_xb, _fxb = best_sandwich_xb(
+                        pool, meter, T0, side, amt, gamma, cap_bps, alpha,
+                        boundary=(reset_every > 1), deadband=deadband, uncapped=uncapped)
+                    if pr_xb > 0: st['sw_xb_ok'] += 1; st['sw_xb_prof'] += pr_xb
                     if prof > 0:
                         st['sw_escape'] += 1; st['sw_netpos'] += prof
                         fs = "yin" if side == "yin" else "xin"
@@ -314,8 +366,9 @@ def simulate(ann_vol, gamma, cap_bps=1e9, deadband=0.0, f=0.0005, V0=40_000_000.
             st['swb_rev'] += fee; st['feerev'] += amt_y * f
             book_honest(amt_y, fee, at)
 
-        if market_moves: S *= math.exp(rng.gauss(-0.25 * s * s, s / math.sqrt(2)))
+        if market_moves: S *= math.exp(0.5*mu_ticks*LN_TICK + rng.gauss(-0.25*s*s, s/math.sqrt(2)))
         if arb_on and rng.random() >= arb_suppress: run_arb(meter)
+        T0_prev = T0
         d = abs(pool.tick() - math.log(S) / LN_TICK)
         st['stale_close'] += d; st['hist'].append(d)
 
@@ -329,7 +382,15 @@ def simulate(ann_vol, gamma, cap_bps=1e9, deadband=0.0, f=0.0005, V0=40_000_000.
         hon_from_arb=st['hon_from_arb'] / n, hon_from_hon=st['hon_from_hon'] / n,
         hon_from_atk=st['hon_from_atk'] / n,
         arb_caused_pct=(100.0 * st['hon_from_arb'] /
-                        max(st['hon_from_arb'] + st['hon_from_hon'] + st['hon_from_atk'], 1e-12)),
+                        max(st['hon_from_arb'] + st['hon_from_hon'] + st['hon_from_atk']
+                            + st['hon_from_carry'], 1e-12)),
+        carry_caused_pct=(100.0 * st['hon_from_carry'] /
+                          max(st['hon_from_arb'] + st['hon_from_hon'] + st['hon_from_atk']
+                              + st['hon_from_carry'], 1e-12)),
+        ref_lag=st['ref_lag'] / blocks,
+        xb_escape_pct=(100.0 * st['sw_xb_ok'] / st['sw_n']) if st['sw_n'] else float('nan'),
+        xb_keep_pct=(100.0 * st['sw_xb_prof'] / st['sw_gross']) if st['sw_gross'] > 0 else 0.0,
+        xb_fee_blk=st['sw_xb_fee'] / blocks,
         sw_escape_pct=(100.0 * st['sw_escape'] / st['sw_n']) if st['sw_n'] else float('nan'),
         sw_profit_kept=(100.0 * st['sw_netpos'] / st['sw_gross']) if st['sw_gross'] > 0 else 0.0,
         sw_n=st['sw_n'], sw_att=st['sw_att'],
@@ -352,6 +413,15 @@ def row(tag, r):
           f"{r['arb_caused_pct']:8.1f}%{r['sw_escape_pct']:7.1f}%"
           f"{r['sw_profit_kept']:8.1f}%{r['arb_deterred_pct']:8.1f}%"
           f"{r['arb_shortfall_pct']:9.1f}%{r['swb_rev_blk']:10.2f}")
+
+RCOLS = (f"{'policy':26s}{'ref lag':>9s}{'hon chg':>9s}{'hon bps':>9s}{'carry-c':>9s}"
+         f"{'arb shrt':>10s}{'IN esc':>8s}{'IN keep':>9s}{'XB esc':>8s}{'XB keep':>9s}")
+
+def rrow(tag, r):
+    print(f"{tag:26s}{r['ref_lag']:8.2f}t{r['hon_charged_pct']:8.1f}%{r['hon_vw_bps']:8.2f}b"
+          f"{r['carry_caused_pct']:8.1f}%{r['arb_shortfall_pct']:9.1f}%"
+          f"{r['sw_escape_pct']:7.1f}%{r['sw_profit_kept']:8.1f}%"
+          f"{r['xb_escape_pct']:7.1f}%{r['xb_keep_pct']:8.1f}%")
 
 def hdr(t):
     print(); print("=" * 118); print(t); print("=" * 118)
@@ -435,8 +505,13 @@ if __name__ == "__main__":
     w4 = simulate(0.60, 1.0, arb_on=True, market_moves=True, oracle_reference=True, **BASE)
     row("(c) mkt moves, arb ON (realistic)", w3)
     row("(d) as (c) + PERFECT reference*", w4)
-    print("  * (d) replaces T0 with the true market tick.  Not implementable on-chain; it is the")
-    print("    counterfactual that answers 'would a fresh reference fix the confusion matrix?'")
+    print("  * (d) replaces T0 with the true market tick.  Not implementable on-chain.  NOTE: an")
+    print("    earlier draft of this row left the extension budget empty at block open while")
+    print("    moving T0, so the standing displacement was not chargeable, and it reported that a")
+    print("    perfect reference HELPED.  With the budget seeded consistently it does the")
+    print("    opposite: anchoring to the true market taxes price discovery itself (arb shortfall")
+    print("    jumps to ~68%).  The intrinsic-vs-reference split is the 'arb-cau' column and NC2,")
+    print("    not this row.")
     print("  (a)->(b): pure staleness with no corrective arb.  If SWITCHBACK were reference-")
     print("            sensitive in the OZ sense, honest cost would explode here.")
     print("  (b)->(c): adds the corrective arb, whose FREE extension is hypothesis H1.")
@@ -670,3 +745,270 @@ if __name__ == "__main__":
     print(f"    poison extension {ext:.3f} ticks ; the $200k opposite swap moves "
           f"{abs(pp.tick()-before):.1f} ticks and is charged for {ch:.3f} of them (${fee:.2f}).")
     print(f"    {'PASS - poisoning authorises only its own extension.' if ch <= ext + 1e-9 else 'FAIL'}")
+
+    # ---------------------------------------------------------------- PART 10
+    hdr("PART 10 - REFERENCE CARRY.  Can T0 survive a block boundary without a new exemption?\n"
+        "  EMA policy: T0_new = T0_old + alpha*(tick_at_block_open - T0_old).\n"
+        "  alpha=1 is the shipped hook (T0 resets fully); alpha=0 is a fixed anchor that never\n"
+        "  moves.  The budget is seeded with the standing displacement at block open so the M2'\n"
+        "  identity still holds; at alpha=1 that seed is exactly 0, which is why the alpha=1 row\n"
+        "  reproduces every earlier number bit-for-bit (NEGATIVE CONTROL).\n"
+        "  'IN' = in-block sandwich, 'XB' = the PART 8 cross-block unwind, re-scored per policy.")
+    print(RCOLS)
+    ctrl = None
+    for a in (1.0, 0.75, 0.5, 0.25, 0.10, 0.02, 0.0):
+        r = simulate(0.60, 1.0, alpha=a, **BASE)
+        if a == 1.0: ctrl = r
+        rrow(f"EMA alpha={a:.2f}", r)
+    base_ref = simulate(0.60, 1.0, **BASE)
+    same = (abs(ctrl['hon_vw_bps'] - base_ref['hon_vw_bps']) < 1e-12 and
+            abs(ctrl['sw_escape_pct'] - base_ref['sw_escape_pct']) < 1e-12)
+    print(f"  NEGATIVE CONTROL (alpha=1 == shipped behaviour): "
+          f"{'PASS - exact' if same else 'FAIL - rig is wrong, stop'}")
+    if not same: raise SystemExit(1)
+
+    print()
+    print("  PART 10b - THE NEW EXEMPTION'S MIRROR: a TRENDING market.  A reference that does not")
+    print("  reset lags a trend, so the pool sits persistently on one side of T0 and ALL")
+    print("  counter-trend honest flow is charged against that standing lag.")
+    print(f"{'policy':26s}{'drift':>8s}{'ref lag':>10s}{'hon chg':>9s}{'hon bps':>9s}"
+          f"{'XB keep':>9s}")
+    for mu in (0.0, 2.0, 5.0):
+        for a in (1.0, 0.5, 0.25, 0.10, 0.0):
+            r = simulate(0.60, 1.0, alpha=a, mu_ticks=mu, **BASE)
+            print(f"{'EMA alpha=%.2f' % a:26s}{mu:6.1f}t/b{r['ref_lag']:9.2f}t"
+                  f"{r['hon_charged_pct']:8.1f}%{r['hon_vw_bps']:8.2f}b{r['xb_keep_pct']:8.1f}%")
+
+    # ---------------------------------------------------------------- PART 11
+    hdr("PART 11 - MULTI-BLOCK WINDOW.  T0 held fixed for N blocks, then reset.  Equivalent to\n"
+        "  carrying the unspent extension budget across N blocks (PART 9 M2' proved the budget\n"
+        "  IS the displacement from T0, so 'carry the budget' and 'carry T0' are the same thing).")
+    print(RCOLS)
+    for N in (1, 2, 5, 10, 30, 60):
+        rrow(f"reset every {N} blocks", simulate(0.60, 1.0, reset_every=N, **BASE))
+    print("  The XB columns above assume the attacker lands on a RESET BOUNDARY, which is what a")
+    print("  rational attacker does: block.number % N is public, so the boundary is scheduled, not")
+    print("  raced.  The attacker gives up nothing but frequency - roughly 1 opportunity in N.")
+    print(f"{'N':>5s}{'XB keep (at a boundary)':>26s}{'x 1/N frequency':>18s}"
+          f"{'in-block keep':>15s}{'better route':>15s}")
+    for N in (1, 2, 5, 10, 30, 60):
+        r = simulate(0.60, 1.0, reset_every=N, **BASE)
+        ev = r['xb_keep_pct'] / N
+        print(f"{N:5d}{r['xb_keep_pct']:25.1f}%{ev:17.2f}%{r['sw_profit_kept']:14.1f}%"
+              f"{('CROSS-BLOCK' if ev > r['sw_profit_kept'] else 'in-block'):>15s}")
+
+    # ---------------------------------------------------------------- PART 12
+    hdr("PART 12 - CAN THE ATTACKER STEER THE REFERENCE?  The 2.4c dust-poison attack aimed at\n"
+        "  T0 instead of at the budget.  Under an EMA, biasing T0 by DELTA ticks requires holding\n"
+        "  the tick DELTA/alpha ticks away at the moment the reference is sampled.")
+    print(f"{'alpha':>7s}{'push for +5t bias':>20s}{'LP fees on the push':>22s}"
+          f"{'+ SWITCHBACK on the unwind':>29s}{'total':>12s}")
+    poolz = Pool(40_000_000.0, 0.0005)
+    for a in (1.0, 0.5, 0.25, 0.10, 0.02):
+        push_ticks = 5.0 / a
+        pz = poolz.copy(); mz = Meter(pz.tick()); T0z = mz.T0
+        target = pz.tick() + push_ticks
+        lo, hi = 0.0, 30_000_000.0
+        for _ in range(70):
+            mid = (lo + hi) / 2
+            q = pz.copy(); q.swap_y_in(mid)
+            if q.tick() < target: lo = mid
+            else: hi = mid
+        dy = (lo + hi) / 2
+        q = pz.copy(); gx, fe1, _, _ = do_swap(q, mz, "yin", dy, 1.0, 1e9, "atk")
+        tclose = q.tick(); T0n = T0z + a * (tclose - T0z)
+        mN = Meter(T0n); d = tclose - T0n
+        if d > 1e-15: mN.up.append([d, 'carry'])
+        back, fe2, _, _ = do_swap(q, mN, "xin", gx, 1.0, 1e9, "atk")
+        lpfee = dy - back + fe1 - fe2 if False else (dy - back - fe2)
+        print(f"{a:7.2f}{push_ticks:19.1f}t{max(dy-back,0.0):21,.0f}${fe1+fe2:28,.0f}$"
+              f"{max(dy-back,0.0)+fe1+fe2:11,.0f}$")
+    print("  The steerer pushes at block close and unwinds at the top of the next block - i.e.")
+    print("  they use the same exemption we are trying to close.  Under alpha<1 that unwind is")
+    print("  itself charged, which is what makes steering expensive.  But note the cost scales")
+    print("  with 1/alpha, so a SMALL alpha makes steering expensive - and a")
+    print("  small alpha is exactly what PART 10b shows is unusable in a trend.  The two")
+    print("  requirements are opposed: alpha must be small to resist steering and to close the")
+    print("  cross-block route, and large to avoid taxing trend-following flow.")
+    print("  NOT SIMULATED: the steerer only PROFITS if they also capture the resulting fee as an")
+    print("  in-range LP (2.4d).  This rig does not model the fee's destination at all.")
+
+    # ---------------------------------------------------------------- PART 13
+    hdr("PART 13 - WHAT DOES alpha<1 COST?  A carried reference taxes more of the corrective arb\n"
+        "  (shortfall 26% -> 48% at alpha=0.5), so price discovery is more impaired.  PART 6b's\n"
+        "  method: sandwiches OFF, so there is no extraction to prevent and no sandwich fee\n"
+        "  revenue to lose.  Any movement is the reference policy alone.")
+    NOSW = {**BASE, 'sandwich_prob': 0.0}
+    print(f"{'policy':22s}{'ref lag':>10s}{'staleness':>12s}{'arb shrt':>10s}"
+          f"{'poolvsHODL':>12s}{'SWB rev':>10s}{'LP total':>10s}{'honest bill/blk':>18s}")
+    for a in (1.0, 0.75, 0.5, 0.25, 0.10):
+        r = simulate(0.60, 1.0, alpha=a, **NOSW)
+        ph = -r['lvr_blk']
+        bill = r['hon_vw_bps'] * BPS * (3.0 * 5_000 * math.exp(0.5))
+        print(f"{'EMA alpha=%.2f' % a:22s}{r['ref_lag']:9.2f}t{r['stale_open']:11.2f}t"
+              f"{r['arb_shortfall_pct']:9.1f}%{ph:12.2f}{r['swb_rev_blk']:10.2f}"
+              f"{ph + r['swb_rev_blk']:10.2f}{bill:18.2f}")
+    print("  Compare 'poolvsHODL' across rows: that is the LP cost of the impaired price")
+    print("  correction, with everything else held fixed.")
+    print()
+    print("  Steering economics at alpha=0.5, from the measured outputs above rather than assumed:")
+    print("  PART 10 gives d(honest bps)/d(ref lag) = (4.14-3.63)/(11.41-7.34) = 0.125 bps/tick.")
+    hon_notional = 3.0 * 5_000 * math.exp(0.5)
+    rev_per_tick_block = 0.125 * BPS * hon_notional
+    print(f"  Honest notional/block = ${hon_notional:,.0f}, so a 1-tick bias earns LPs "
+          f"${rev_per_tick_block:.2f}/block.")
+    print(f"  A 5-tick bias under alpha=0.5 decays as 5,2.5,1.25,... = 10 tick-blocks total")
+    print(f"  => total extra fee ${10*rev_per_tick_block:.2f}, against a measured steering cost of")
+    print(f"  $15 (PART 12).  The steerer also receives only their LP SHARE of that fee.")
+    print(f"  => steering is about {15/(10*rev_per_tick_block):.0f}x underwater at alpha=0.5.")
+    print("  REASONED FROM MEASURED OUTPUTS, NOT DIRECTLY SIMULATED: no steering agent was run,")
+    print("  and the fee's destination (2.4d) is not modelled anywhere in this rig.")
+
+    # ---------------------------------------------------------------- PART 14
+    hdr("PART 14 - THE OBVIOUS NEXT ATTACK: just WAIT.  Under an EMA the reference catches up\n"
+        "  geometrically, so an attacker who holds the position k blocks faces only (1-alpha)^k\n"
+        "  of the charge.  Does alpha=0.5 survive that?\n"
+        "  ATTACKER-FAVOURABLE BY CONSTRUCTION: this probe assumes NOBODY trades in the waiting\n"
+        "  blocks, so the displacement the attacker is sitting on is still there when they")
+    print("  unwind.  In reality the top-of-block corrective arb takes it at N+1.  Read these as")
+    print("  an UPPER BOUND on the attacker.")
+    print(f"{'alpha':>7s}{'k=1':>10s}{'k=2':>10s}{'k=3':>10s}{'k=5':>10s}{'k=10':>10s}"
+          f"{'in-block':>11s}")
+    rngw = random.Random(31337)
+    for a in (1.0, 0.75, 0.5, 0.25):
+        keeps = []
+        for k in (1, 2, 3, 5, 10):
+            gs = 0.0; tot = 0.0; inb = 0.0
+            for _ in range(1500):
+                pz = Pool(40_000_000.0, 0.0005); T0z = pz.tick(); mz = Meter(T0z)
+                for _ in range(rngw.randrange(0, 3)):
+                    amt = 5_000 * math.exp(rngw.gauss(0, 1.0))
+                    sd = "yin" if rngw.random() < 0.5 else "xin"
+                    do_swap(pz, mz, sd, amt if sd == "yin" else amt / pz.price(), 1.0, 1e9, "hon")
+                vy = 5_000 * math.exp(rngw.gauss(0, 1.0))
+                vs = "yin" if rngw.random() < 0.5 else "xin"
+                va = vy if vs == "yin" else vy / pz.price()
+                g, _ = best_sandwich(pz, mz, vs, va, 0.0, 1e9)
+                if g <= 0: continue
+                gs += g
+                pr, _ = best_sandwich_xb(pz, mz, T0z, vs, va, 1.0, 1e9, a, False, delay=k)
+                tot += max(pr, 0.0)
+                p1, _ = best_sandwich(pz, mz, vs, va, 1.0, 1e9)
+                inb += max(p1, 0.0)
+            keeps.append(100.0 * tot / max(gs, 1e-9))
+        print(f"{a:7.2f}" + "".join(f"{v:9.1f}%" for v in keeps) +
+              f"{100.0*inb/max(gs,1e-9):10.1f}%")
+    print("  Waiting DOES erode the fix - but the attacker cannot actually wait, because the")
+    print("  top-of-block corrective arb at N+1 takes the displacement they are holding.  That is")
+    print("  the 2.4a inventory-risk argument, and unlike at alpha=1 it is now TRUE: the wait is")
+    print("  measured in EMA half-lives, not in one block boundary.")
+    print()
+    print("  BLOCK TIME IS NOT A FREE PARAMETER.  The EMA decays per BLOCK, so alpha must be set")
+    print("  in WALL-CLOCK terms or Unichain's 200ms blocks shrink the protection 60x.")
+    print("  For a fixed wall-clock half-life the steady-state lag is INVARIANT to block time:")
+    print("    lag_sd ~ sigma_block / sqrt(2*alpha) ; sigma_block ~ 1/sqrt(B) ; alpha ~ 1/B")
+    print("    => lag_sd ~ constant.  Every tick number in PART 10 therefore carries over.")
+    for B, nm in ((1.0, "Ethereum 12s"), (60.0, "Unichain 200ms")):
+        print(f"    {nm:16s} alpha for a 12s half-life = {1 - 0.5**(1/B):.4f}")
+
+    # ---------------------------------------------------------------- PART 15
+    hdr("PART 15 - BLOCK TIME.  Everything above ran 12s blocks.  Unichain is 200ms.  The\n"
+        "  wall-clock-invariance argument in the REFERENCE-CARRY section is ANALYTIC; this is the\n"
+        "  test of it.\n"
+        "  RESCALING, stated because it is a judgement call and it drives the answer:\n"
+        "    sigma_block  -> annual/sqrt(seconds_per_year/spb)          [falls as 1/sqrt(B)]\n"
+        "    swaps/block  -> 3.0 * spb/12                               [flow is a WALL-CLOCK rate]\n"
+        "    drift/block  -> mu * spb/12                                [same reason]\n"
+        "    blocks run   -> 4000 * 12/spb                              [same wall-clock span]\n"
+        "    alpha        -> 1 - 0.5^(spb/12)                           [12s wall-clock half-life]\n"
+        "    TRADE SIZE   -> HELD CONSTANT PER SWAP.  This is the judgement call.  A $5,000 trade\n"
+        "      is a $5,000 trade whatever the block time, so RETAIL TICK IMPACT IS CONSTANT PER\n"
+        "      SWAP (5 ticks), NOT per block.  The alternative - holding impact constant per\n"
+        "      block - would make every Unichain swap 60x larger, which is not a market.\n"
+        "      If that choice is wrong, section 2's transfer is wrong; it is the one input here\n"
+        "      that is a modelling decision rather than a consequence.")
+
+    def cfg(spb, alpha=None, mu=0.0, **kw):
+        h = spb / 12.0
+        a = alpha if alpha is not None else (1 - 0.5 ** h)
+        base = dict(f=0.0005, V0=40_000_000.0, blocks=int(4000 / h),
+                    retail_per_block=3.0 * h, retail_med=5_000.0, retail_sd=1.0,
+                    sandwich_prob=0.35, spb=spb, alpha=a, mu_ticks=mu * h)
+        base.update(kw)
+        return base
+
+    print(f"\n  sigma_block: 12s = {sb_at(0.60,12.0)/BPS:6.3f} ticks , "
+          f"200ms = {sb_at(0.60,0.2)/BPS:6.3f} ticks  (ratio {sb_at(0.60,12.0)/sb_at(0.60,0.2):.2f}"
+          f" ~ sqrt(60)={math.sqrt(60):.2f})")
+    print(f"  alpha for a 12s half-life: 12s -> {1-0.5**1:.4f} , 200ms -> {1-0.5**(0.2/12):.6f}")
+
+    print()
+    print("  15a - NEGATIVE CONTROL: the 12s configuration must reproduce the existing numbers.")
+    print(RCOLS)
+    c12 = simulate(0.60, 1.0, **cfg(12.0))
+    ref = simulate(0.60, 1.0, alpha=0.5, **BASE)
+    rrow("12s, alpha=0.50 (via cfg)", c12)
+    rrow("12s, alpha=0.50 (PART 10)", ref)
+    okc = (abs(c12['hon_vw_bps'] - ref['hon_vw_bps']) < 1e-12 and
+           abs(c12['xb_keep_pct'] - ref['xb_keep_pct']) < 1e-12)
+    print(f"  {'PASS - exact' if okc else 'FAIL - rescaling harness disagrees with PART 10, stop'}")
+    if not okc: raise SystemExit(1)
+
+    print()
+    print("  15b - THE INVARIANCE TEST and the 200ms confusion matrix.")
+    print(RCOLS)
+    rows = []
+    for spb, nm in ((12.0, "12s   "), (2.0, "2s    "), (0.2, "200ms ")):
+        r1 = simulate(0.60, 1.0, **cfg(spb, alpha=1.0))
+        rH = simulate(0.60, 1.0, **cfg(spb))
+        rrow(f"{nm} alpha=1 (shipped)", r1)
+        rrow(f"{nm} alpha=12s halflife", rH)
+        rows.append((nm, r1, rH))
+    print()
+    print(f"  {'chain':10s}{'alpha':>12s}{'ref lag (ticks)':>18s}{'invariant?':>14s}")
+    base_lag = rows[0][2]['ref_lag']
+    for nm, r1, rH in rows:
+        h = None
+        print(f"  {nm:10s}{(1-0.5**( (12.0 if nm.startswith('12') else (2.0 if nm.startswith('2s') else 0.2))/12.0)):12.6f}"
+              f"{rH['ref_lag']:18.2f}{rH['ref_lag']/base_lag:13.2f}x")
+
+    print()
+    print("  15c - THE 'JUST WAIT' TABLE AT 200ms.  k is in BLOCKS; 60 blocks = 12s of wall clock.")
+    rngb = random.Random(20260826)
+    for spb, ks in ((12.0, (1, 2, 3, 5, 10)), (0.2, (1, 30, 60, 120, 180, 300))):
+        h = spb / 12.0
+        a = 1 - 0.5 ** h
+        print(f"    {'12s blocks' if spb==12 else '200ms blocks'}  alpha={a:.6f}   "
+              f"(k in blocks; wall clock = k*{spb}s)")
+        print("      " + "".join(f"{'k=%d' % k:>12s}" for k in ks) + f"{'in-block':>12s}")
+        gs = 0.0; tot = {k: 0.0 for k in ks}; inb = 0.0
+        for _ in range(1200):
+            pz = Pool(40_000_000.0, 0.0005); T0z = pz.tick(); mz = Meter(T0z)
+            for _ in range(rngb.randrange(0, 3)):
+                amt = 5_000 * math.exp(rngb.gauss(0, 1.0))
+                sd = "yin" if rngb.random() < 0.5 else "xin"
+                do_swap(pz, mz, sd, amt if sd == "yin" else amt / pz.price(), 1.0, 1e9, "hon")
+            vy = 5_000 * math.exp(rngb.gauss(0, 1.0))
+            vs = "yin" if rngb.random() < 0.5 else "xin"
+            va = vy if vs == "yin" else vy / pz.price()
+            g, _ = best_sandwich(pz, mz, vs, va, 0.0, 1e9)
+            if g <= 0: continue
+            gs += g
+            p1, _ = best_sandwich(pz, mz, vs, va, 1.0, 1e9); inb += max(p1, 0.0)
+            for k in ks:
+                pr, _ = best_sandwich_xb(pz, mz, T0z, vs, va, 1.0, 1e9, a, False, delay=k)
+                tot[k] += max(pr, 0.0)
+        print("      " + "".join(f"{100.0*tot[k]/max(gs,1e-9):11.1f}%" for k in ks) +
+              f"{100.0*inb/max(gs,1e-9):11.1f}%")
+    print("      wall clock to reach the same (1-alpha)^k is IDENTICAL by construction; what")
+    print("      changes is that the attacker must survive 60x more blocks of other people's flow")
+    print("      and 60x more top-of-block arb opportunities to get there.")
+
+    print()
+    print("  15d - GAS IS NOT MODELLED ANYWHERE.  At 200ms the per-block price move is "
+          f"{sb_at(0.60,0.2)/BPS:.2f} ticks,")
+    print("  so a corrective arb every block may not clear gas.  Emulate a thinner arb population:")
+    print(RCOLS)
+    for sup in (0.0, 0.5, 0.9, 0.98):
+        rrow(f"200ms, {sup*100:.0f}% arbs priced out",
+             simulate(0.60, 1.0, arb_suppress=sup, **cfg(0.2)))

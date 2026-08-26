@@ -47,9 +47,14 @@ scenario                          staleT0  hon chg  hon bps  arb-cau  sw esc  sw
 (a) frozen mkt, no arb            275.26t    34.1%    2.54b     0.0%   30.8%     1.9%     0.0%      0.0%      7.72
 (b) mkt moves, NO arb (max stale)  290.77t    34.6%    2.73b     0.0%   31.7%     1.7%     0.0%      0.0%      8.11
 (c) mkt moves, arb ON (realistic)   11.56t    44.6%    3.79b    38.0%   24.6%     1.6%     0.0%     26.3%     15.43
-(d) as (c) + PERFECT reference*    12.51t    30.5%    2.13b     0.4%   29.4%     1.8%     0.0%     32.2%     11.34
-  * (d) replaces T0 with the true market tick.  Not implementable on-chain; it is the
-    counterfactual that answers 'would a fresh reference fix the confusion matrix?'
+(d) as (c) + PERFECT reference*    15.77t    48.6%    4.39b     0.0%   21.3%     1.4%     0.0%     67.5%     22.06
+  * (d) replaces T0 with the true market tick.  Not implementable on-chain.  NOTE: an
+    earlier draft of this row left the extension budget empty at block open while
+    moving T0, so the standing displacement was not chargeable, and it reported that a
+    perfect reference HELPED.  With the budget seeded consistently it does the
+    opposite: anchoring to the true market taxes price discovery itself (arb shortfall
+    jumps to ~68%).  The intrinsic-vs-reference split is the 'arb-cau' column and NC2,
+    not this row.
   (a)->(b): pure staleness with no corrective arb.  If SWITCHBACK were reference-
             sensitive in the OZ sense, honest cost would explode here.
   (b)->(c): adds the corrective arb, whose FREE extension is hypothesis H1.
@@ -218,3 +223,198 @@ M2' closed form, NO watermarks     11.56t    44.6%    3.79b     0.0%   24.6%    
   M3 - the 2.4c dust-poison test, run directly rather than inferred:
     poison extension 0.250 ticks ; the $200k opposite swap moves 199.0 ticks and is charged for 0.250 of them ($4.95).
     PASS - poisoning authorises only its own extension.
+
+======================================================================================================================
+PART 10 - REFERENCE CARRY.  Can T0 survive a block boundary without a new exemption?
+  EMA policy: T0_new = T0_old + alpha*(tick_at_block_open - T0_old).
+  alpha=1 is the shipped hook (T0 resets fully); alpha=0 is a fixed anchor that never
+  moves.  The budget is seeded with the standing displacement at block open so the M2'
+  identity still holds; at alpha=1 that seed is exactly 0, which is why the alpha=1 row
+  reproduces every earlier number bit-for-bit (NEGATIVE CONTROL).
+  'IN' = in-block sandwich, 'XB' = the PART 8 cross-block unwind, re-scored per policy.
+======================================================================================================================
+policy                      ref lag  hon chg  hon bps  carry-c  arb shrt  IN esc  IN keep  XB esc  XB keep
+EMA alpha=1.00                0.00t    44.6%    3.79b     0.0%     26.3%   24.6%     1.6%   83.5%    87.3%
+EMA alpha=0.75                3.80t    49.4%    3.50b    14.6%     40.7%   24.3%     1.6%   36.6%     3.2%
+EMA alpha=0.50                7.34t    49.0%    3.63b    30.8%     47.9%   24.0%     1.6%   24.0%     1.6%
+EMA alpha=0.25               11.41t    49.2%    4.14b    43.4%     53.7%   21.9%     1.6%   21.9%     1.6%
+EMA alpha=0.10               15.20t    49.2%    4.64b    51.5%     56.8%   21.3%     1.3%   21.3%     1.3%
+EMA alpha=0.02               22.11t    49.2%    5.61b    59.7%     55.8%   21.3%     1.0%   21.3%     1.0%
+EMA alpha=0.00              129.66t    49.7%   10.05b    73.1%     46.8%   28.5%     1.8%   28.5%     1.8%
+  NEGATIVE CONTROL (alpha=1 == shipped behaviour): PASS - exact
+
+  PART 10b - THE NEW EXEMPTION'S MIRROR: a TRENDING market.  A reference that does not
+  reset lags a trend, so the pool sits persistently on one side of T0 and ALL
+  counter-trend honest flow is charged against that standing lag.
+policy                       drift   ref lag  hon chg  hon bps  XB keep
+EMA alpha=1.00               0.0t/b     0.00t    44.6%    3.79b    87.3%
+EMA alpha=0.50               0.0t/b     7.34t    49.0%    3.63b     1.6%
+EMA alpha=0.25               0.0t/b    11.41t    49.2%    4.14b     1.6%
+EMA alpha=0.10               0.0t/b    15.20t    49.2%    4.64b     1.3%
+EMA alpha=0.00               0.0t/b   129.66t    49.7%   10.05b     1.8%
+EMA alpha=1.00               2.0t/b     0.00t    44.3%    3.16b    87.8%
+EMA alpha=0.50               2.0t/b     6.40t    49.3%    3.24b     1.5%
+EMA alpha=0.25               2.0t/b    11.06t    49.4%    3.90b     1.5%
+EMA alpha=0.10               2.0t/b    20.67t    49.3%    5.51b     1.2%
+EMA alpha=0.00               2.0t/b  4125.93t    49.7%    9.65b     1.9%
+EMA alpha=1.00               5.0t/b     0.00t    44.2%    2.57b    89.6%
+EMA alpha=0.50               5.0t/b     6.66t    49.9%    3.16b     1.4%
+EMA alpha=0.25               5.0t/b    15.96t    49.7%    4.50b     1.1%
+EMA alpha=0.10               5.0t/b    45.02t    49.8%    6.52b     1.2%
+EMA alpha=0.00               5.0t/b 10120.68t    49.7%    7.40b     1.7%
+
+======================================================================================================================
+PART 11 - MULTI-BLOCK WINDOW.  T0 held fixed for N blocks, then reset.  Equivalent to
+  carrying the unspent extension budget across N blocks (PART 9 M2' proved the budget
+  IS the displacement from T0, so 'carry the budget' and 'carry T0' are the same thing).
+======================================================================================================================
+policy                      ref lag  hon chg  hon bps  carry-c  arb shrt  IN esc  IN keep  XB esc  XB keep
+reset every 1 blocks          0.00t    44.6%    3.79b     0.0%     26.3%   24.6%     1.6%   83.5%    87.3%
+reset every 2 blocks          9.09t    47.0%    4.43b    29.1%     38.4%   26.1%     1.4%   75.4%    82.0%
+reset every 5 blocks         17.63t    48.5%    5.25b    48.0%     47.4%   24.3%     1.5%   72.1%    81.0%
+reset every 10 blocks        22.27t    48.6%    5.55b    54.7%     51.9%   21.9%     1.4%   71.2%    78.1%
+reset every 30 blocks        26.93t    49.7%    6.16b    60.2%     51.8%   21.9%     1.0%   68.8%    69.6%
+reset every 60 blocks        31.49t    49.0%    6.82b    62.6%     51.3%   22.8%     1.1%   67.6%    69.3%
+  The XB columns above assume the attacker lands on a RESET BOUNDARY, which is what a
+  rational attacker does: block.number % N is public, so the boundary is scheduled, not
+  raced.  The attacker gives up nothing but frequency - roughly 1 opportunity in N.
+    N   XB keep (at a boundary)   x 1/N frequency  in-block keep   better route
+    1                     87.3%            87.27%           1.6%    CROSS-BLOCK
+    2                     82.0%            41.02%           1.4%    CROSS-BLOCK
+    5                     81.0%            16.20%           1.5%    CROSS-BLOCK
+   10                     78.1%             7.81%           1.4%    CROSS-BLOCK
+   30                     69.6%             2.32%           1.0%    CROSS-BLOCK
+   60                     69.3%             1.15%           1.1%    CROSS-BLOCK
+
+======================================================================================================================
+PART 12 - CAN THE ATTACKER STEER THE REFERENCE?  The 2.4c dust-poison attack aimed at
+  T0 instead of at the budget.  Under an EMA, biasing T0 by DELTA ticks requires holding
+  the tick DELTA/alpha ticks away at the moment the reference is sampled.
+======================================================================================================================
+  alpha   push for +5t bias   LP fees on the push   + SWITCHBACK on the unwind       total
+   1.00                5.0t                    5$                           0$          5$
+   0.50               10.0t                   10$                           5$         15$
+   0.25               20.0t                   20$                          30$         50$
+   0.10               50.0t                   50$                         225$        275$
+   0.02              250.0t                  248$                       6,159$      6,407$
+  The steerer pushes at block close and unwinds at the top of the next block - i.e.
+  they use the same exemption we are trying to close.  Under alpha<1 that unwind is
+  itself charged, which is what makes steering expensive.  But note the cost scales
+  with 1/alpha, so a SMALL alpha makes steering expensive - and a
+  small alpha is exactly what PART 10b shows is unusable in a trend.  The two
+  requirements are opposed: alpha must be small to resist steering and to close the
+  cross-block route, and large to avoid taxing trend-following flow.
+  NOT SIMULATED: the steerer only PROFITS if they also capture the resulting fee as an
+  in-range LP (2.4d).  This rig does not model the fee's destination at all.
+
+======================================================================================================================
+PART 13 - WHAT DOES alpha<1 COST?  A carried reference taxes more of the corrective arb
+  (shortfall 26% -> 48% at alpha=0.5), so price discovery is more impaired.  PART 6b's
+  method: sandwiches OFF, so there is no extraction to prevent and no sandwich fee
+  revenue to lose.  Any movement is the reference policy alone.
+======================================================================================================================
+policy                   ref lag   staleness  arb shrt  poolvsHODL   SWB rev  LP total   honest bill/blk
+EMA alpha=1.00             0.00t      11.31t     27.2%       15.59     13.07     28.65              8.75
+EMA alpha=0.75             3.67t      11.75t     41.3%       14.91     16.19     31.10              8.22
+EMA alpha=0.50             7.05t      12.61t     48.5%       14.47     17.36     31.82              9.16
+EMA alpha=0.25            10.91t      13.55t     54.5%       14.20     19.04     33.24             10.70
+EMA alpha=0.10            14.29t      14.06t     57.5%       14.07     20.38     34.44             11.91
+  Compare 'poolvsHODL' across rows: that is the LP cost of the impaired price
+  correction, with everything else held fixed.
+
+  Steering economics at alpha=0.5, from the measured outputs above rather than assumed:
+  PART 10 gives d(honest bps)/d(ref lag) = (4.14-3.63)/(11.41-7.34) = 0.125 bps/tick.
+  Honest notional/block = $24,731, so a 1-tick bias earns LPs $0.31/block.
+  A 5-tick bias under alpha=0.5 decays as 5,2.5,1.25,... = 10 tick-blocks total
+  => total extra fee $3.09, against a measured steering cost of
+  $15 (PART 12).  The steerer also receives only their LP SHARE of that fee.
+  => steering is about 5x underwater at alpha=0.5.
+  REASONED FROM MEASURED OUTPUTS, NOT DIRECTLY SIMULATED: no steering agent was run,
+  and the fee's destination (2.4d) is not modelled anywhere in this rig.
+
+======================================================================================================================
+PART 14 - THE OBVIOUS NEXT ATTACK: just WAIT.  Under an EMA the reference catches up
+  geometrically, so an attacker who holds the position k blocks faces only (1-alpha)^k
+  of the charge.  Does alpha=0.5 survive that?
+  ATTACKER-FAVOURABLE BY CONSTRUCTION: this probe assumes NOBODY trades in the waiting
+  blocks, so the displacement the attacker is sitting on is still there when they
+======================================================================================================================
+  unwind.  In reality the top-of-block corrective arb takes it at N+1.  Read these as
+  an UPPER BOUND on the attacker.
+  alpha       k=1       k=2       k=3       k=5      k=10   in-block
+   1.00     90.7%     91.7%     92.4%     87.8%     91.4%       1.9%
+   0.75      3.2%     25.7%     73.4%     88.7%     84.3%       1.3%
+   0.50      1.5%      5.4%      9.8%     52.9%     91.2%       1.8%
+   0.25      1.7%      1.4%      1.5%      3.2%     28.6%       1.7%
+  Waiting DOES erode the fix - but the attacker cannot actually wait, because the
+  top-of-block corrective arb at N+1 takes the displacement they are holding.  That is
+  the 2.4a inventory-risk argument, and unlike at alpha=1 it is now TRUE: the wait is
+  measured in EMA half-lives, not in one block boundary.
+
+  BLOCK TIME IS NOT A FREE PARAMETER.  The EMA decays per BLOCK, so alpha must be set
+  in WALL-CLOCK terms or Unichain's 200ms blocks shrink the protection 60x.
+  For a fixed wall-clock half-life the steady-state lag is INVARIANT to block time:
+    lag_sd ~ sigma_block / sqrt(2*alpha) ; sigma_block ~ 1/sqrt(B) ; alpha ~ 1/B
+    => lag_sd ~ constant.  Every tick number in PART 10 therefore carries over.
+    Ethereum 12s     alpha for a 12s half-life = 0.5000
+    Unichain 200ms   alpha for a 12s half-life = 0.0115
+
+======================================================================================================================
+PART 15 - BLOCK TIME.  Everything above ran 12s blocks.  Unichain is 200ms.  The
+  wall-clock-invariance argument in the REFERENCE-CARRY section is ANALYTIC; this is the
+  test of it.
+  RESCALING, stated because it is a judgement call and it drives the answer:
+    sigma_block  -> annual/sqrt(seconds_per_year/spb)          [falls as 1/sqrt(B)]
+    swaps/block  -> 3.0 * spb/12                               [flow is a WALL-CLOCK rate]
+    drift/block  -> mu * spb/12                                [same reason]
+    blocks run   -> 4000 * 12/spb                              [same wall-clock span]
+    alpha        -> 1 - 0.5^(spb/12)                           [12s wall-clock half-life]
+    TRADE SIZE   -> HELD CONSTANT PER SWAP.  This is the judgement call.  A $5,000 trade
+      is a $5,000 trade whatever the block time, so RETAIL TICK IMPACT IS CONSTANT PER
+      SWAP (5 ticks), NOT per block.  The alternative - holding impact constant per
+      block - would make every Unichain swap 60x larger, which is not a market.
+      If that choice is wrong, section 2's transfer is wrong; it is the one input here
+      that is a modelling decision rather than a consequence.
+======================================================================================================================
+
+  sigma_block: 12s =  3.701 ticks , 200ms =  0.478 ticks  (ratio 7.75 ~ sqrt(60)=7.75)
+  alpha for a 12s half-life: 12s -> 0.5000 , 200ms -> 0.011486
+
+  15a - NEGATIVE CONTROL: the 12s configuration must reproduce the existing numbers.
+policy                      ref lag  hon chg  hon bps  carry-c  arb shrt  IN esc  IN keep  XB esc  XB keep
+12s, alpha=0.50 (via cfg)     7.34t    49.0%    3.63b    30.8%     47.9%   24.0%     1.6%   24.0%     1.6%
+12s, alpha=0.50 (PART 10)     7.34t    49.0%    3.63b    30.8%     47.9%   24.0%     1.6%   24.0%     1.6%
+  PASS - exact
+
+  15b - THE INVARIANCE TEST and the 200ms confusion matrix.
+policy                      ref lag  hon chg  hon bps  carry-c  arb shrt  IN esc  IN keep  XB esc  XB keep
+12s    alpha=1 (shipped)      0.00t    44.6%    3.79b     0.0%     26.3%   24.6%     1.6%   83.5%    87.3%
+12s    alpha=12s halflife     7.34t    49.0%    3.63b    30.8%     47.9%   24.0%     1.6%   24.0%     1.6%
+2s     alpha=1 (shipped)      0.00t    23.8%    1.15b     0.0%     20.0%   32.0%     1.9%   91.6%    96.8%
+2s     alpha=12s halflife     5.42t    49.7%    2.35b    75.7%     57.1%   24.3%     1.7%   24.3%     1.7%
+200ms  alpha=1 (shipped)      0.00t     5.8%    0.14b     0.0%      7.9%   31.9%     1.7%   99.4%    99.4%
+200ms  alpha=12s halflife     3.59t    48.5%    1.51b    96.6%     59.2%   25.6%     1.5%   25.6%     1.5%
+
+  chain            alpha   ref lag (ticks)    invariant?
+  12s           0.500000              7.34         1.00x
+  2s            0.109101              5.42         0.74x
+  200ms         0.011486              3.59         0.49x
+
+  15c - THE 'JUST WAIT' TABLE AT 200ms.  k is in BLOCKS; 60 blocks = 12s of wall clock.
+    12s blocks  alpha=0.500000   (k in blocks; wall clock = k*12.0s)
+               k=1         k=2         k=3         k=5        k=10    in-block
+              1.4%        2.8%        9.0%       44.8%       84.8%        1.4%
+    200ms blocks  alpha=0.011486   (k in blocks; wall clock = k*0.2s)
+               k=1        k=30        k=60       k=120       k=180       k=300    in-block
+              1.8%        1.8%        1.8%        3.6%       11.0%       51.2%        1.8%
+      wall clock to reach the same (1-alpha)^k is IDENTICAL by construction; what
+      changes is that the attacker must survive 60x more blocks of other people's flow
+      and 60x more top-of-block arb opportunities to get there.
+
+  15d - GAS IS NOT MODELLED ANYWHERE.  At 200ms the per-block price move is 0.48 ticks,
+  so a corrective arb every block may not clear gas.  Emulate a thinner arb population:
+policy                      ref lag  hon chg  hon bps  carry-c  arb shrt  IN esc  IN keep  XB esc  XB keep
+200ms, 0% arbs priced out     3.59t    48.5%    1.51b    96.6%     59.2%   25.6%     1.5%   25.6%     1.5%
+200ms, 50% arbs priced out    4.01t    48.7%    1.62b    96.7%     59.0%   25.6%     1.5%   25.6%     1.5%
+200ms, 90% arbs priced out    6.27t    48.9%    2.29b    97.5%     55.8%   23.9%     1.4%   23.9%     1.4%
+200ms, 98% arbs priced out   10.93t    48.9%    3.55b    98.4%     47.7%   22.2%     1.3%   22.2%     1.3%

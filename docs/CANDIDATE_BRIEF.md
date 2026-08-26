@@ -212,7 +212,51 @@ anchors its own reference.** Simulated: suppressing 95% of arbitrage raises stal
 **converges fast** (staleness saturates ~14 ticks even at a 16× fee slope) and costs LPs **−1.4%**
 pool-vs-HODL. That risk is closed.
 
-### Viability: **MEDIUM — downgraded. One structural hole, no fix yet in hand.** ~4 weeks. Router compatibility is proven by
+### ✅ THE CROSS-BLOCK HOLE IS FIXED — one parameter, ~free (2026-08-26, same seeded rig, negative control asserted in-script)
+
+Replace the block-open **reset** with an **EMA carry**: `T0_new = T0_old + α·(tick_at_open − T0_old)`.
+The unwind at N+1 then starts `(1−α)·displacement` away from `T0`, so walking it back **is** a
+retracement and is charged. **Still one storage slot.**
+
+| | shipped (α=1) | fixed (α=0.5) |
+|---|---|---|
+| **cross-block unwind keeps** | **87.3%** | **1.6%** — identical to in-block, *no advantage at all* |
+| in-block sandwich keeps | 1.6% | 1.6% |
+| honest flow | 44.6% charged, 3.79 bps | 49.0% charged, **3.63 bps** (slightly cheaper) |
+| honest flow in a 5 tick/block trend | 2.57 bps | 3.16 bps |
+| reference steering (+5 ticks) | $5 | $15, ≈**5× underwater** |
+| escape by waiting | one block boundary — **200 ms on Unichain** | ~3–5 half-lives (~30–60 s), contested by every arb bot |
+
+**⚠ α must be specified as a WALL-CLOCK half-life, not per-block.** For a 12-second half-life:
+**α = 0.5 on Ethereum, α = 0.0115 on Unichain.** Get this wrong on a 200 ms chain and the EMA is 60×
+too weak.
+
+**The parameter has an interior optimum** — α=0 ("never reset") is *not* the answer: 10.05 bps and a
+130-tick lag. "Carry it further" is wrong.
+
+**The strongest property the mechanism has, found here and previously missed:** the charge on any swap
+is `min(its own tick impact, the standing displacement)`. **A swap can only be charged for distance it
+actually walks, so reference staleness cannot produce an unbounded bill** — at a 5-tick median retail
+impact, retail never pays more than ~5 bps *however stale `T0` is*. The α=0 row shows a 10,120-tick lag
+still costing only 7.40 bps. The brief's fear — "a fix that closes a 1.9% attack by taxing
+trend-following retail 40 bps is not a fix" — **does not happen, for structural reasons.**
+
+**The multi-block-window variant is DEAD and must not be revisited.** A window never closes the route,
+it *rations* it — and `block.number % N` is public, so the reset is **not raced, it is diarised**. The
+attacker picks a victim in the last block of a window and unwinds in the first block of the next,
+keeping 69–87% of gross every time, out to N≈60 blocks. **That is the Hardcap shape in its purest
+form: a periodic, publicly-scheduled amnesty.**
+
+**The cost of the fix, to disclose on camera:** taxing the price-correcting arb harder makes it
+under-correct (shortfall 27% → 48%), costing LPs **−7.2% of P&L**. It buys closing a route worth 87%
+of gross to an attacker. **Present it as a trade, not a free lunch.**
+
+**⚠ THE LOAD-BEARING UNSIMULATED CLAIM:** the wall-clock invariance argument is *analytic*. The rig
+runs 12-second blocks only — **nothing was simulated at 200 ms.** If the lag is not invariant to block
+time, α on Unichain is not 0.0115 and the table above does not transfer. **Re-run the α sweep at
+Unichain block parameters before building. It is one constant.**
+
+### Viability: **HIGH again — the hole is closed, at a disclosed cost.** ~4 weeks. ~4 weeks. Router compatibility is proven by
 execution — still the only candidate with that box ticked. Against that: one known correctness problem
 with a known fix (the beneficiary/JIT issue), and one **unproven reflexivity hypothesis** (does the fee
 still separate extraction from honest flow when the block-open reference is stale?). Originality is a
