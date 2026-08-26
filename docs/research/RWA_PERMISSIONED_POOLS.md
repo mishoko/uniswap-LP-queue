@@ -23,39 +23,78 @@ session. Anything not verified is marked **UNVERIFIED**; anything reasoned is ma
 | `api.github.com/repos/Uniswap/v4-hooks-public/commits?path=...` | Commit dates |
 | `https://ethereum-rpc.publicnode.com` (`eth_getCode`) | **6,909 bytes live** at the mainnet hook address |
 | `docs/research/data/hook_directory_662.json` (local) | Saturation counts |
+| `https://raw.githubusercontent.com/Uniswap/hooklist/main/hooklist.json` | 594 registered hooks; DualPool live entry |
+| `eth_getLogs` on hook + factory, w/ PoolManager positive control (`eth.drpc.org`, `ethereum-rpc.publicnode.com`) | **Zero events ⇒ zero adapters ever created** |
+| `blog.uniswap.org/unlocking-defi-liquidity-for-buidl` | 2026-02-11 UniswapX/BUIDL — the conflation trap |
+| `/llms.mdx/docs/trading/swapping-api/swapping-permissioned-pools` | Swap routing |
+| `docs/research/HACKATHON_CONTEXT.md` (local) | RfH + sponsor asks |
+| **`api.fxtwitter.com/UniswapBuilders/status/2092330129766625410`** | **THE POST + full article text — the only channel that defeats X's block** |
+| `api.vxtwitter.com/...` same | Corroborated title/date/preview independently |
 
 ### Failed / blocked
 | URL | Result |
 |---|---|
-| `https://x.com/UniswapBuilders/status/20923301297666254` | **HTTP 402** (WebFetch) |
+| `https://x.com/UniswapBuilders/status/20923301297666254` | **HTTP 402** — and the ID was truncated (17 digits) |
 | `https://r.jina.ai/...` same | Cloudflare "Just a moment" JS challenge |
 | `https://xcancel.com/...` | **Service shut down** — cease-and-desist from X Corp, 2026-08-24 |
 | `https://nitter.net/...`, `nitter.poast.org` | Offline / empty |
+| `http://archive.today/newest/https://x.com/...` | **"No results"** — genuinely queried, no snapshot exists |
+| `http://archive.org/wayback/available?url=x.com/...` | `{"archived_snapshots": {}}` — no snapshot |
+| `https://web.archive.org/web/2026/...` | HTTP 429 rate-limited |
 | `api.github.com/search/code` | 401, requires auth; `gh` CLI not installed |
 | `https://sourcify.dev/server/files/any/1/0x499a...` | Not found |
+| `.../permissioned-pools/swapping` and `/swapping-through-permissioned-pools` | HTTP 404 — guessed slugs, page not located |
 
 ---
 
-## TASK 1 — the X post: **NOT READABLE. Contents not established.**
+## TASK 1 — the X post: **READ IN FULL** (corrected URL, 2nd pass)
 
-`https://x.com/UniswapBuilders/status/20923301297666254` could not be read through any channel.
+`https://x.com/UniswapBuilders/status/2092330129766625410` — the original brief's ID was truncated
+to 17 digits. **Retrieved via `api.fxtwitter.com` / `api.vxtwitter.com`**, which return the tweet as
+JSON and bypass the 402/Cloudflare wall. WebFetch, r.jina.ai, nitter, xcancel, archive.today and
+Wayback all still failed on the corrected URL too — **fxtwitter is the channel that works; record it.**
 
-**The URL is almost certainly malformed.** The ID `20923301297666254` is **17 digits**. X snowflake
-IDs for posts in 2026 are **19 digits**. A 17-digit ID corresponds to roughly 2010 — before X used
-snowflake IDs at all, and years before `@UniswapBuilders` existed. It is truncated or mistyped.
+- **Posted 2026-08-25 19:15:51 UTC** by `@UniswapBuilders` ("Uniswap Developers", 2,326 followers).
+  **Owner's date recollection was exactly right.**
+- The tweet body is only a link to an **X long-form article**, id `2092327952029802496`, titled
+  **"How Permissioned Pools Work on Uniswap v4"**. Full text recovered from the article `content.blocks`.
+- Engagement: **10,275 views, 139 likes, 21 RTs, 16 replies.** Modest — an explainer, ~a month after
+  the 2026-07-23 launch. **It is not a new announcement and there is no new primitive in it.**
 
-**I did not guess its contents.** Instead I found the underlying announcement independently, and it
-is real. But note the date mismatch, and treat it as a live discrepancy:
+### What it actually says — and it is an *explainer of the July launch*, nothing more
 
-- The owner recalls the post as **~2026-08-25**.
-- The Uniswap announcement is dated **2026-07-23** — about a month earlier.
+It confirms, in Uniswap's own words, every item I had already verified from source:
+- *"the permissioned asset never enters the pool… the pool trades against a virtual representation"*
+- *"only the PoolManager is allowed to hold these virtual tokens"* (= the `assert` in `_update`)
+- **"The two permissions are separate flags. A wallet cleared to swap isn't automatically cleared to
+  LP."** — **the owner was right about `SWAP_ALLOWED` / `LIQUIDITY_ALLOWED`.**
+- Pluggable checker, standard-agnostic: *"Securitize's DS Protocol, Tokeny's ERC3643, or a custom
+  registry… The pool never needs to know how the list is built. It only needs the verdict."*
+- `unwindPosition` force-close; non-transferable LP NFTs; issuer power bounded to their own asset.
+- *"live on Ethereum mainnet and Sepolia today"*; Superstate, Securitize, Dowgo *"already building"*.
 
-**INFERRED:** the ~08-25 post is most likely a *re-promotion* of the July launch, or a builder-facing
-follow-up (possibly hackathon-facing). That is consistent with `Uniswap/hooklist` being pushed
-2026-08-25. **UNVERIFIED** — I could not read the post, so the possibility that it announced
-something *additional* on 08-25 remains open and is the one real gap in this report.
+### ⚠ THE PARAGRAPH THAT MATTERS MOST TO US
 
----
+Uniswap's stated *motivating problem* is *our* ERC-6909 finding, published by them:
+
+> *"a pool doesn't move tokens the way wallets do. In Uniswap v4, all balances live in one central
+> contract, the PoolManager. Ownership moves around inside it as **virtual ERC6909 balances**, and LP
+> positions are NFTs. **None of that triggers the token's transfer checks**, so a permissioned token
+> could pass through a wallet that was never approved, and the pool would have no way to know."*
+
+Two consequences, both material:
+
+1. **This is §5.16 stated by Uniswap Labs.** And note where they put the recipient check — not in the
+   hook: *"The Permissions Adapter automatically converts them back… sending the physical, compliant
+   tokens to the recipient; **only after verifying their compliance status**."* **The recipient
+   binding lives at the adapter/token layer. The hook only gates the swapper.** Exactly as §5.16
+   predicts, from the vendor's own explainer.
+2. **⚠ This partially pre-empts our planned ERC-6909 laundering publication.** §8 records that "1 of
+   662 projects has ever noticed it" and recommends publishing. **Uniswap Labs has now described the
+   ERC-6909-bypasses-transfer-hooks mechanism in a public post read 10k times.** Our finding is still
+   distinct — ours is *delta laundering between addresses inside one unlock to defeat measurement*,
+   theirs is *6909 balances bypass a token's own transfer restrictions* — but **the novelty claim must
+   be narrowed and this post cited, or a reviewer will call it known art.**
 
 ## TASK 2 — what actually exists
 
@@ -274,8 +313,8 @@ Honest status qualifiers that still stand:
 - **No deployment address in the README's Deployments section** (WETH/WstETH have them) — it is
   registered in `hooklist` but not yet documented as an official release.
 - Two siblings were **withdrawn** on 2026-07-27 (`chore(alf): withdraw DualPoolStableHook and DualPoolIncentivizedHook`).
-- **UNVERIFIED:** TVL, whether any pool actually uses it, and whether it is open to third-party LPs
-  (the docs describe it as owner-configured, i.e. a single market maker's strategy).
+- **TVL is negligible: ~$411 total across four dust instances**, against Spark's $150M sitting in
+  plain v4. Deployed and audited, but effectively unused.
 
 ⚠ **Rehypothecation is not novel and is not Uniswap-exclusive** — OpenZeppelin's `uniswap-hooks`
 library already ships a `ReHypothecation` hook (recorded in this repo's §8). "Idle LP capital into
@@ -401,6 +440,83 @@ Uniswap's 2026 adapter architecture is built to prevent. The hazard was known in
 
 ---
 
+## TASK 3 — ecosystem and sponsor demand
+
+### Sponsor demand is REAL, and this is the strongest argument FOR the lane
+
+Source: `docs/research/HACKATHON_CONTEXT.md` (our own prior primary-source pass on the Atrium
+Request for Hooks). **I was wrong to treat this lane as purely off-theme; the RfH names it.**
+
+- **The Atrium Request for Hooks list includes "Permissioned Pool Hook" outright** — it is a
+  called-for hook type, not something we would be inventing against the grain.
+- **Ink (sponsor) explicitly asks for "Permissioned Pools via Kraken Verify."** This is the single
+  most concrete demand signal found anywhere in this research: a named sponsor, a named prize track,
+  asking for exactly this category.
+- **Circle (sponsor)** ships a **Compliance Engine** and asks for **"compliance-aware swap limits."**
+  Circle is also RWA-adjacent via USYC. **UNVERIFIED:** the USYC/Hashnote acquisition detail — I did
+  not confirm it in this pass.
+- **Reactive Network (sponsor)** lists "permissioned pools" among its suggested pairings.
+- **UHI8's theme was "Specialized Markets," with "Hook Templates (RWA/stable/long-tail)"** named
+  explicitly — which independently explains the 32-entry UHI8 spike measured in Task 4.
+
+**How to weigh this honestly.** It cuts against a flat "crowded lane, don't go" verdict — there are
+three sponsor tracks whose stated asks this would satisfy. But it does **not** rehabilitate the lane
+for the *main* prize, and it is consistent with the Task 4 pattern rather than contradicting it:
+projects in this lane won **sponsor** prizes (Brevis, Chainlink, EigenLayer, Ink) for the *integration*
+they carried, essentially never for the gating itself. Note also that Ink's ask is *"via Kraken
+Verify"* — an **identity/attestation provider**, which is a different axis from Uniswap's new adapter
+standard and would not be satisfied by adopting `PermissionsAdapter`.
+
+### Counterparties — **ZERO ADOPTION, PROVEN ON-CHAIN**
+
+Launch partners named in Uniswap's own announcement: **Superstate, Securitize, Dowgo.** Ondo /
+BlackRock BUIDL / Franklin Templeton BENJI are RWA-adjacent but **are NOT named by Uniswap** — do
+not claim they are.
+
+**THE DECISIVE FACT, and it is on-chain rather than documentary.** Published addresses (they exist,
+inside the *deploy guide*, not a deployments page — Ethereum + Sepolia only, no Base, no Unichain):
+
+```
+PermissionedHooks         0x499a724Ab630549f14C995EC41a8E04fA3fd28c0   (deployed ~2026-08-11)
+PermissionsAdapterFactory 0x7DA911490Ca4663E572eA9C8154f3CdEbCE16452
+```
+Both carry real bytecode. **`eth_getLogs` over both contracts' entire lifetime returns ZERO events**
+— with a **positive control** (v4 PoolManager, 5,437 logs in a 256-block window) proving the method
+works and the zero is genuine, not a broken query.
+
+> **Zero factory logs ⇒ zero `PermissionsAdapter`s have ever been created ⇒ no permissioned pool can
+> exist on mainnet.** The standard is shipped, audited, deployed — and **completely unused ~34 days
+> after announcement.** Note also the hook was deployed **2026-08-11, 19 days *after* the blog post.**
+
+| Party | First-party v4 announcement | Live | Named by Uniswap |
+|---|---|---|---|
+| Superstate | X post only (2026-07-23); newsroom JS-rendered — **UNVERIFIED**, not proven absent | No | Yes — "early design partner" |
+| Securitize | Only for the 2026-02-11 UniswapX/BUIDL deal, **not v4** | No | Yes — DS Protocol |
+| Dowgo | None found | No — **blocked on regulator** | Yes — ERC-3643, **future-tense** |
+| Ondo | **None** (only 2021–22 Fei/FRAX) | No | **No** |
+| BlackRock BUIDL | None for v4 | No | **No** |
+| Franklin Templeton | **None** | No | **No** |
+
+**⚠ CONFLATION TRAP — do not fall into it, and challenge anyone who does.** There *is* a real
+Uniswap×BUIDL announcement: `blog.uniswap.org/unlocking-defi-liquidity-for-buidl`, **2026-02-11** —
+five months *before* permissioned pools. It is **UniswapX: off-chain RFQ/intents with whitelisted
+subscribers** (Flowdesk, Tokka Labs, Wintermute). **No pool, no hook, no v4 contract.** Citing BUIDL
+as evidence of v4 permissioned-pool traction is **wrong product, wrong rail, wrong date.** Uniswap's
+own v4 post never mentions BUIDL, BlackRock, or Ondo.
+
+**Residual caveat, stated plainly:** the absence of first-party posts for Superstate / Securitize-v4 /
+Dowgo / Franklin rests on site-restricted search plus JS-blocked page bodies. **The on-chain
+conclusion does not depend on it.**
+
+**Corollary for DualPool:** it is live but holds **~$411 total across four dust instances**, while
+Spark's $150M sits in plain v4. Announced, audited, deployed — and effectively unused too.
+
+**No RWA/tokenized-securities issuer is a UHI10 sponsor.** The verified 13-value prize list is
+Uniswap · General · Unichain · EigenLayer · Brevis · Reactive Network · Fhenix · Flaunch · Arbitrum ·
+Chainlink · Circle · Across · Ink. Circle is the only RWA-adjacent entry.
+
+---
+
 ## HONEST READ
 
 **Is "permissioned pools" newly interesting because Uniswap shipped a primitive, or an old crowded
@@ -413,6 +529,9 @@ Arguments that it is genuinely new:
   This is not a proposal. It landed 2026-07-23 and Uniswap Labs maintains it.
 - **Zero of 662 prior projects used it**, because it did not exist.
 - It is strategically prominent for Uniswap — real launch partners, a real institutional push.
+- **Sponsor demand is real and named** (Task 3): the RfH lists "Permissioned Pool Hook", **Ink asks
+  for permissioned pools outright**, Circle asks for compliance-aware swap limits. This is a genuine
+  correction to my first-pass framing and I flag it as the strongest pro-lane argument.
 
 Arguments that it is a crowded lane rebranded — and I judge these to dominate:
 - **102 prior submissions in the union lane, prized at 21% against a 22.4% base rate — i.e. zero
@@ -445,8 +564,32 @@ audited hook with our own, it inherits the issuer-whitelist adoption gate, and a
 an adapter we deployed ourselves — i.e. **straw men we wrote**, which is the exact failure mode
 §9's standing order forbids. Superstate/Securitize will not whitelist a hackathon hook in eight weeks.
 
-**Bottom line: do not build the gating. If anything here survives, it is the observation that a
-permissioned pool is a rare venue where identity is exogenously enforced — and that is a paragraph
-supporting a mechanism, not a submission.** On present evidence I would not switch to this lane;
-§3's bar is "materially better on theme fit + novelty", and this is worse on theme fit and no better
-on novelty than the standing SWITCHBACK recommendation.
+**Bottom line — do not build the gating.**
+
+**The single hardest fact in this report: `eth_getLogs` on `PermissionsAdapterFactory` returns zero
+events for its entire lifetime, with a positive control. Not one adapter has ever been created. No
+permissioned pool exists on mainnet, 34 days after launch.** Whatever else is arguable, "Uniswap is
+actively promoting this and there is momentum to ride" is not supported by the chain.
+
+The decisive *design* argument is **§5.16 plus the shipped code**. A hook cannot bind an
+allowlist to the recipient, Uniswap hit that same wall, and they escaped it by *forking the router*
+and *leaning on the token's own transfer restrictions* — **neither of which is a hook.** Their own
+hook is a fail-fast-and-emit-events convenience. Anything we build in this lane re-ships the
+redundant half, against an audited, deployed incumbent at a known address, and its adoption is gated
+on an issuer whitelisting us. It fails the delete test for the same reason all 26 predecessors did.
+
+The sponsor demand (Ink, Circle, Reactive) is real and is the honest counterweight — but it points at
+a **sponsor** prize, historically won for the *integration carried* rather than the gating, and Ink's
+ask is specifically "via Kraken Verify," an attestation provider, not Uniswap's adapter standard.
+That is a reason to keep an integration in our back pocket, not a reason to switch lanes.
+
+**What survives is one sentence, and it is worth keeping:** a permissioned pool is the first
+environment we have found where **identity is enforced by someone other than us, for free** — the
+"party that agreed in advance to be inspected" of §8's ledger theorem, case (c). Address-shopping,
+which killed every ledger-based MEV mechanism we evaluated at a cost of 52,700 gas, **requires issuer
+approval here.** That is a paragraph supporting a mechanism, not a submission.
+
+**Recommendation: do not switch.** §3's bar is "materially better on theme fit + novelty." This is
+worse on theme fit, no better on novelty, and materially worse on adoption and demonstrability than
+the standing SWITCHBACK recommendation. **The seven hook ideas that depend on this primitive should
+be re-examined against §5.16 first — my expectation is that most of them are the redundant half.**

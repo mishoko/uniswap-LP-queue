@@ -201,10 +201,13 @@ These cost real time. Violating one silently produces a green test that proves n
     authors at audits, monitoring, off-chain invariant suites and optional FV instead — **not because
     nobody thought of it.** Every prior research pass in this project read emptiness as opportunity;
     that was wrong at least once.
-14. **Never cite "Uniswap uses invariant testing" to support a runtime on-chain product.** What they
-    ship is not what the docs imply (v4-core CI = `forge test --isolate`; commented-out v3 Echidna
-    config; `mythx.yml` pointing at a non-existent dir; v4-periphery has one invariant test, on a
-    *hookless* pool). And Certora's published v4 rule verifies **PoolManager against arbitrary
+14. **Never cite "Uniswap uses invariant testing" to support a runtime on-chain product.** ⚠ NARROWED
+    2026-08-26: the thin-testing observation is true **of v4-core and v4-periphery only**
+    (v4-core CI = `forge test --isolate`; commented-out v3 Echidna config; `mythx.yml` pointing at a
+    non-existent dir; v4-periphery has one invariant test, on a *hookless* pool). **Uniswap DOES run
+    stateful invariant campaigns on its own hooks** — `v4-hooks-public` ships
+    `test/alf/DualPoolInvariant.t.sol` + handler + `AlfAuditRegression.t.sol`. It does not revive the
+    security route (still off-chain and pre-deployment) but do not overstate the claim. And Certora's published v4 rule verifies **PoolManager against arbitrary
     hooks** — the opposite direction from verifying a hook against itself.
 15. **Ask a frontier model for a MECHANISM or you get an ADJECTIVE.** Measured: one 1,261-line Grok
     session prompted for *"something even the boldest Uniswap people would find hard to believe"*
@@ -221,6 +224,16 @@ These cost real time. Violating one silently produces a green test that proves n
     **the token enforces it itself (ERC-3643/1400) — which makes the hook redundant.**
     ⇒ **The entire hook-based compliance-gate lane fails the delete test.** True of all 78
     compliance-tagged submissions in the directory; none of them say it. **Publish this.**
+    **⚠ EXHIBIT, from primary source: Uniswap Labs hit this exact wall and could not solve it in a
+    hook either.** Their shipped Permissioned Pools (merged to `v4-periphery/main`, **3 audits** —
+    Cantina + 2× OpenZeppelin) take **two of the three escapes**: (1) *be the periphery* — the hook
+    calls `IMsgSender(sender).msgSender()` gated by `allowedWrappers`, its own NatSpec conceding
+    *"Trusts wrapper-reported msgSender()"*, and they shipped a **forked router + forked posm** to
+    make it hold, which kills open aggregator routing exactly as predicted; and (3) *the token
+    enforces it* — the final backstop is `_unwrap` → `safeTransfer` of the real restricted token.
+    **The load-bearing parts are a forked router and the token's own restrictions. Neither is a hook.
+    Their hook is the redundant half — and they already deployed it** (`PermissionedHooks`
+    `0x499a724Ab630549f14C995EC41a8E04fA3fd28c0`, mainnet, 6,909 bytes, perms `0x28C0`).
 17. **Fairness is not a present-state property** and therefore can never be a predicate. "This swap
     was unfairly priced", "the hook stole in block N" are not expressible. Do not claim them.
 

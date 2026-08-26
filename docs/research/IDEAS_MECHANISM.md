@@ -1071,3 +1071,150 @@ trade and it should be presented as a trade, not as a free lunch.
   input, unchanged from REFLEXIVITY.
 - **Concentrated liquidity, gas, and the fee's destination** — none of these are modelled anywhere in
   this rig, at any point.
+
+---
+
+# BLOCK-TIME 2026-08-26 — the α sweep re-run at Unichain parameters
+
+> Test of the one analytic, unsimulated claim in REFERENCE-CARRY §2.1. Script PART 15, same seed.
+> **NEGATIVE CONTROL (15a): the 12s configuration built by the rescaling harness reproduces PART 10's
+> α=0.5 row exactly** — ref lag 7.34t, honest 3.63 bps, XB keeps 1.6%, asserted in-script, run halts
+> otherwise. So the harness is not silently a different model.
+
+## VERDICT: **the invariance claim is WRONG — and it fails in the favourable direction. α = 0.0115 STANDS, and the fix is CHEAPER on Unichain than at 12s.**
+
+## 1. How the rescaling was done — the judgement call, surfaced not buried
+
+| quantity | rule | why |
+|---|---|---|
+| σ_block | `annual/√(sec_per_year/spb)` | falls as 1/√B. 3.701 t → **0.478 t** (ratio 7.75 = √60 ✓) |
+| swaps/block | `3.0 · spb/12` ⇒ **0.05/block at 200ms** | order flow is a wall-clock rate |
+| drift/block | `μ · spb/12` | same |
+| blocks run | `4000 · 12/spb` | same wall-clock span |
+| α | `1 − 0.5^(spb/12)` ⇒ **0.011486** | 12-second wall-clock half-life |
+| **trade size** | **held constant PER SWAP (5-tick impact)** | **THE JUDGEMENT CALL.** A $5,000 trade is a $5,000 trade whatever the block time. Holding *impact per block* constant instead would make every Unichain swap 60× larger, which is not a market. **If this choice is wrong, §2's transfer is wrong.** It is the one input here that is a modelling decision rather than a consequence. |
+
+## 2. Invariance: **NO. The lag falls to 0.49×, and my analytic argument was wrong.**
+
+| block time | α (12s half-life) | ref lag measured | vs 12s |
+|---|---|---|---|
+| 12 s | 0.500000 | **7.34 t** | 1.00× |
+| 2 s | 0.109101 | 5.42 t | 0.74× |
+| **200 ms** | **0.011486** | **3.59 t** | **0.49×** |
+
+**The error, stated plainly:** REFERENCE-CARRY §2.1 used `lag ≈ σ_b/√(2α)` on *both* sides. The exact
+discrete-time result is `σ_b/√(α(2−α))`, which reduces to `σ_b/√(2α)` — and is therefore invariant —
+**only as α→0**. At α=0.5 the discrete correction is large. The exact formula predicts 0.74×, and the
+measurement gives 0.49×; the remaining gap is flow-induced displacement, which at 12s has 3 swaps per
+block to generate it and at 200ms has 0.05.
+
+15e prints prediction against measurement at every half-life. At 200ms they track well (3.16 t
+predicted / 3.59 t measured at a 12s half-life); at 12s blocks the formula is poor (4.27 t / 7.34 t)
+because flow, not volatility, dominates the lag there. **Do not quote the closed form at coarse block
+times.**
+
+**A smaller lag is the good direction:** less standing displacement ⇒ less honest flow charged.
+
+## 3. The 200 ms confusion matrix — **XB still collapses to the in-block value**
+
+| config | honest charged | honest bps | IN keeps | **XB keeps** |
+|---|---|---|---|---|
+| 12s, α=1 (shipped) | 44.6% | 3.79 | 1.6% | **87.3%** |
+| 12s, α=12s half-life | 49.0% | 3.63 | 1.6% | **1.6%** |
+| **200ms, α=1 (shipped)** | 5.8% | 0.14 | 1.7% | **99.4%** |
+| **200ms, α=12s half-life** | 48.5% | **1.51** | 1.5% | **1.5%** |
+
+**The fix works on the target chain and costs less than half what it costs at 12s** (1.51 vs 3.63 bps
+— 30% of a 5 bps pool fee rather than 73%).
+
+> ### 3.1 TWO THINGS THAT ONLY BECOME VISIBLE AT 200 ms, and both matter for the pitch
+>
+> **(a) The shipped hook is very nearly INERT on Unichain.** At α=1 and 200 ms it charges 5.8% of
+> swaps a volume-weighted **0.14 bps** and lets **99.4%** of extraction out the cross-block door —
+> worse than the 87.3% at 12s. With 0.05 swaps per block, a block almost never contains two swaps, so
+> there is almost no intra-block price path to charge. **SWITCHBACK as specified in §2.1 barely
+> functions on the chain we are targeting.**
+>
+> **(b) With the fix, 96.6% of the honest fee is attributed to the CARRIED reference**, versus 30.8%
+> at 12s. **On 200 ms blocks SWITCHBACK is no longer an intra-block-path mechanism at all — it is
+> almost entirely a carried-reference mechanism.** The pitch sentence *"the pool's own price path
+> turning back on itself within one block"* (§2.5, the sentence that distinguishes it from EvenFlow)
+> **is close to vacuous at 200 ms.** The honest description on Unichain is *"a decaying reference
+> price, and you pay for walking back toward it."* That is a different sentence, and a judge who
+> checks Unichain's block time can ask for it. **Rewrite the pitch or pitch a 12s chain.**
+
+## 4. The "just wait" table at 200 ms — **wall-clock identical, qualitatively STRONGER**
+
+Share of untaxed gross retained (attacker-favourable upper bound, as before; separate 1,200-trial
+sample, so the 12s row differs from REFERENCE-CARRY §3.3 by sampling noise):
+
+| 12 s blocks, α=0.5 | k=1 | k=2 | k=3 | k=5 | k=10 | in-block |
+|---|---|---|---|---|---|---|
+| | 1.4% | 2.8% | 9.0% | **44.8%** (60 s) | 84.8% | 1.4% |
+
+| 200 ms blocks, α=0.011486 | k=1 | k=30 | k=60 | k=120 | k=180 | k=300 | in-block |
+|---|---|---|---|---|---|---|---|
+| | 1.8% | 1.8% | 1.8% | 3.6% | 11.0% | **51.2%** (60 s) | 1.8% |
+
+**Nothing changes qualitatively, and what does change favours us.** The half-life is the hold time by
+construction, so the wall clock is identical — 60 s to halve the charge on either chain. But at 200 ms
+the attacker must survive **300 blocks of other people's flow and 300 top-of-block corrective-arb
+opportunities** to get there, instead of 5. The position they are holding is precisely the
+displacement the arb wants. **§2.4a's inventory-risk argument is stronger on Unichain, not weaker.**
+
+## 5. What α actually works at 200 ms — **the half-life is a dial, not a threshold**
+
+| wall-clock half-life | α | ref lag | honest charged | honest bps | IN keeps | XB keeps |
+|---|---|---|---|---|---|---|
+| 1 s | 0.129449 | 1.15 t | 37.3% | **0.48** | 1.6% | **1.6%** |
+| 4 s | 0.034064 | 2.40 t | 47.0% | 1.00 | 1.6% | **1.6%** |
+| **12 s** | **0.011486** | 3.59 t | 48.5% | **1.51** | 1.5% | **1.5%** |
+| 60 s | 0.002308 | 6.32 t | 49.4% | 2.57 | 1.4% | **1.4%** |
+| 300 s | 0.000462 | 12.80 t | 50.0% | 4.32 | 1.2% | **1.2%** |
+
+**XB collapses to the IN value at every half-life tested, from 1 second to 5 minutes.** There is no
+threshold to get right and no cliff to fall off — the half-life buys inventory-hold time at a linear
+price in honest bps. **12 s remains the recommendation** (1.51 bps, 60 s to halve the charge); 4 s is
+available at 1.00 bps if honest cost is the binding constraint.
+
+## 6. Robustness: gas is not modelled anywhere, so arb thinness was stressed instead
+
+At 200 ms the per-block market move is 0.48 ticks, so a corrective arb every block may not clear gas.
+Pricing arbs out changes nothing that matters:
+
+| 200 ms, arbs priced out | ref lag | honest bps | XB keeps |
+|---|---|---|---|
+| 0% | 3.59 t | 1.51 | 1.5% |
+| 50% | 4.01 t | 1.62 | 1.5% |
+| 90% | 6.27 t | 2.29 | 1.4% |
+| 98% | 10.93 t | 3.55 | 1.3% |
+
+**The fix does not depend on a dense arb population.** Honest cost rises to the 12s level when 98% of
+arbs are priced out, which is the worst realistic case.
+
+## 7. STRAIGHT ANSWER
+
+**α = 0.0115 (a 12-second wall-clock half-life) STANDS on Unichain.** The invariance argument that
+justified it was wrong; the conclusion it supported is right for a different reason, and the numbers
+are better than the argument predicted. **Nothing in REFERENCE-CARRY §6's recommendation table changes
+except in our favour.**
+
+**Two new things to carry into the pitch, both from §3.1:**
+1. **State the half-life in seconds and derive α from the chain's block time.** A per-block α is a
+   60× error on Unichain, in the direction of no protection at all.
+2. **The intra-block-path framing does not survive 200 ms blocks.** On Unichain this is a
+   carried-reference mechanism, not a path-integral-over-one-block mechanism, and the §2.5
+   differentiation from EvenFlow has to be re-argued on that basis. **This is the most significant
+   presentational consequence found in any of the three sections.**
+
+## UNTESTED / STILL MODELLED-BUT-NOT-SIMULATED
+
+- **The per-swap trade-size rescaling (§1).** The one judgement call. Everything in §3–§6 is
+  conditional on it and no market data was used to justify it.
+- **Gas**, still, anywhere. §6 stresses arb *thinness* as a proxy and that is not the same thing.
+- **Unichain's actual flow density.** 0.05 swaps/block is 3/block at 12s rescaled, not a measurement.
+  §3.1(a)'s "the shipped hook is nearly inert on Unichain" is only as good as that number, and it is
+  the cheapest remaining thing to measure — one subgraph query against a live Unichain v4 pool.
+- **§4's wait table is still an attacker-favourable upper bound** (no flow during the wait).
+- **Concentrated liquidity, the fee's destination, and §2.4d (JIT refund)** — untouched by every run
+  in all three sections.

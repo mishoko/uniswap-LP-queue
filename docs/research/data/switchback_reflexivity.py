@@ -1012,3 +1012,34 @@ if __name__ == "__main__":
     for sup in (0.0, 0.5, 0.9, 0.98):
         rrow(f"200ms, {sup*100:.0f}% arbs priced out",
              simulate(0.60, 1.0, arb_suppress=sup, **cfg(0.2)))
+
+    print()
+    print("  15e - WHAT ALPHA ACTUALLY WORKS AT 200ms?  Sweeping the WALL-CLOCK half-life.")
+    print("  The exact discrete-time lag is sigma_b / sqrt(alpha*(2-alpha)), which is invariant")
+    print("  only in the alpha->0 limit; at alpha=0.5 the discrete correction is large.  Analytic")
+    print("  prediction alongside the measurement, so the gap is visible:")
+    print(f"{'half-life':>12s}{'alpha':>12s}{'lag predicted':>16s}{'lag measured':>15s}"
+          f"{'hon chg':>9s}{'hon bps':>9s}{'IN keep':>9s}{'XB keep':>9s}{'wait to 50%':>13s}")
+    sig200 = sb_at(0.60, 0.2)
+    for hl in (1.0, 4.0, 12.0, 60.0, 300.0):
+        a = 1 - 0.5 ** (0.2 / hl)
+        pred = sig200 / math.sqrt(a * (2 - a)) / BPS
+        r = simulate(0.60, 1.0, **cfg(0.2, alpha=a))
+        print(f"{hl:11.0f}s{a:12.6f}{pred:15.2f}t{r['ref_lag']:14.2f}t"
+              f"{r['hon_charged_pct']:8.1f}%{r['hon_vw_bps']:8.2f}b{r['sw_profit_kept']:8.1f}%"
+              f"{r['xb_keep_pct']:8.1f}%{hl:12.0f}s")
+    print("  The last column is the wall-clock the attacker must hold to halve the charge, which")
+    print("  IS the half-life by construction.  Choosing it is choosing how long a cross-block")
+    print("  unwinder must carry inventory while every arb bot on the pair can take it from them.")
+    print()
+    print("  For reference, the same sweep at 12s blocks:")
+    print(f"{'half-life':>12s}{'alpha':>12s}{'lag predicted':>16s}{'lag measured':>15s}"
+          f"{'hon chg':>9s}{'hon bps':>9s}{'IN keep':>9s}{'XB keep':>9s}")
+    sig12 = sb_at(0.60, 12.0)
+    for hl in (12.0, 60.0, 300.0):
+        a = 1 - 0.5 ** (12.0 / hl)
+        pred = sig12 / math.sqrt(a * (2 - a)) / BPS
+        r = simulate(0.60, 1.0, **cfg(12.0, alpha=a))
+        print(f"{hl:11.0f}s{a:12.6f}{pred:15.2f}t{r['ref_lag']:14.2f}t"
+              f"{r['hon_charged_pct']:8.1f}%{r['hon_vw_bps']:8.2f}b{r['sw_profit_kept']:8.1f}%"
+              f"{r['xb_keep_pct']:8.1f}%")
