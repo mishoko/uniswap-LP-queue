@@ -234,7 +234,66 @@ These cost real time. Violating one silently produces a green test that proves n
     **The load-bearing parts are a forked router and the token's own restrictions. Neither is a hook.
     Their hook is the redundant half — and they already deployed it** (`PermissionedHooks`
     `0x499a724Ab630549f14C995EC41a8E04fA3fd28c0`, mainnet, 6,909 bytes, perms `0x28C0`).
-17. **Fairness is not a present-state property** and therefore can never be a predicate. "This swap
+17. **THE SPLITTING LEMMA.** *A mechanism whose input is a **size** is defeated by splitting the
+    quantity into k parts, at a cost of (k−1) × marginal gas — fractions of a cent on Unichain.
+    Therefore no v4 hook may key on a per-swap, per-position or per-address **magnitude**, unless the
+    charge is a **path integral with no per-unit threshold** — in which case it is charging the path,
+    not the size, and the size was never the input.* Same shape as the ledger theorem. Used implicitly
+    three times in this repo before being written down. Kills, in one sentence: max price impact per
+    trade, per-address JIT size caps, concave fee splits favouring small LPs, minimum time between
+    trades, per-block price-move bounds. Directory corroboration:
+    `circuit break|price band|rate.?limit|max.{0,6}impact` → **6 built, 0 prized.**
+18. **A hook cannot PAY the trader either — only the router.** Extends #16. The hook never sees the
+    recipient, so any settlement path ending in *"and we refund the swapper"* is **not
+    implementable.** ⇒ Paying LPs is the *only* option a v4 hook has, not a design choice — say so on
+    camera; it converts an apparent limitation into a proof.
+19. **THE FOUR UNFORGEABLE CURRENCIES.** Under a no-off-chain constraint, a v4 hook mechanism can only
+    key on **price path · time · liquidity · optionality** — and its input must survive four proven
+    evasions:
+
+    | Evasion | Measured cost | Kills |
+    |---|---|---|
+    | Splitting a quantity | ~gas (fractions of a cent) | every **size**-keyed idea (#17) |
+    | Address shopping inside one unlock | **52,700 gas** | every **identity / reputation / history**-keyed idea |
+    | Waiting one block boundary | **200 ms** on Unichain | every idea anchored on a **per-block reference** |
+    | The router opacity wall | free — it is structural | every idea that must **see, gate, or pay the trader** (#16, #18) |
+
+    **Check any new candidate against this table FIRST.** Four independent ideation passes over four
+    separate model transcripts produced ~100 ideas and **zero** survivors, because essentially every
+    idea an outsider generates keys on size, identity, history, the trader, or an off-chain component.
+20. **The reflexivity immunity and the cross-block exemption are THE SAME KNOB.** A reference that
+    resets is immune to staleness *precisely because* the reset permanently exempts the top-of-block
+    corrective arb — and is vulnerable to the cross-block unwind for exactly that reason. **Any
+    reference an attacker cannot reset also cannot exempt the honest arb.** There is no cleverer
+    reference to find; the only choice is which cost to accept. (Measured: the EMA horn closes the
+    cross-block route completely and costs 7.2% of LP P&L.)
+22. **THEOREM: depth ≡ adverse selection. They are ONE OBJECT SEEN TWICE.** With `V(p)` the LP value
+    function and `x(p)` the risky-reserve schedule:
+    `LVR rate ℓ(σ,p) = ½σ²p²|x'(p)|` (Milionis–Moallemi–Roughgarden–Zhang) and
+    `marginal depth d(p) = |dx/d ln p|·p = p²|x'(p)|`. **These are the same quantity: `ℓ = ½σ²·d`,
+    identically, for every invariant, at every price.** Verified by recovering the textbook `σ²V/8`
+    for constant-product from the depth side.
+    ⇒ **NO STATIC GEOMETRY CAN IMPROVE AN LP'S ADVERSE SELECTION PER UNIT OF DEPTH OFFERED.** A curve
+    that halves LVR halves depth by the same factor. Concentrated liquidity, StableSwap, Orbital,
+    weighted pools, Lambert — all move along the same line; **none changes its slope.**
+    **Do not accept any proposal to "design a curve that reduces LVR" — it is proven impossible.**
+    The only degrees of freedom the theorem leaves open: **(a) time** — when depth is offered;
+    **(b) direction** — asymmetric depth; **(c) unforgeable conditioning state** the arb cannot fake;
+    and **(d) a different axis entirely — the theorem constrains the SWAP manifold only; `L` is not
+    in it.** (d) is where the liquidity-axis candidates live and is why they are not bounded by it.
+23. **Every zero-cost direction in a state space is a free option, and every free option gets
+    extracted.** Minting/burning liquidity at the current price is value-neutral, path-independent and
+    free — a flat direction in the pool's manifold. **JIT liquidity is therefore not an exploit; it is
+    the market correctly pricing that flat direction at zero.** Generalise it: before designing a
+    defence, look for the flat direction — that is where the extraction already is.
+24. **v4's callback ORDER solves the `donate()` refund problem exactly** (the §5.11 failure that forced
+    OZ's `LiquidityPenaltyHook` age-based and blocked two of our own designs). Donate in
+    **`beforeAddLiquidity`** — the entrant's liquidity does not exist yet, so **100% lands on
+    incumbents**. Donate in **`afterRemoveLiquidity`** — the exiter's liquidity is already gone, so
+    **0% refunds to them**. Both callbacks sit inside one unlock, so the deltas net. Requires
+    `AFTER_ADD_LIQUIDITY_RETURNS_DELTA` / `AFTER_REMOVE_LIQUIDITY_RETURNS_DELTA`. **Verify the flags
+    by execution before relying on it.**
+25. **Fairness is not a present-state property** and therefore can never be a predicate. "This swap
     was unfairly priced", "the hook stole in block N" are not expressible. Do not claim them.
 
 ### The two v4-only properties the whole Assay thesis rests on
