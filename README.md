@@ -51,7 +51,7 @@ Measured like-for-like on a warm second swap (`test_gasCostOfRuntimeEnforcement`
 | one ledger-budget invariant | 4,509 |
 | per-block flow metering | 5,766 |
 
-## What this is not (must not lie)
+## What this is not
 
 1. **The bond does not cover losses.** A bond smaller than the value a hook controls does not deter a rational attacker. It is a costly signal plus challenger funding. The registry reports `bondedWei` next to what the hook is permitted to take, deliberately instead of a grade — a grade invites you to outsource the judgement, a price does not.
 2. **Only present-state invariants are provable.** One staticcall, public state, no privileged input, no history. "This swap was unfairly priced" and "the hook stole from a user in block N" are not expressible and are never claimed.

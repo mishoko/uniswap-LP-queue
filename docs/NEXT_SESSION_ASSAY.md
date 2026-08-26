@@ -6,6 +6,7 @@ You are a new agent; there is no prior chat. Read this, then `README.md`, then
 
 ---
 
+
 ## 0. Read this first: the submission is at risk for a non-code reason
 
 UHI10 Gate 1 requires a **video ≤5 minutes with a human voice** before **3 Sep 2026 23:59 PST**
@@ -13,6 +14,10 @@ UHI10 Gate 1 requires a **video ≤5 minutes with a human voice** before **3 Sep
 disqualifies the entry regardless of how good the code is.** Confirm with the owner that they have
 independently verified the video is optional this cohort. If they have not, this is the single
 highest-priority item in the repo and everything below is worth less than it.
+
+
+ANSWER from owner: video is not a concern for now.
+Also do not worry about the hackathon deadlien it has been pushed by 2 months, so plenty of time to implement whatever we want
 
 ---
 

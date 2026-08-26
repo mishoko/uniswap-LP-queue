@@ -1,0 +1,220 @@
+====================================================================================================
+PART 0 - SANITY GATE (inherited from haste_economics.py).  At fee=0 the competitive
+  arb's profit per block must equal the textbook LVR rate sigma_b^2 * V / 8.
+====================================================================================================
+  calm      ~40% ann: theory=$  0.0152/blk  simulated=$  0.0152/blk  err=  0.2%  PASS
+  normal    ~60% ann: theory=$  0.0342/blk  simulated=$  0.0341/blk  err=  0.4%  PASS
+  stressed ~120% ann: theory=$  0.1370/blk  simulated=$  0.1376/blk  err=  0.4%  PASS
+  longtail ~300% ann: theory=$  0.8562/blk  simulated=$  0.8544/blk  err=  0.2%  PASS
+
+  Flow calibration: median retail notional $5,000 in a $40M constant-product pool
+  => median tick impact 5.0 ticks.  LP fee 5 bps.  3 retail swaps/block.
+    calm      ~40% ann: sigma_block =  2.47 ticks  (retail impact / block vol =  2.03x)
+    normal    ~60% ann: sigma_block =  3.70 ticks  (retail impact / block vol =  1.35x)
+    stressed ~120% ann: sigma_block =  7.40 ticks  (retail impact / block vol =  0.68x)
+    longtail ~300% ann: sigma_block = 18.51 ticks  (retail impact / block vol =  0.27x)
+  Column key: 'hon bps' = volume-weighted SWITCHBACK bps paid by honest flow;
+  'arb-cau' = share of that fee whose retracement consumed extension created by the
+  corrective ARB rather than by other flow (LIFO attribution).  This is the H1 channel.
+  'sw esc' = % of baseline-profitable in-block sandwiches still profitable;
+  'arb kill' = % of profitable corrective arbs we deter outright; 'arb short' = mean
+  fraction of the full correction left undone.
+
+======================================================================================================================
+PART 1 - MANDATORY NEGATIVE CONTROLS.  If these misbehave the RIG is wrong, not SWITCHBACK.
+======================================================================================================================
+  NC1  no staleness, ONE-WAY honest flow  -> charged 0.00% , 0.0000 bps   PASS (must be exactly 0)
+  NC2  no staleness, ALTERNATING honest flow -> charged 51.15% , 2.36 bps   PASS (meter can fire)
+       This is 2.4f and it is NOT a staleness effect: intra-block two-sided honest
+       flow pays even with a perfect reference.
+  NC3  fee OFF (gamma=0), full flow -> charged 0.00% , sandwich escape 100.0% , 25% of victims attackable   PASS
+  NC4  STALENESS FLOOR: market frozen, arb ON, fee OFF -> block-open staleness 4.32 ticks
+       PASS (pool sits inside the no-arb band, so the rig CAN keep a fresh reference)
+  NC5  SAME WORLD, FEE ON (gamma=1) -> staleness 11.37 ticks (2.63x the floor), arb killed 0.0% , correction shortfall 29.7%
+       NOT a control - this is the OZ warning reproduced with ZERO exogenous
+       volatility.  The staleness above the floor is caused BY SWITCHBACK.
+
+  ALL CONTROLS PASS.
+
+======================================================================================================================
+PART 2 - THE CHEAP ANSWER FIRST.  Does the intra-block extension cap already bound it?
+  Staleness cannot enter the fee formula directly - the fee is a pure function of the
+  intra-block path relative to T0, and T0 IS the pool's own price at block open, so it
+  is never stale relative to the thing the fee measures.  Staleness can only act by
+  changing FLOW.  These three worlds isolate that.
+======================================================================================================================
+scenario                          staleT0  hon chg  hon bps  arb-cau  sw esc  sw keep arb kill arb short  fee$/blk
+(a) frozen mkt, no arb            275.26t    34.1%    2.54b     0.0%   30.8%     1.9%     0.0%      0.0%      7.72
+(b) mkt moves, NO arb (max stale)  290.77t    34.6%    2.73b     0.0%   31.7%     1.7%     0.0%      0.0%      8.11
+(c) mkt moves, arb ON (realistic)   11.56t    44.6%    3.79b    38.0%   24.6%     1.6%     0.0%     26.3%     15.43
+(d) as (c) + PERFECT reference*    12.51t    30.5%    2.13b     0.4%   29.4%     1.8%     0.0%     32.2%     11.34
+  * (d) replaces T0 with the true market tick.  Not implementable on-chain; it is the
+    counterfactual that answers 'would a fresh reference fix the confusion matrix?'
+  (a)->(b): pure staleness with no corrective arb.  If SWITCHBACK were reference-
+            sensitive in the OZ sense, honest cost would explode here.
+  (b)->(c): adds the corrective arb, whose FREE extension is hypothesis H1.
+
+======================================================================================================================
+PART 3 - FLOW DENSITY.  How much of the false positive is the stale reference and how
+  much is just two-sided honest flow inside one block (2.4f)?  gamma=1, normal vol.
+======================================================================================================================
+scenario                          staleT0  hon chg  hon bps  arb-cau  sw esc  sw keep arb kill arb short  fee$/blk
+0.3 retail swaps/block              4.51t    21.7%    0.88b    57.1%   29.3%     1.6%     0.0%     12.5%      0.92
+1.0 retail swaps/block              6.96t    34.6%    2.05b    48.6%   28.6%     1.9%     0.0%     21.8%      4.31
+2.0 retail swaps/block              9.12t    41.7%    3.18b    40.7%   25.7%     1.1%     0.0%     25.8%      8.73
+3.0 retail swaps/block             11.56t    44.6%    3.79b    38.0%   24.6%     1.6%     0.0%     26.3%     15.43
+6.0 retail swaps/block             16.03t    48.5%    5.23b    30.4%   26.7%     2.7%     0.0%     27.6%     40.69
+
+======================================================================================================================
+PART 4 - THE CONFUSION MATRIX.  Volatility regime x fee slope gamma.
+======================================================================================================================
+scenario                          staleT0  hon chg  hon bps  arb-cau  sw esc  sw keep arb kill arb short  fee$/blk
+calm      ~40% ann g=0.25           7.83t    42.2%    0.76b    27.0%   80.9%     8.4%     0.0%     13.1%     10.16
+calm      ~40% ann g=0.50           9.73t    43.7%    1.69b    33.1%   60.9%     3.9%     0.0%     20.0%     11.89
+calm      ~40% ann g=1.00          11.61t    44.4%    3.77b    37.5%   24.8%     1.6%     0.0%     26.9%     15.37
+calm      ~40% ann g=2.00          12.78t    44.9%    8.00b    39.6%    0.0%     0.0%     0.0%     31.3%     24.36
+normal    ~60% ann g=0.25           7.79t    42.3%    0.77b    27.9%   81.4%     8.4%     0.0%     12.9%     10.17
+normal    ~60% ann g=0.50           9.68t    43.8%    1.71b    33.8%   61.0%     3.9%     0.0%     19.6%     11.90
+normal    ~60% ann g=1.00          11.56t    44.6%    3.79b    38.0%   24.6%     1.6%     0.0%     26.3%     15.43
+normal    ~60% ann g=2.00          12.73t    44.9%    8.04b    40.2%    0.0%     0.0%     0.0%     30.7%     24.46
+stressed ~120% ann g=0.25           7.66t    42.4%    0.80b    31.3%   81.6%     8.4%     0.0%     12.1%     10.24
+stressed ~120% ann g=0.50           9.56t    43.9%    1.76b    36.3%   59.3%     3.9%     0.0%     18.4%     12.09
+stressed ~120% ann g=1.00          11.48t    45.0%    3.89b    40.2%   24.4%     1.6%     0.0%     24.8%     15.74
+stressed ~120% ann g=2.00          12.67t    45.4%    8.25b    42.3%    0.0%     0.0%     0.0%     28.9%     25.05
+longtail ~300% ann g=0.25           7.44t    44.2%    0.96b    43.7%   82.5%     8.3%     0.0%      8.9%     11.20
+longtail ~300% ann g=0.50           9.37t    45.3%    2.04b    46.3%   60.3%     3.9%     0.0%     14.3%     13.52
+longtail ~300% ann g=1.00          11.50t    46.2%    4.45b    49.1%   22.2%     1.6%     0.0%     20.1%     17.90
+longtail ~300% ann g=2.00          12.96t    46.5%    9.30b    50.3%    0.0%     0.0%     0.0%     24.1%     28.36
+
+======================================================================================================================
+PART 5 - EXOGENOUS STALENESS STRESS.  Suppress a fraction of ALL corrective arbs
+  (thin pool / single searcher / any other cause) and re-measure.  gamma=1.
+======================================================================================================================
+scenario                          staleT0  hon chg  hon bps  arb-cau  sw esc  sw keep arb kill arb short  fee$/blk
+normal, 0% of arbs suppressed      11.56t    44.6%    3.79b    38.0%   24.6%     1.6%     0.0%     26.3%     15.43
+normal, 50% of arbs suppressed     16.62t    39.8%    3.53b    28.6%   27.3%     1.7%     0.0%     22.8%     13.25
+normal, 80% of arbs suppressed     27.88t    36.5%    3.00b    17.5%   27.6%     1.7%     0.0%     17.2%     11.73
+normal, 95% of arbs suppressed     56.02t    34.5%    2.62b     7.0%   27.8%     1.7%     0.0%     11.5%      9.67
+stressed, 0% of arbs suppressed    11.48t    45.0%    3.89b    40.2%   24.4%     1.6%     0.0%     24.8%     15.74
+stressed, 50% of arbs suppressed   16.87t    39.9%    3.61b    30.2%   27.4%     1.7%     0.0%     21.9%     13.54
+stressed, 80% of arbs suppressed   28.57t    36.5%    3.03b    18.2%   27.4%     1.6%     0.0%     16.7%     11.88
+stressed, 95% of arbs suppressed   58.65t    34.5%    2.66b     7.6%   27.7%     1.7%     0.0%     10.7%      9.72
+
+======================================================================================================================
+PART 6 - DOES THE LOOP CONVERGE OR DIVERGE?  Staleness in the first vs last decile of a
+  4000-block run as gamma rises.  Divergence = ratio growing with gamma and >> 1.
+======================================================================================================================
+  gamma  stale 1st  stale last   ratio  arb short  honest bps  poolvsHODL   SWB rev  LP total
+   0.00      4.29t       4.30t   1.001       0.0%       0.00b       34.59      0.00     34.59
+   0.25      7.83t       7.90t   1.009      12.9%       0.77b       20.52     10.17     30.68
+   0.50      9.76t       9.89t   1.014      19.6%       1.71b       19.62     11.90     31.52
+   1.00     11.65t      11.84t   1.017      26.3%       3.79b       19.15     15.43     34.59
+   2.00     12.82t      13.01t   1.015      30.7%       8.04b       18.76     24.46     43.22
+   4.00     13.97t      14.19t   1.016      34.8%      16.69b       18.76     44.23     62.99
+   8.00     14.36t      14.59t   1.015      36.3%      33.84b       18.76     87.24    106.00
+  'poolvsHODL' already CONTAINS all retained LP fees, so it must not be added to a
+  separate fee column (an earlier draft of this table did exactly that and was wrong).
+  It falls as gamma rises for TWO reasons that must be separated: (1) deterred
+  sandwiches stop paying 3 legs of LP fee - that is the mechanism working, and (2) the
+  staleness we cause.  PART 6b removes reason (1) entirely.
+
+  PART 6b - PURE STALENESS COST TO LPs.  sandwich_prob = 0, so there is no sandwich
+  fee revenue to lose and no extraction to prevent.  Any movement here is staleness.
+  gamma   staleness  arb short  poolvsHODL   SWB rev  LP total   honest bill/blk
+   0.00       4.32t       0.0%       15.80      0.00     15.80              0.00
+   0.25       7.63t      13.3%       15.61      6.66     22.27              1.88
+   0.50       9.47t      20.3%       15.60      9.28     24.88              4.08
+   1.00      11.31t      27.2%       15.59     13.07     28.65              8.75
+   2.00      12.44t      31.6%       15.58     21.99     37.58             18.19
+  Read the 'poolvsHODL' column against its gamma=0 row: that difference IS the
+  staleness cost, in dollars per block, with everything else held fixed.
+
+======================================================================================================================
+PART 7 - CANDIDATE FIXES, each with the HARDCAP-SHAPE CHECK:
+  does the fix create an exemption an attacker can steer into?
+======================================================================================================================
+  FIX A - cap the fee at a published maximum (needed anyway for quoting, SPIKE Q5).
+scenario                          staleT0  hon chg  hon bps  arb-cau  sw esc  sw keep arb kill arb short  fee$/blk
+gamma=1, cap=0 bps                 11.56t    44.6%    3.79b    38.0%   24.6%     1.6%     0.0%     26.3%     15.43
+gamma=1, cap=20 bps                10.36t    44.6%    3.44b    37.5%   24.0%    43.0%     0.0%     25.3%     25.75
+gamma=1, cap=10 bps                 8.74t    44.5%    2.60b    35.2%   28.5%    61.3%     0.0%     22.5%     22.28
+gamma=1, cap=5 bps                  7.12t    44.3%    1.65b    31.7%   49.2%    76.4%     0.0%     18.4%     15.26
+gamma=1, cap=2 bps                  5.64t    42.8%    0.75b    25.7%   74.8%    89.1%     0.0%     12.7%      7.59
+  HARDCAP CHECK: a cap is a ceiling on the ATTACKER's cost too.  Once it binds, every
+  further retraced tick is free, so the attacker's optimal sandwich grows to the point
+  where the cap binds.  Read 'sw esc' and 'sw keep' as the cap tightens.
+
+  FIX B - deadband: the first D ticks of extension each block create NO budget.
+  Intent: the corrective arb's extension stops authorising a tax on honest flow.
+scenario                          staleT0  hon chg  hon bps  arb-cau  sw esc  sw keep arb kill arb short  fee$/blk
+gamma=1, deadband=0 ticks          11.56t    44.6%    3.79b    38.0%   24.6%     1.6%     0.0%     26.3%     15.43
+gamma=1, deadband=2 ticks          11.41t    38.9%    3.28b    35.4%   26.7%     1.7%     0.0%     25.2%     14.17
+gamma=1, deadband=5 ticks          11.17t    31.3%    2.67b    32.4%   28.2%     1.7%     0.0%     23.2%     12.56
+gamma=1, deadband=10 ticks         10.65t    21.8%    1.88b    28.8%   32.4%     1.8%     0.0%     19.7%     10.61
+gamma=1, deadband=20 ticks          9.17t    10.9%    0.91b    23.1%   73.3%     2.2%     0.0%     11.8%      8.22
+  HARDCAP CHECK: the attacker sizes the FRONT-RUN to fit inside D, so the back-run
+  retraces budget that was never credited.  Read 'sw esc'.
+
+  FIX C - 'charge only when extension and retracement fall in the same block'.
+  ALREADY THE DESIGN.  T0 and both budgets reset every block; the fee contains no
+  cross-block state whatsoever.  There is nothing to change - see PART 2.
+
+  FIX D - EMA / TWAP reference instead of the raw block-open tick.
+  NOT SIMULATED, and argued dead rather than tested: an EMA is by construction MORE
+  lagged than the pool's own current price, so it makes the reference staler, not
+  fresher; and it introduces cross-block state, which reopens 2.4c poisoning at a
+  horizon the extension cap no longer bounds.
+
+======================================================================================================================
+PART 8 - THE RESET IS THE EXEMPTION.  Found by following PART 2, not hypothesised.
+  T0 is re-set to the pool's OWN price at every block open.  Therefore the first swap of
+  a block can never be a retracement: there is nothing behind it to retrace.  Every
+  top-of-block swap is fee-exempt BY CONSTRUCTION.  That is the same shape as Hardcap's
+  first-swap exemption.  So: front-run + victim in block N (front-run is an extension,
+  free), unwind at the TOP of block N+1 (extension from the new T0, free).
+  Cost = 2 LP fees + losing the race for the first slot.  SWITCHBACK fee = 0.
+======================================================================================================================
+  vol 60% ann, LP fee 5bps         ( 980 attackable victims)  in-block:  27.9% still profitable, keeps   1.7% of gross  |  cross-block:  82.6% profitable, keeps  90.6%
+  vol 60% ann, LP fee 30bps        (  23 attackable victims)  in-block:   0.0% still profitable, keeps   0.0% of gross  |  cross-block:  95.7% profitable, keeps  95.7%
+  vol 120% ann, LP fee 5bps        ( 972 attackable victims)  in-block:  27.1% still profitable, keeps   1.7% of gross  |  cross-block:  83.3% profitable, keeps  89.7%
+  vol 120% ann, LP fee 30bps       (  35 attackable victims)  in-block:   8.6% still profitable, keeps   0.3% of gross  |  cross-block:  94.3% profitable, keeps  92.5%
+  CONTROL: total SWITCHBACK fee charged on every top-of-block unwind above = 0.00 (asserted).
+
+  The attacker's only remaining cost is the race for the first slot of block N+1.
+  If they lose it, the top-of-block arb takes the displacement instead.  Break-even
+  win probability q* solves  q * (cross-block profit) = (in-block profit):
+       vol   LP fee    q* (must WIN this often)
+       60%       5b                      0.019
+       60%      30b                      0.000
+      120%       5b                      0.018
+      120%      30b                      0.003
+  q* is the fraction of first slots the attacker must win for the cross-block route to
+  beat the in-block route.  A LOW q* means the exemption is cheap to reach.
+  On a 200ms single-sequencer chain (Unichain, the target) the boundary is 200ms and
+  the first slot is bought with priority fee - MODELLED, NOT MEASURED.
+
+======================================================================================================================
+PART 9 - MUTATION CHECKS (standing order 9: distrust green).
+======================================================================================================================
+scenario                          staleT0  hon chg  hon bps  arb-cau  sw esc  sw keep arb kill arb short  fee$/blk
+baseline gamma=1 (shipped rule)    11.56t    44.6%    3.79b    38.0%   24.6%     1.6%     0.0%     26.3%     15.43
+M2  direction-blind (charge all)   15.78t   100.0%   21.48b     0.0%    0.0%     0.0%     0.0%     67.9%     64.08
+M2' closed form, NO watermarks     11.56t    44.6%    3.79b     0.0%   24.6%     1.6%     0.0%     26.3%     15.43
+
+  M2 must diverge wildly - it proves the extension/retracement DIRECTION logic is
+  what produces the separation, and is not decoration.
+    PASS
+
+  M2' must be IDENTICAL to the baseline.  If it is, then the per-side extension
+  budget is an IDENTITY, not a constraint: on the up side the unspent budget always
+  equals (tick - T0) exactly, because every up-move credits it and every down-move
+  above T0 debits it.  Consequence for the build, if it holds:
+      d0 = tick_before - T0 ; d1 = tick_after - T0
+      charged = (d0*d1 >= 0) ? max(0, |d0| - |d1|) : |d0|
+  ONE storage slot (T0).  The intra-block high/low WATERMARKS OF 2.1 ARE REDUNDANT,
+  and '2.4c: capped by the extension' is a tautology, not a separate defence.
+    PASS - identical, so the identity holds and the watermarks are dead weight.
+
+  M3 - the 2.4c dust-poison test, run directly rather than inferred:
+    poison extension 0.250 ticks ; the $200k opposite swap moves 199.0 ticks and is charged for 0.250 of them ($4.95).
+    PASS - poisoning authorises only its own extension.

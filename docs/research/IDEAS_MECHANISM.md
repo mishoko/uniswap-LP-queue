@@ -500,3 +500,316 @@ What did **not** kill it: the option objection as posed (payoff is linear — §
 - **Multi-arb strategic behaviour.** Part 5 models arb competition as a Bernoulli arrival rate, not as a game. A real searcher chooses lanes strategically; that is a game-theoretic model I did not build.
 - **Concentrated liquidity.** A2 is constant-product. Depth changes the constants; I assert but have not shown that it leaves the ratios intact.
 - **Gas.** Not modelled anywhere. The minimum-order-size threshold in §5 is dimensional reasoning, not a measurement.
+
+---
+
+# REFLEXIVITY 2026-08-26 — does SWITCHBACK's fee still separate extraction from honest flow when the block-open reference is stale?
+
+> The experiment named in `CANDIDATE_BRIEF.md` §1 con 6 as "the biggest risk, and it is new".
+> Model + Monte Carlo: `docs/research/data/switchback_reflexivity.py` (seeded, reproducible),
+> output frozen at `docs/research/data/switchback_reflexivity.out`.
+> The LVR sanity gate from `haste_economics.py` is carried over verbatim and **PASSES** in all four
+> vol regimes (σ²V/8 reproduced to 0.2–0.4%). Every assumption is in the script docstring.
+
+## VERDICT: **GO-WITH-FIX** — but not for the reason the experiment was commissioned.
+
+**The reflexivity hypothesis is FALSE, and the sign is backwards.** The OZ warning does not transfer.
+**Two other things surfaced that are worse than the thing I was sent to test**, one of them fatal to
+a headline claim in the brief and one of them a Hardcap-shaped exemption in a fix we had already
+committed to. Neither is about staleness.
+
+---
+
+## 1. Why the OZ warning does not transfer — the structural answer, before any number
+
+OpenZeppelin's `AntiSandwichHook` warns that deterring MEV degrades the block-open price. That
+warning is about a mechanism that **prices swaps against the block-open state**. SWITCHBACK does not.
+
+> **`T0` is the pool's OWN tick at block open. It is not a price estimate. It cannot be "stale"
+> relative to the quantity the fee measures, because it IS that quantity's origin.**
+
+The fee is a pure function of the intra-block tick path relative to `T0`. The market price `S` never
+appears. So staleness can only act **through the flow it induces**, and there are exactly two channels:
+
+| | Channel | Simulated result |
+|---|---|---|
+| **H1** | A stale `T0` means a top-of-block corrective arb, whose extension is **free**, and that free extension authorises taxing later opposite-direction flow. | **REAL, and it is 38% of the honest fee.** |
+| **H2** | The arb that corrects *retail's* impact is a retracement, so it is taxed, so it under-corrects, so next block opens stale. | **REAL but converges** — see §3. |
+
+And the corollary that kills the OZ analogy outright:
+
+> **The top-of-block corrective arb is NEVER taxed. `T0` = the pool's price, so the first swap of a
+> block moves *away* from `T0` by construction: it is an extension, and extensions pay zero.**
+> SWITCHBACK cannot deter the arbitrage that anchors the reference, because that arbitrage is
+> structurally exempt. OZ's hook can, because it caps the arb's fill at the block-open price.
+
+**Confirmed by simulation, and the direction is the opposite of the fear.** Suppressing arbitrage
+(normal vol, γ=1) *reduces* the honest false positive, because there is less free extension budget:
+
+| arbs suppressed | block-open staleness | honest swaps charged | honest bps | sandwich escape |
+|---|---|---|---|---|
+| 0% | 11.6 ticks | 44.6% | 3.79 | 24.6% |
+| 50% | 16.6 | 39.8% | 3.53 | 27.3% |
+| 80% | 27.9 | 36.5% | 3.00 | 27.6% |
+| 95% | 56.0 | 34.5% | 2.62 | 27.8% |
+
+**More staleness, less tax on honest flow, essentially unchanged separation.** A 13× increase in
+staleness moves the confusion matrix by less than a third, in the *helpful* direction.
+
+---
+
+## 2. The cheap answer (item 4 of the brief): the intra-block cap does bound the reference problem, but it is a TAUTOLOGY, not a mechanism
+
+Two mutation results settle this, and one of them is a build finding.
+
+- **M3 — the §2.4c dust-poison test, executed rather than reasoned.** A 0.25-tick poison followed by
+  a $200k opposite swap that moves **199 ticks**: charged for **0.250 ticks ($4.95)**. The cap holds
+  exactly. §2.4c is correct.
+- **M2′ — but the per-side "extension budget" is an IDENTITY, not a constraint.** Replacing the whole
+  watermark/budget machinery with the closed form
+  ```
+  d0 = tickBefore - T0 ;  d1 = tickAfter - T0
+  charged = (d0*d1 >= 0) ? max(0, |d0| - |d1|) : |d0|
+  ```
+  reproduces **every number in this document bit-for-bit** (staleness 11.56t, honest 3.79 bps,
+  escape 24.6%, all identical). The unspent up-side budget is always exactly `tick − T0`, because
+  every up-move credits it and every down-move above `T0` debits it.
+
+> **BUILD CONSEQUENCE: §2.1's intra-block high/low watermarks are DEAD WEIGHT. The mechanism needs
+> ONE storage slot (`T0`), not three. And "the fee is capped by how far price was extended" — called
+> in §2.4c "the load-bearing invariant of the whole design" — is a tautology: it is just what
+> "distance walked back toward `T0`" means. It is not a separate defence and must not be pitched as one.**
+
+**M2 (direction-blind control)** — charging every tick moved regardless of direction blows honest cost
+from 3.79 to **21.48 bps** and charges **100%** of honest swaps. The extension/retracement direction
+logic is what produces the separation, and it is load-bearing. The rig is not inert.
+
+---
+
+## 3. Does the loop converge, diverge, or tax everything? — **CONVERGES, and fast.**
+
+Staleness, first decile vs last decile of a 4,000-block run (normal vol):
+
+| γ | staleness 1st 10% | last 10% | ratio | arb correction shortfall | honest bps |
+|---|---|---|---|---|---|
+| 0 | 4.29 t | 4.30 t | 1.001 | 0.0% | 0.00 |
+| 0.5 | 9.76 | 9.89 | 1.014 | 19.6% | 1.71 |
+| 1 | 11.65 | 11.84 | 1.017 | 26.3% | 3.79 |
+| 2 | 12.82 | 13.01 | 1.015 | 30.7% | 8.04 |
+| 8 | 14.36 | 14.59 | 1.015 | 36.3% | 33.84 |
+
+No divergence at any γ. Staleness **saturates at ~14 ticks even at γ=8** — a 16× fee slope buys only
+a 3.3× increase in staleness — because the correction is merely *deferred to the top of the next
+block, where it is free*. The corrective arb is **never killed outright (0.0% at every γ)**; it
+under-corrects by 26–36%. This is a graded, self-limiting, bounded effect, not a runaway.
+
+**And the staleness costs LPs almost nothing.** With sandwiches switched off entirely — so no
+sandwich fee revenue to lose and no extraction to prevent, leaving staleness as the *only* moving
+part — pool-vs-HODL per block goes **15.80 → 15.58 (−1.4%)** as γ goes 0 → 2 while staleness goes
+4.3 → 12.4 ticks. **The OZ warning is quantitatively immaterial for LPs on this mechanism.**
+
+⚠ **Do not read that as "LPs win".** In the same sandwich-free world at γ=1, SWITCHBACK collects
+$13.07/block of which **$8.75 (67%) is billed to honest traders**. Most of the LP gain in a
+low-extraction pool is a transfer from ordinary traders, not recaptured MEV. Say that on camera.
+
+---
+
+## 4. THE CONFUSION MATRIX
+
+Calibration: $40M constant-product pool, 5 bps LP fee, 3 retail swaps/block, median retail notional
+$5,000 ⇒ **median retail tick impact 5.0 ticks**, vs σ_block 2.5 / 3.7 / 7.4 / 18.5 ticks.
+"honest bps" is volume-weighted, **on top of** the 5 bps pool fee. "sw escape" is the share of
+*baseline-profitable* in-block sandwiches still profitable; "keeps" is the share of untaxed gross retained.
+
+| γ | honest swaps charged | honest bps (Δ vs 5bps fee) | sandwich escape | sandwich keeps | staleness |
+|---|---|---|---|---|---|
+| 0.25 | 42.3% | 0.77 (+15%) | **81.4%** | 8.4% | 7.8 t |
+| 0.50 | 43.8% | 1.71 (+34%) | 61.0% | 3.9% | 9.7 t |
+| **1.00** | **44.6%** | **3.79 (+76%)** | **24.6%** | **1.6%** | 11.6 t |
+| 2.00 | 44.9% | 8.04 (+161%) | 0.0% | 0.0% | 12.7 t |
+
+Volatility regime is nearly irrelevant (calm→longtail moves honest bps 3.77→4.45 at γ=1) — the
+no-arb band is set by the *fee*, not by σ, which is the same result `haste_economics.py` Part 4b found.
+
+**Flow density is what actually moves the matrix**, and it moves it a lot:
+
+| retail swaps/block | honest charged | honest bps | of which caused by the arb's extension | sandwich escape |
+|---|---|---|---|---|
+| 0.3 | 21.7% | 0.88 | 44% | 29.3% |
+| 1.0 | 34.6% | 2.05 | 49% | 28.6% |
+| 3.0 | 44.6% | 3.79 | 38% | 24.6% |
+| 6.0 | 48.5% | 5.23 | 30% | 26.7% |
+
+**Decomposition — how much of the false positive is the stale reference at all?** Replacing `T0` with
+the true market tick (an oracle; not implementable on-chain, used purely as a counterfactual) moves
+honest cost 3.79 → **2.13 bps** and escape 24.6 → 29.4%. So **~44% of the honest false positive is
+the reference channel and ~56% is intrinsic** — ordinary two-sided honest flow inside one block,
+which is §2.4f and has nothing to do with staleness. Control NC2 confirms it independently: with a
+*perfect* reference and strictly alternating honest flow, 51.2% of swaps pay 2.36 bps.
+
+> ### 4.1 A HEADLINE CLAIM IN THE BRIEF IS FALSE AND MUST BE RETRACTED
+> `CANDIDATE_BRIEF.md` §1: *"**Ordinary traders** — Unaffected. A one-way trade pays nothing extra.
+> This is the key selling point: **the honest path is free**."* and *"an honest trader is untouched"*.
+>
+> **Not true.** Because a corrective arb extends the price at the top of nearly every block, roughly
+> **half of all one-way honest flow arrives in the retracing direction and is charged.** At γ=1 that
+> is 44.6% of honest swaps paying a mean 3.79 bps — a **76% increase in their all-in trading cost**.
+> The honest path is free only for a one-way trade that happens to move price *further* in the
+> direction the block already went. That is a coin flip, not a property.
+>
+> This is not fatal — the money goes to LPs, so it is a transfer, and the brief already discloses a
+> weaker version of it at §2.4f — but the *selling point* is gone and the pitch must be rewritten.
+> Do not put "the honest path is free" on a slide.
+
+---
+
+## 5. THE THING THAT IS ACTUALLY DANGEROUS: **the reset is the exemption** (found, not hypothesised)
+
+Following §1's own logic: if the first swap of a block can never be a retracement, then **every
+top-of-block swap is fee-exempt by construction.** That is the *same shape* as Hardcap's first-swap
+exemption — a state in which the behaviour the mechanism exists to deter becomes the cheapest
+behaviour available. Hardcap died of exactly this.
+
+**The strategy:** front-run + victim in block N (the front-run is an extension — free), then unwind
+at the **top of block N+1**, where `T0` has re-set to the displaced price so the unwind is an
+extension too — free. Total SWITCHBACK fee: **asserted 0.00 across every trial in the run.**
+
+| | in-block sandwich (γ=1) | cross-block unwind |
+|---|---|---|
+| still profitable | 27.9% of attackable victims | **82.6%** |
+| keeps, of untaxed gross | **1.7%** | **90.6%** |
+
+(30 bps pool: in-block 0.0% / keeps 0.0%; cross-block 95.7% / keeps 95.7%.)
+
+The attacker's only remaining cost is winning the first slot of block N+1. **Break-even win
+probability q\* = 1.9%** (5 bps pool) and **0.0–0.3%** (30 bps pool). Winning ~1 in 50 races makes the
+cross-block route strictly better than paying SWITCHBACK.
+
+> **This refutes §2.4a's mitigation argument, which is the load-bearing sentence of that section:**
+> *"holding inventory across a block turns a risk-free atomic sandwich into a directional position
+> exposed to ~12s of price risk."* **It is not 12 seconds of exposure — it is one block boundary,
+> and only if the searcher loses a race they are already running.** On Unichain, the target chain,
+> that boundary is **200 ms**. The mitigation is backwards on the chain we are aiming at.
+
+**Honest counter-argument, stated because it is real and I did not model it:** the first slot of
+block N+1 is contested by the top-of-block arb, whose willingness to pay for it is roughly the same
+displacement value. In a competitive priority-fee auction the attacker's surplus is partly bid away
+— **to the sequencer, not to the LPs.** So the true statement is not "the attacker gets everything";
+it is **"SWITCHBACK collects nothing on this route and the value goes to the block producer."**
+Sizing that auction is **MODELLED-BUT-NOT-SIMULATED** and is the next experiment if SWITCHBACK proceeds.
+
+This is a category limit of every block-scoped defence (OZ's and Angstrom's mainnet batch included),
+not a SWITCHBACK-specific defect. But it caps Impact honestly at **atomic in-block round trips only**,
+and §2.7 scores Impact 4 on the strength of the refuted mitigation. **Impact should be 2–3.**
+
+---
+
+## 6. FIXES, each with the Hardcap-shape check
+
+### FIX A — a published fee cap. **HARDCAP-SHAPED. DO NOT SHIP IT.**
+
+`SPIKE Q5` concluded we need *"a published cap plus a quote view — half a day"*, because the fee sits
+inside the router's slippage budget. **The cap is the exemption.** A ceiling on the fee is a ceiling
+on the *attacker's* cost; once it binds every further retraced tick is free, so the optimal sandwich
+grows until the cap binds:
+
+| cap | honest bps | sandwich escape | **sandwich keeps of gross** |
+|---|---|---|---|
+| none | 3.79 | 24.6% | **1.6%** |
+| 20 bps | 3.44 | 24.0% | **43.0%** |
+| 10 bps | 2.60 | 28.5% | **61.3%** |
+| 5 bps | 1.65 | 49.2% | **76.4%** |
+| 2 bps | 0.75 | 74.8% | **89.1%** |
+
+A 20 bps cap costs honest flow almost nothing (3.79 → 3.44) and hands the attacker **27× more
+profit** (1.6% → 43.0%). That is Hardcap's economic inversion exactly: the carve-out is invisible in
+the aggregate and enormous for the party it exempts. **A cap exempts the large sandwiches — which is
+where all the money is.**
+
+**Correction to SPIKE Q5:** of its two recommendations, **only the quote view is safe.** But note the
+residual, and it is unsolved: the fee depends on the intra-block path at execution time, which no
+off-chain quoter can know. The only *a-priori* bound that is not steerable is **γ ≤ 1**, whose
+economic meaning is "a retracing swap can never obtain a better price than the block-open price" —
+a bound a quoter *can* express. **And that is OpenZeppelin's `AntiSandwichHook` rule.** See §7.
+
+### FIX B — a deadband (first D ticks of extension per block create no budget). **Not Hardcap-shaped, but not a fix either.**
+
+| D | honest charged | honest bps | sandwich escape | sandwich keeps |
+|---|---|---|---|---|
+| 0 | 44.6% | 3.79 | 24.6% | 1.6% |
+| 5 | 31.3% | 2.67 | 28.2% | 1.7% |
+| 10 | 21.8% | 1.88 | 32.4% | 1.8% |
+| 20 | 10.9% | 0.91 | 73.3% | 2.2% |
+
+**The Hardcap check passes, and the reason is worth keeping:** a deadband exempts *small* extensions,
+i.e. the **cheap** attacks, and "keeps of gross" stays at 1.6–2.2% throughout. A cap exempts *large*
+retracements, i.e. the **expensive** attacks. **Exempt the tail that isn't worth anything, never the
+tail that is.** That is the generalisable form of the Hardcap lesson and it should be written into
+CLAUDE.md §9.
+But it is not a fix: D just re-parameterises the same ROC curve that γ already traverses. D=10
+(1.88 bps honest, 32.4% escape) is roughly γ=0.5 (1.71 bps, 61% escape) — modestly better, not
+different in kind. **Worth taking; do not sell it as a solution.**
+
+### FIX C — "charge only when extension and retracement fall in the same block". **Already the design.** `T0` and the budget reset every block; the fee contains no cross-block state at all. Nothing to change — and §5 is the price we pay for it.
+
+### FIX D — EMA/TWAP reference. **Argued dead, NOT SIMULATED.** An EMA is by construction *more* lagged than the pool's own current price, so it makes the reference staler, not fresher; and it introduces cross-block state, which reopens §2.4c poisoning at a horizon the extension identity no longer bounds. Since §1–§3 show reference staleness was never the problem, this fix targets a non-issue at real cost.
+
+---
+
+## 7. A NEW ORIGINALITY PROBLEM, surfaced by §6
+
+§2.5 already caps Originality at 3 because Umbra/Sorella published the adjacent intra-block idea.
+The economics make that worse, not better: **the fee slope that actually works is γ ≈ 0.5–1, and at
+γ=1 the retracing swap's effective price is exactly the block-open price — which is OpenZeppelin's
+shipped `AntiSandwichHook` rule.** At γ=1 SWITCHBACK is OZ's rule, two-sided, with the surplus
+escrowed to LPs instead of left in the pool. That is a real difference but a narrow one, and it
+collides with the owner's criterion 5 delete test ("anything a developer already gets free from OZ
+today is not a submission"). **The defensible ground is γ<1 — a *continuous* price on the round trip
+rather than a hard floor — and at γ=0.5 that costs honest flow 1.71 bps and leaves sandwiches
+holding 3.9% of gross, which is still economically dead.** Pitch γ=0.5, not γ=1, and be ready for
+"why is this not the OZ hook with extra steps".
+
+---
+
+## 8. STRAIGHT ANSWER
+
+**GO-WITH-FIX**, with the fixes being mostly *retractions*, and with one named condition that is
+capable of turning this DEAD on a measurement we have not made.
+
+**The question I was sent to answer is answered and it is good news: reflexivity is not a problem.**
+The loop converges (ratio 1.00–1.02 at every γ), the staleness saturates at ~14 ticks, it costs LPs
+1.4%, and more staleness makes the confusion matrix *better*, not worse. `CANDIDATE_BRIEF.md` §1
+con 6 — *"the biggest risk, and it is new"* — can be closed.
+
+**What must change before this is pitched:**
+1. **Retract "the honest path is free" / "ordinary traders unaffected."** 44.6% of honest swaps pay,
+   +76% on their trading cost at γ=1, +34% at γ=0.5. (§4.1)
+2. **Do not ship a published fee cap.** It is Hardcap-shaped and hands large sandwiches 43–89% of
+   their gross back. Ship the quote view alone and accept γ ≤ 1 as the only safe a-priori bound. (§6A)
+3. **Retract §2.4a's "~12s of price risk" mitigation.** The cross-block unwind keeps 90.6% of gross
+   and needs to win 1 first-slot race in 50. Re-score Impact from 4 to 2–3. (§5)
+4. **Delete the watermarks.** One storage slot; the "extension cap" is a tautology, not a defence. (§2)
+5. **Target γ ≈ 0.5**, not 1, or the mechanism is OZ's shipped hook restated. (§7)
+
+**THE CONDITION.** §5 is the one that can still kill this, and it is not resolved by anything here:
+if the top-of-block slot at N+1 turns out to be cheap on Unichain's 200 ms boundary, SWITCHBACK
+defends only the atomic sandwich, which the Gogol et al. research the brief already cites says is
+rare on private-mempool rollups. **Measure the cost of a top-of-block slot on Unichain before
+committing four weeks.** That is a day of work and it is now ahead of the fee curve, ahead of the
+JIT-refund fix, and ahead of the dust-poison test (which §2 has already settled).
+
+## UNTESTED / MODELLED-BUT-NOT-SIMULATED — do not quote as validated
+
+- **The price of the first slot of block N+1.** §5's q\* assumes losing the race yields the attacker
+  zero; in reality they retain a residual, so the true q\* is *lower*, not higher. The auction cost
+  itself is unmodelled and is the single number that decides §5.
+- **Unichain's 200 ms block boundary.** Asserted from the chain's parameters; nothing here was run
+  against Unichain data.
+- **Concentrated liquidity.** A2 is constant-product, inherited from `haste_economics.py`. Depth
+  changes the constants; the ratios are asserted, not shown.
+- **Flow calibration.** 3 retail swaps/block at a 5-tick median impact is a stipulation, not a
+  measurement. §4's flow-density table is the sensitivity; the FP rate ranges 21.7%–48.5% across it.
+  **This is the most load-bearing unmeasured input in the document.**
+- **The JIT-refund attack (§2.4d)** and the next-block donation that is supposed to defeat it. Not
+  touched here — the fee's *destination* is not modelled at all, only its size.
+- **Gas.** Not modelled. The one-slot finding in §2 is a state-count argument, not a measurement.
