@@ -672,3 +672,135 @@ until that simulation says otherwise.
 - QuantAMM / TFMM (Balancer v3 dynamic weights), Curve `stableswap-ng` `stored_rates`, Balancer rate
   providers, umbraresearch.xyz sandwich-resistant AMM: **cited from my own knowledge, NOT fetched this
   session.** Anyone betting on §5 or §4 must verify these directly first.
+
+---
+
+# PARAMETER EXPERIMENT — 2026-08-26. TIDE is ALIVE, and the frontier has a closed form.
+
+*Script: `docs/research/data/tide_parameters.py`, seed `20260826`, fully reproducible
+(`python3 tide_parameters.py`). This section supersedes §3.8's table, which was computed by hand from
+one representative `(V, f, Q)` and understated the honest-LP cost in one place and overstated
+deterrence in another.*
+
+## P.0 STRAIGHT ANSWER
+
+**A viable `(c, τ_L)` window exists, and it is not a tuned point — it is a closed-form frontier that
+the numerical joint search reproduces to within 5%:**
+
+> ### `honest LP round-trip cost  ≥  f · Q_big / V`
+> The minimum a resident LP can be charged, per round trip, to fully deter a sniper is **the fee
+> revenue of the largest swap that sniper would target, divided by the pool's value.** No choice of
+> `c`, `τ_L`, or mechanism variant beats it.
+
+At `f = 5 bps` this clears the owner's 5 bps bar whenever **`Q_big/V ≤ 0.5`** — no single swap worth
+more than half the pool. That covers essentially all real ETH/USDC-class flow and **fails exactly on
+thin and newly-launched pools**, which must be said out loud.
+
+## P.1 CONTROLS FIRST — and one caught a defective result of mine
+
+| Control | Result |
+|---|---|
+| **Units** — `P = 3000` (non-1:1), decimals **18 / 6** (non-equal), per §5.10 | token→`m` matches value→`m` ✓; a deliberately unit-mixed variant does **not** match ✓ (so the control is not vacuous); a 90/10 deposit gives the same `m` as 50/50 ✓ |
+| **NEGATIVE CONTROL — `c = 0` must reproduce today's JIT** | optimal `m` = **147% of the pool (pinned at the grid cap)**, capturing **59% of the fee**, `T` = 0.2 min. Unbounded appetite, near-total capture, instant exit. **PASS** — that is observed JIT behaviour. |
+| **Closed form vs numerical search** | independent derivation `f·Q/V` vs joint `(c, τ_L)` grid: 0.25/0.25, 0.50/0.50, 1.25/1.26, 2.50/2.65, 5.00/5.24, 10.00/10.51 bps. **Agrees to ≤5%.** |
+
+⚠ **DEFECTIVE-GREEN CAUGHT, IN MY OWN FIRST RUN — recorded because it is the point.** v1 reported
+*"JIT capture 0.0% at every `c ≥ 0.02`, across every `τ_L`, in both regimes."* Too good, and it was.
+The sim fed the sniper the **event-averaged** `A`, which is sampled *after* the actor's own `A += m`
+and is therefore `A_pre + E[m]` — **24× the true ambient**. Every deterrence number in that run was
+fake. **Distrust-green is now 7 for 7 on this team, and the seventh was mine.** The fix is one line —
+always charge and always model the **pre-action** `A` — and it is the load-bearing detail of any
+implementation.
+
+## P.2 THE FRONTIER — the trade, not a point
+
+Minimum honest round-trip cost (bps) at each level of JIT confinement, searched jointly over
+`c ∈ [1e-4, 50]` (log grid) × `τ_L ∈ {10 min, 1 h, 6 h, 1 d, 3 d, 10 d}`:
+
+| `Q_big/V` | closed form `f·Q/V` | **honest cost, JIT fully dead** | best `(c, τ_L)` | honest cost, JIT ≤10% capture |
+|---|---|---|---|---|
+| 0.05 | 0.25 bps | **0.25 bps** | c=1.6e-4, 6 h | 0.15 bps |
+| 0.10 | 0.50 bps | **0.50 bps** | c=1.9e-3, 1 h | 0.29 bps |
+| 0.25 | 1.25 bps | **1.26 bps** | c=2.0e-4, 1 d | 0.72 bps |
+| **0.50** | 2.50 bps | **2.65 bps** ✓ | **c=0.064, 10 min** | 1.51 bps |
+| 1.00 | 5.00 bps | **5.24 bps** (borderline) | c=0.126, 10 min | 2.97 bps |
+| 2.00 | 10.00 bps | **10.14 bps** ✗ | c=1.6e-4, 10 d | 5.86 bps |
+
+**The frontier is regime-independent** — a healthy pool (36.5% fee APR, 4.5% LVR) and a toxic one
+(4.6% fee APR, 12.5% LVR) give the same numbers to two decimals. **And Variant B (charging only the
+burst above a slow 7-day reference) does NOT beat it** — 0.51 / 1.31 / 2.59 / 5.16 / 10.19 bps against
+Variant A's 0.50 / 1.26 / 2.65 / 5.24 / 10.14. **The frontier is a property of the problem, not of my
+formulation**, which is the strongest thing I can say about it.
+
+**In terms the owner can act on:** at `Q_big/V = 1.0`, honest LPs pay **5.24 bps per round trip**. An
+LP holding the median 14 days pays **0.37 bps/day**. A sniper taking one opportunity a day pays 5.24
+bps/day — **14×** — and at ten opportunities a day, **140×**. *That* is the discrimination: not
+identity, not age, but **turnover frequency**, and it is unforgeable because turnover is a path
+integral.
+
+## P.3 WHY — and this is the honest limitation of the mechanism
+
+There are two deterrence channels and only one of them works:
+
+| Channel | Charge | Hits honest LPs? | Verdict |
+|---|---|---|---|
+| **self-term** `c·m²` — the sniper's own entry raises `A` before their own exit | only round-trippers within τ_L | **no** (they hold past τ_L) | **Worthless at the optimum.** Measured: in a healthy pool the sniper's net carry while waiting is **−6.03 bps/day** — they *earn* while waiting — so they wait ~3τ_L for free and the self-term decays to `e⁻³` = 5% of itself. Even in the toxic regime (carry **+4.91 bps/day**) waiting is cheap relative to `c·m²`. |
+| **ambient** `2·c·A_pre` | every round trip, size-blind | **yes, at the same rate** | **This is what deters, and it is why the frontier is what it is.** Sniper revenue per unit deposit is `f·Q/V`; cost per unit deposit is `2cA` — the *same* `2cA` the honest LP pays. Deterrence requires `2cA > f·Q/V`, so honest cost `= 2cA > f·Q/V`. **QED.** |
+
+⚠ **Say this on camera and do not dress it up.** At the deterrence optimum, TIDE is economically a
+**split-proof, congestion-priced turnover charge**. Its content over a flat LP entry/exit fee is
+genuine but narrower than §3 claims: (i) it is a path integral, so it survives the Splitting Lemma
+where a per-action fee does not; (ii) it is congestion-priced, so it is ~0 in a quiet pool and rises
+only where churn is actually happening; (iii) the `c·m²` self-term does kill the **instant, same-block,
+mempool-bundled JIT** outright — the attack as actually practised — even though a patient sniper
+escapes it. **A judge who asks "so it's a deposit fee?" deserves those three sentences, not a
+deflection.**
+
+## P.4 THE EXIT TRAP — real, and cleanly fixed
+
+`CLAUDE.md` §5.3: never trap LP capital. Uncapped, TIDE is a **bank-run amplifier** — a mass exit is
+itself a churn burst, so `A` spikes and the last LPs out pay the most. At the viable `c = 0.126`, a
+50% exodus inside τ_L would cost the leaver **6.3% of their deposit.** Unacceptable.
+
+**Fix: cap `A` at `A_max`.** Deterrence runs off *ambient* `A` (~0.002), so a cap two orders of
+magnitude above ambient costs nothing:
+
+| `A_max` | × ambient | deterrence kept? | worst-case exit cost |
+|---|---|---|---|
+| 0.01 | 5× | **YES** | 0.13% of deposit |
+| **0.05** | **25×** | **YES** | **0.63% of deposit** |
+| 0.25 | 125× | YES | 3.15% |
+| uncapped | — | YES | **UNBOUNDED** ✗ |
+
+**Ship `A_max = 25× ambient`.** Zero deterrence cost, run exposure bounded at 63 bps, §5.3 satisfied.
+It is a third parameter, and I would rather have a third parameter than a mechanism that punishes
+leaving.
+
+## P.5 WHAT THIS DOES NOT SETTLE
+
+1. **The distributions are synthetic and they are the load-bearing assumption.** No real v4 add/remove
+   or swap-size data was fetched. Ambient `A_pre = ρ·τ_L` with ρ = 0.2/day (10% of pool value added and
+   as much removed, daily); median add 2% of pool, lognormal σ=1.0; median hold 14 days. **The frontier
+   `f·Q_big/V` is derived analytically and does not depend on them; the honest-cost *level* does.**
+   Halve ρ and every honest number halves.
+2. **`Q_big` is a judgement call, not a measurement.** The whole answer is "how large is the largest
+   swap worth sniping, relative to the pool". That is one query against real pool data and it is the
+   next thing to run.
+3. **Range-rebalancing is charged too.** A remove+add to re-centre a range pays a full round trip.
+   **TIDE taxes active LP management (Arrakis/Gamma-style) at the same rate it taxes snipers.** Not
+   modelled here; it is a real adoption objection.
+4. **A sniper who is a large resident LP catches part of their own donate** (§3.7). Unmodelled.
+
+## P.6 REVISED SCORES
+
+| | before | **after** | why |
+|---|---|---|---|
+| Original (30%) | 4.5 | **4.0** | The working channel is size-blind; the "new geometry" claim is narrower than §3.10 asserts. The flat-direction framing and the path-integral construction survive; "it beats a deposit fee" is now a three-clause answer, not a one-liner. |
+| Unique Execution (25%) | 4.5 | **4.5** | Unchanged. The donate-ordering construction (§3.4) is untouched by any of this and is still the best v4-specific idea in the repo. |
+| Impact (20%) | 4.0 | **3.5** | Works where `f·Q_big/V ≤ 5e-4`. **Fails on thin and new pools — which is a real part of the sustainable-liquidity problem, and the part the theme cares most about.** |
+| Functionality (15%) | 4.0 | **4.0** | Unchanged. The `A_max` cap is cheap and the `L→0` clamp is known. Everything is O(1) integer math and the parameterization is now closed-form rather than fitted, which is *better* than before. |
+| Presentation (10%) | 4.5 | **4.5** | Unchanged, and the frontier is a better slide than a single point. |
+| **Weighted** | 4.33 | **4.08** | Still the best candidate this project has. |
+
+**Verdict: NOT DEAD. Build it — with the `A_max` cap, and with §P.3 said out loud in the video rather
+than discovered by a judge.**

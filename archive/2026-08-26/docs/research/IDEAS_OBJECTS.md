@@ -493,3 +493,155 @@ good answer, but it is an answer to a different question than the one on the sli
 can never address its traders, therefore the trader-side object class is empty, therefore the entire
 fee-rebate-for-good-flow prompt (official example #3) is unbuildable as a hook.* That is counted,
 checkable, explains three separate holes in the 662-row dataset, and nobody has said it.
+
+---
+
+# SPIKE 2026-08-26 — is QUEUE's front-first allocator exact?
+
+**Code:** `test/spike/QueueAllocator.t.sol` — 9 tests, all green. Full repo **188 pass / 0 fail**
+(the single red is `CowNonSafeFork.t.sol`, pre-existing, needs `SEPOLIA_RPC_URL`).
+Real `PoolManager`, real `V4SwapRouter`, real hook at a mined permission address
+(`BEFORE_ADD_LIQUIDITY | AFTER_SWAP`), pool initialised at **`SQRT_PRICE_1_4` — never 1:1**
+(§5.10), one full-range hook-owned position, three entries at 4% / 6% / 90%.
+
+## VERDICT: **GO.** The riskiest assumption held. Two real defects found, neither fatal, one material.
+
+The thing that was supposed to kill this did not: **front-first allocation at the swap's realised
+average price is exact, to the wei, in both tokens, at a non-unit price.** Two *other* things came out
+of the spike that were not in the 4.18 scoring, and one of them changes what QUEUE is.
+
+---
+
+## Q1 — Is front-first allocation at the realised average price exact?
+
+**YES for the allocator. NO for redemption at face value.** These are different claims and I ran them
+apart on purpose.
+
+Aggregate flows measured on **PoolManager's own ERC20 balances**, never on the hook's bookkeeping,
+across four swaps: a head-only fill, a sweep exhausting two entries and partially filling a third, a
+mid-entry partial, and a **reverse-direction** leg (which is the "front seat sees every swap" claim,
+executed rather than asserted).
+
+```
+queue total token0            2248553145997694428660
+PoolManager-measured token0   2248553145997694428660      <- equal, to the wei
+queue total token1             445000573750774563494
+PoolManager-measured token1    445000573750774563494      <- equal, to the wei
+```
+
+Exactness is **by construction, not by luck**: every entry's incoming share is
+`FullMath.mulDiv(amtIn, take, amtOut)` floored, except the **last filled entry, which is assigned
+`amtIn − assignedSoFar`**. That single line is what makes the sum close. Delete it and conservation
+breaks — see the third negative control.
+
+### The residual, and it is not where I expected
+
+The position does **not** redeem for the queue's face value. It redeems for slightly *less*:
+
+| | token0 | token1 |
+|---|---:|---:|
+| seed → redeem, **0 swaps** | −1 wei | −1 wei |
+| 4 swaps | −3 | −4 |
+| 40 swaps | −9 | −11 |
+| **200 swaps** | **−52** | **−54** |
+
+**It grows — roughly 0.26 wei per swap** — so my first instinct ("constant add/remove dust") was
+wrong and I tested the mechanism rather than asserting it. **My second hypothesis was also wrong.**
+I predicted v4's fee-growth truncation (`feeGrowthGlobal += fee·Q128/L`, rounded down). A zero-fee
+pool falsifies it:
+
+```
+200 swaps @ 0.30% fee   token0 −52   token1 −54
+200 swaps @ 0    fee    token0 −46   token1 −50     <- 88% of the drift survives with NO fee
+```
+
+**The real cause: v4 computes a swap's amounts and a position's redeemable value with two different
+formulas, each rounded in the pool's favour.** The queue's ledger is built from the first; redemption
+is settled by the second. They agree to ~0.26 wei per swap and no better. Fees are ~11% of it.
+
+**Who eats it:** the last withdrawer, under a naive `withdraw()` that pays face value.
+**Can a searcher farm it?** **No, and not close.** The drift accrues to *nobody* — it stays in
+PoolManager as unclaimable dust; the attacker gains zero. It is a pure grief costing ≥100k gas plus a
+swap fee per **0.26 wei** of damage. Inflicting one whole token of shortfall needs ~4·10¹⁸ swaps.
+**Cost-to-damage is off by about twenty orders of magnitude.**
+**The fix is standard and cheap** (redeem the final entry against actual holdings, or carry a dust
+buffer) — but it is a real correctness item and **the claim "the queue's face value is redeemable"
+must not be made until it is built.**
+
+## The negative controls — three mutations, all red, all for the right reason
+
+One contract, one immutable `mode`, identical test body. **I also asserted the revert *reason*,
+because a control that goes red on something unrelated proves nothing — and my first guess at all
+three reasons was wrong, which is exactly why that assertion is there.**
+
+| Mutation | Result | Reason it actually failed |
+|---|---|---|
+| **PRO-RATA** (what v4 genuinely does today) | RED | `swap1: entry a0` — the fill smears across all three entries instead of landing in the head |
+| **OFF-BY-ONE cursor** (start at entry 1) | RED | `swap1: entry a0` — head untouched, entry 1 filled |
+| **FLOOR-ONLY** (drop the remainder assignment) | RED | `swap2: token0 conservation` |
+
+The third is the sharpest result in the spike: **it survives swap 1 and only dies at swap 2** —
+because a single-entry fill has no remainder to drop. The rounding claim is confirmed from both sides.
+**Positive control:** the unmutated harness passes through the identical external-call path, so the
+controls are proving something.
+
+## Q2 — Gas profile, and **the measurement was wrong the first time**
+
+Forge keeps storage warm for the whole test body, so seeding N entries in the same context makes every
+entry slot warm and **understated the sweep by 2.5×** (125k → 309k at 50 entries). `vm.cool()` restores
+production cold-access pricing. Distrust-green earned its keep again; the first number was a lie.
+
+| entries | head-only swap | sweeping swap | entries touched |
+|---:|---:|---:|---:|
+| 1 | 31,874 | 11,964 | 1 |
+| 2 | 31,874 | 18,717 | 2 |
+| 5 | 31,874 | 38,976 | 5 |
+| 10 | 31,874 | 65,998 | 9 |
+| 25 | 31,874 | 160,540 | 23 |
+| 50 | 31,874 | **309,106** | 45 |
+
+- **The common case is flat and cheap: 31,874 gas, independent of queue depth.** A swap that lands
+  inside the head entry — which is most swaps — never walks the queue.
+- **A sweeping swap is O(entries touched) at ~6,753 gas each** (slope over 1→45 entries, intercept
+  ~5,200).
+
+**The entry count at which a sweep becomes unshippable**, on a 6,753 gas/entry slope:
+
+| hook-callback budget | max queue depth |
+|---|---:|
+| 300k | **~44** |
+| 500k | **~73** |
+| 1M | **~147** |
+
+**This is the finding that changes what QUEUE is.** It is **not** an open retail LP pool with
+thousands of positions — a full sweep of such a book cannot be paid for. It is a **bounded roster of
+professional seats, perhaps 20–100 deep.** Arguably that is a feature and not a bug: scarce seats are
+what make the seat *priced*, and a priced seat is the entire mechanism. But it must be pitched that
+way from the first sentence, and **it caps Impact.**
+
+**The fix I can name but did NOT build**, and it is the single highest-value follow-up: store the
+queue as a **prefix-sum with a global cumulative-fill accumulator plus a price-growth accumulator
+indexed by cumulative fill** — i.e. exactly the `feeGrowthOutside` trick v3 already uses for tick
+crossing, applied to a fill queue instead of a tick ladder. A sweep would then update **one scalar**
+and entries would settle lazily on withdrawal, making it **O(1)**. Bidirectional flow needs the same
+outside-flip v3 uses. **Plausible, unbuilt, unverified — do not quote it as a property.**
+
+## Q3 — Does Functionality go to 4.5? **No. It goes to 4.0, and the total to 4.33.**
+
+I said 4.5 if the allocator proved exact. The allocator **is** exact — but I under-specified my own
+condition, and the spike surfaced a constraint I had not priced. Straight answer:
+
+| | before spike | after spike | why |
+|---|---:|---:|---|
+| Original 30% | 4.5 | 4.5 | unchanged |
+| Unique Exec 25% | 4.5 | 4.5 | unchanged |
+| Impact 20% | 4.0 | 4.0 | the depth cap hurts; the scarcity argument offsets it. Not a raise. |
+| **Functionality 15%** | 3.5 | **4.0** | core arithmetic proven exact with three mutations red — but a dust-accounting item is open and sweeps are O(N) |
+| Presentation 10% | 4.5 | 4.5 | unchanged |
+| **Weighted** | **4.18** | **4.33** | |
+
+**Not a kill.** Neither defect is the shape that kills — the rounding residual is unfarmable by twenty
+orders of magnitude and has a standard fix; the gas ceiling bounds the product rather than breaking it.
+**What I will not do is report 4.48 because I predicted it yesterday.** The two things I got wrong in
+this spike (the residual's cause, twice; and a gas number that was 2.5× optimistic) are both cases
+where the measurement contradicted me, and both are in the write-up for that reason.

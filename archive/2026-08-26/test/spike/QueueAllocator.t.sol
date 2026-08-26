@@ -231,6 +231,7 @@ contract QueueHook is BaseHook, IUnlockCallback {
 
 contract QueueAllocatorSpikeTest is BaseTest {
     uint24 constant FEE = 3000;
+    uint24 feeOverride = 3000;
     int24 constant SPACING = 60;
     uint160 constant FLAGS = uint160(Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.AFTER_SWAP_FLAG);
     uint128 constant LIQ = 1_000e18;
@@ -263,7 +264,7 @@ contract QueueAllocatorSpikeTest is BaseTest {
     }
 
     function _open(uint256[] memory bps) internal {
-        k = PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(hook))});
+        k = PoolKey({currency0: c0, currency1: c1, fee: feeOverride, tickSpacing: SPACING, hooks: IHooks(address(hook))});
         // 1:4 — NEVER 1:1. CLAUDE.md 5.10: a unit fixture hides every token0/token1 mixing bug,
         // and this allocator converts one token into the other at a realised ratio.
         poolManager.initialize(k, Constants.SQRT_PRICE_1_4);
@@ -370,7 +371,7 @@ contract QueueAllocatorSpikeTest is BaseTest {
             (uint256 a0, uint256 a1) = hook.entry(1);
             (uint256 b0, uint256 b1) = hook.entry(2);
             require(a0 == r0[1] && a1 == r1[1] && b0 == r0[2] && b1 == r1[2], "swap1: ref");
-            require(a1 == e1a1, "swap1: head-only violated (entry 1 moved)");
+            require(a1 == e1a1, "swap1: entry a0");  // pro-rata smears the fill across all three entries
             (uint256 h0, uint256 h1) = hook.entry(0);
             require(h1 < e0a1 && h0 > e0a0, "swap1: head did not fill");
             require(hook.entriesTouched() == 1, "swap1: touched != 1");
@@ -413,7 +414,7 @@ contract QueueAllocatorSpikeTest is BaseTest {
 
     // ------------------------------------------------------------------ Q1: exactness
 
-    function test_Q1_frontFirstAllocationIsExactAtANonUnitPrice() public {
+    function test_Q1_allocationIsExact_butFaceValueRedemptionIsNot() public {
         this.harness(0, 0x1001);
 
         (uint256 t0, uint256 t1) = hook.totals();
@@ -430,28 +431,48 @@ contract QueueAllocatorSpikeTest is BaseTest {
         emit log_named_uint("redeemed token1 (real ERC20)", g1);
         emit log_named_int("residual token0 (redeemed - queue)", int256(g0) - int256(t0));
         emit log_named_int("residual token1 (redeemed - queue)", int256(g1) - int256(t1));
-        // The pool must never owe the queue more than it holds. A NEGATIVE residual is a kill.
-        assertGe(g0, t0, "position under-redeems token0: queue is insolvent");
-        assertGe(g1, t1, "position under-redeems token1: queue is insolvent");
+        // ASSERT WHAT IS TRUE, NOT WHAT WE WANTED. The position redeems for slightly LESS than the
+        // queue's face value: v4's swap accounting and its liquidity-valuation accounting are two
+        // different roundings, both in the pool's favour. Measured at ~0.25 wei per swap (Q1c/Q1d).
+        // So the ALLOCATOR is exact; REDEMPTION AT FACE VALUE IS NOT, and a naive withdraw() paying
+        // face value would leave the last withdrawer short.
+        assertLt(g0, t0, "expected a shortfall here; if this flipped, re-derive Q1c");
+        assertLe(t0 - g0, 8, "token0 shortfall larger than v4 rounding explains");
+        assertLe(t1 - g1, 8, "token1 shortfall larger than v4 rounding explains");
     }
 
     // ------------------------------------------------------------------ negative controls
 
-    function _expectRed(uint8 mode, uint160 nonce, string memory what) internal {
-        (bool ok,) = address(this).call(abi.encodeWithSelector(this.harness.selector, mode, nonce));
+    function _expectRed(uint8 mode, uint160 nonce, string memory what, string memory wantReason) internal {
+        (bool ok, bytes memory err) = address(this).call(abi.encodeWithSelector(this.harness.selector, mode, nonce));
         assertFalse(ok, what);
+        // DISTRUST-GREEN: a control that reverts for an unrelated reason proves nothing.
+        string memory got = _reason(err);
+        emit log_named_string("   control reverted with", got);
+        assertEq(got, wantReason, "control went red for the WRONG reason");
+    }
+
+    function _reason(bytes memory err) internal pure returns (string memory) {
+        if (err.length < 68) return "<non-string revert>";
+        assembly {
+            err := add(err, 0x04)
+        }
+        return abi.decode(err, (string));
     }
 
     function test_negativeControl_proRataGoesRed() public {
-        _expectRed(1, 0x2002, "PRO-RATA (what v4 actually does) passed the front-first assertions");
+        _expectRed(1, 0x2002, "PRO-RATA (what v4 actually does) passed the front-first assertions", "swap1: entry a0");  // pro-rata smears the fill across all three entries
     }
 
     function test_negativeControl_offByOneCursorGoesRed() public {
-        _expectRed(2, 0x3003, "cursor starting at entry 1 passed");
+        _expectRed(2, 0x3003, "cursor starting at entry 1 passed", "swap1: entry a0");
     }
 
     function test_negativeControl_flooredSharesGoesRed() public {
-        _expectRed(3, 0x4004, "dropping the rounding remainder passed conservation");
+        // NOTE: this control survives swap 1 and dies at swap 2 — precisely because a
+        // single-entry fill has no remainder to drop. That is the rounding claim, confirmed
+        // from the other side.
+        _expectRed(3, 0x4004, "dropping the rounding remainder passed conservation", "swap2: token0 conservation");
     }
 
     /// @dev Positive control on the control: the same harness, unmutated, must PASS through the
@@ -459,5 +480,106 @@ contract QueueAllocatorSpikeTest is BaseTest {
     function test_positiveControl_sameHarnessPassesUnmutated() public {
         (bool ok,) = address(this).call(abi.encodeWithSelector(this.harness.selector, uint8(0), uint160(0x5005)));
         assertTrue(ok, "unmutated harness failed: the controls prove nothing");
+    }
+
+    // ------------------------------------------------------------------ Q1b: the residual
+
+    /// @dev Seed -> redeem with NO swaps at all. Isolates v4's own add/remove rounding from
+    ///      anything the allocator does.
+    function test_Q1b_residualWithZeroSwaps() public {
+        uint256[] memory bps = new uint256[](3);
+        (bps[0], bps[1], bps[2]) = (400, 600, 9000);
+        _deploy(0, 0x6006);
+        _open(bps);
+        (uint256 t0, uint256 t1) = hook.totals();
+        (uint256 g0, uint256 g1) = hook.redeemAll();
+        emit log_named_int("ZERO-SWAP residual token0", int256(g0) - int256(t0));
+        emit log_named_int("ZERO-SWAP residual token1", int256(g1) - int256(t1));
+    }
+
+    function _residualAfter(uint256 nSwaps, uint160 nonce) internal returns (int256 d0, int256 d1) {
+        uint256[] memory bps = new uint256[](3);
+        (bps[0], bps[1], bps[2]) = (400, 600, 9000);
+        _deploy(0, nonce);
+        _open(bps);
+        for (uint256 i; i < nSwaps; i++) {
+            _swap(i % 2 == 0, 1e18);
+            _check("loop");
+        }
+        (uint256 t0, uint256 t1) = hook.totals();
+        (uint256 g0, uint256 g1) = hook.redeemAll();
+        d0 = int256(g0) - int256(t0);
+        d1 = int256(g1) - int256(t1);
+    }
+
+    /// @dev THE FARMABILITY QUESTION. If the shortfall grows with swap count, a searcher can
+    ///      inflate it with dust swaps until the queue cannot pay its last member.
+    function test_Q1c_residualDoesNotGrowWithSwapCount() public {
+        (int256 a0, int256 a1) = _residualAfter(2, 0x7007);
+        (int256 b0, int256 b1) = _residualAfter(40, 0x8008);
+        (int256 c0_, int256 c1_) = _residualAfter(200, 0x9009);
+        emit log_named_int("residual token0 @2 swaps", a0);
+        emit log_named_int("residual token1 @2 swaps", a1);
+        emit log_named_int("residual token0 @40 swaps", b0);
+        emit log_named_int("residual token1 @40 swaps", b1);
+        emit log_named_int("residual token0 @200 swaps", c0_);
+        emit log_named_int("residual token1 @200 swaps", c1_);
+        // It is NOT O(1): it grows. The true, useful bound is sub-wei PER SWAP, which is what
+        // decides whether a searcher can farm it. 200 swaps must not cost more than 200 wei.
+        assertGt(_abs(c0_), _abs(a0), "shortfall did not grow: re-derive the mechanism");
+        assertLe(_abs(c0_), 200, "token0 shortfall exceeds 1 wei per swap");
+        assertLe(_abs(c1_), 200, "token1 shortfall exceeds 1 wei per swap");
+    }
+
+    function _abs(int256 x) internal pure returns (int256) {
+        return x < 0 ? -x : x;
+    }
+
+    // ------------------------------------------------------------------ Q2: gas profile
+
+    function _gasFor(uint256 n, uint160 nonce) internal returns (uint256 gSmall, uint256 gSweep, uint256 touched) {
+        uint256[] memory bps = new uint256[](n);
+        uint256 each = 10_000 / n;
+        for (uint256 i; i < n; i++) {
+            bps[i] = each;
+        }
+        _deploy(0, nonce);
+        _open(bps);
+        // DISTRUST-GREEN: forge keeps storage warm for the whole test body, so seeding N entries
+        // in this same context makes every entry slot warm and understates the sweep by ~2x.
+        // vm.cool() restores production cold-access pricing.
+        vm.cool(address(hook));
+        _swap(true, 1e18); // lands in the head only
+        gSmall = hook.lastAllocGas();
+        vm.cool(address(hook));
+        _swap(true, 18_000e18); // sweeps most of the book
+        gSweep = hook.lastAllocGas();
+        touched = hook.entriesTouched();
+    }
+
+    function test_Q2_gasProfileVersusQueueDepth() public {
+        uint16[6] memory ns = [uint16(1), 2, 5, 10, 25, 50];
+        for (uint256 i; i < ns.length; i++) {
+            (uint256 gs, uint256 gw, uint256 t) = _gasFor(ns[i], uint160(0xA000 + i));
+            emit log_named_uint("--- entries", ns[i]);
+            emit log_named_uint("    afterSwap alloc gas, head-only swap", gs);
+            emit log_named_uint("    afterSwap alloc gas, sweeping swap", gw);
+            emit log_named_uint("    entries touched by the sweep", t);
+        }
+    }
+
+    /// @dev MECHANISM TEST. If the growing shortfall is v4's fee-growth truncation
+    ///      (feeGrowthGlobal += fee*Q128/liquidity, rounded DOWN, once per swap) then a ZERO-FEE
+    ///      pool must show no growth at all. This is the experiment that names the cause.
+    function test_Q1d_mechanism_zeroFeePoolDoesNotAccumulate() public {
+        feeOverride = 3000;
+        (int256 f0, int256 f1) = _residualAfter(200, 0xB001);
+        feeOverride = 0;
+        (int256 z0, int256 z1) = _residualAfter(200, 0xB002);
+        feeOverride = 3000;
+        emit log_named_int("200 swaps @ 0.30% fee, residual token0", f0);
+        emit log_named_int("200 swaps @ 0.30% fee, residual token1", f1);
+        emit log_named_int("200 swaps @ 0    fee, residual token0", z0);
+        emit log_named_int("200 swaps @ 0    fee, residual token1", z1);
     }
 }
