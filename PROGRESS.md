@@ -11,7 +11,7 @@ Newest entry first. Never delete an entry — supersede it.
 
 | Phase | Name | Status | Proven? |
 |---|---|---|---|
-| 0 | Harness + reproduce the reference spike | **NOT STARTED** | — |
+| 0 | Harness + reproduce the reference spike | **COMPLETE 2026-08-27** | **YES** — 9/9, every §D.2 number exact, +2 fresh mutations red |
 | 1 | Allocator core | NOT STARTED | — |
 | 2 | Deposit / withdraw + redemption-dust fix | NOT STARTED | — |
 | 3 | ERC-6909 rank token + transfer | NOT STARTED | — |
@@ -22,8 +22,12 @@ Newest entry first. Never delete an entry — supersede it.
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
 
-**Verified 2026-08-26 (doc-audit):** every row above is still accurate — **no `src/` directory exists
-at the repo root** and no mechanism code has been written. The two 2026-08-26 sessions below produced
+**Verified 2026-08-27:** Phase 0 is done. `src/queue/` and `src/queue/libraries/` now exist but are
+**EMPTY — still no mechanism code**. `test/` holds only the three files copied verbatim from the
+archive per §A.9. Every row from Phase 1 down is still accurate.
+
+*(Superseded — 2026-08-26 doc-audit:* every row above is still accurate — **no `src/` directory exists
+at the repo root** and no mechanism code has been written.*)* The two 2026-08-26 sessions below produced
 research and documents only. `PITFALLS.md` §5 is the standing list of what is open.
 
 ---
@@ -70,6 +74,99 @@ each row carries its evidence grade. The rows below are the headline items and p
 ---
 
 ## Session log
+
+### 2026-08-27 — PHASE 0 GREEN. Reference spike reproduced EXACTLY; suite survived two fresh mutations
+
+**PHASE 0 IS COMPLETE. All six exit criteria (PLAN §C.0) met. Gate §D.2 passes.**
+
+Toolchain entry criteria verified before anything else: `forge 1.5.0-stable`, commit SHA
+`1c57854462289b2e71ee7654cd6666217ed86ffd` — the exact SHA §A.8 records. `foundry.lock` revisions
+unchanged, `lib/` complete (forge-std, hookmate, uniswap-hooks). No submodule init needed.
+
+Copied per §A.9 into the live tree (previously `test/` did not exist at all):
+`test/utils/BaseTest.sol`, `test/utils/Deployers.sol`, `test/spike/QueueAllocator.t.sol` —
+`diff -q` confirms `QueueAllocator.t.sol` is **byte-identical to the archive copy**. `src/queue/`
+and `src/queue/libraries/` created empty. **No mechanism code written.**
+
+```
+forge test --match-path "test/spike/QueueAllocator.t.sol" -vv
+9 passed; 0 failed; 0 skipped
+```
+
+| # | Exit criterion | Result |
+|---|---|---|
+| 0.1 | 9 pass / 0 fail | ✅ |
+| 0.2 | Conservation exact to the wei | ✅ queue totals == PoolManager-measured, both tokens |
+| 0.3 | Three controls red, each with its exact reason | ✅ `swap1: entry a0` ×2, `swap2: token0 conservation` |
+| 0.4 | Gas table within ±2% | ✅ **exact**: 31,864 @1 seat, 31,874 @2–50 |
+| 0.5 | Residual −1/−1 @0 swaps, −52/−54 @200 | ✅ **exact**, and −3/−4, −2/−3, −9/−11, −46/−50 @0-fee all exact |
+| 0.6 | State why FLOOR_ONLY survives swap 1 | ✅ below |
+
+**Every single §D.2 number reproduced identically — not "within tolerance", identical.** Nothing to
+escalate under §C.0's divergence rule.
+
+**0.6 — why the FLOOR_ONLY control survives swap 1, in my own words.**
+The mutation deletes the remainder line, so *every* filled entry gets the floored proportional share
+`mulDiv(amtIn, take_, amtOut)` instead of the last one absorbing `amtIn − assignedIn`. Swap 1 is the
+**head-only** swap: the head's balance exceeds the whole output, so `take_ = remaining = amtOut` on
+the first and only iteration. The share is therefore `mulDiv(amtIn, amtOut, amtOut)` — a fraction of
+**exactly one**, which floors to `amtIn` with **zero** rounding loss. Mutant and original are
+bit-identical whenever a single entry absorbs the entire swap. Swap 2 sweeps three entries; each
+`take_` is now a proper fraction of `amtOut`, each `mulDiv` floors downward, and the sum of the
+floors is strictly less than `amtIn`. The lost wei are credited to nobody, the hook's totals fall
+below the PoolManager-measured totals, and it dies on `swap2: token0 conservation`.
+**The generalisable lesson — and it is this project's doctrine (PITFALLS 5.27) restated:** a
+one-seat fixture is the degenerate case where floor == exact. It is structurally incapable of
+observing this bug class. Multi-seat sweeps are not a nice-to-have in Phase 1; they are the only
+configuration in which the remainder line is observable at all.
+
+**LAW 5 applied beyond the built-in controls.** The three negative controls were written by the same
+author as the code they check, so passing them is weak evidence. I wrote two mutations the author did
+not anticipate, ran them, and restored:
+
+| Mutation | What it does | Result |
+|---|---|---|
+| MUT-A | `_apply`: credit `give` to the **wrong token leg** (`q[i].a1 += give` under `outIsOne`) — a unit-mixing bug | **7 of 9 red.** Positive control fired `unmutated harness failed: the controls prove nothing` |
+| MUT-B | `_allocate`: head **under-fills by 1 wei** whenever it does not exhaust the swap | **4 of 9 red**, on `entry a0` / `loop: entry a0` |
+
+Restored byte-identical afterwards; suite green again. The suite can go red, and does.
+
+**Three findings from the mutation run that are NOT in any document — all now in PITFALLS §1/§5:**
+
+1. **`test_Q2_gasProfileVersusQueueDepth` passed under BOTH mutations.** The gas test is entirely
+   correctness-blind, and `test_Q1b_residualWithZeroSwaps` never invokes `_allocate`. So "9 passed"
+   overstates the correctness surface: only **6** of the 9 tests carry arithmetic signal, and only
+   **4** of those exercise a multi-seat sweep. Do not quote "9 tests" as 9 units of assurance.
+2. **Conservation did NOT catch MUT-B; the independent reference allocator did.** A misallocated wei
+   stays inside the queue, so aggregate totals still tie out — only per-seat composition moves. This
+   is LAW 3's second corollary landing on the allocator: **conservation and composition are two
+   different claims needing two different assertions.** Phase 1 MUST carry its own independently
+   written `_refAllocate`; conservation alone leaves a whole bug class invisible.
+3. **The spike's conservation harness is the BLIND raw-balance form** (LAW 3 pre-amendment). It is
+   valid here only because `protocolFeesAccrued == 0` — and the spike never asserts that it is zero.
+   **If Phase 1 is built by copying this harness, it inherits the blindness**, which is precisely the
+   §E.5 trap. Phase 1 must measure against `balance − protocolFeesAccrued(currency)` (or `redeemAll()`)
+   *and* assert `protocolFeesAccrued > 0`.
+
+**LAW 1 is only half-satisfied by the spike fixture.** Price is 1:4 (guarded by
+`require(s0 != s1, "fixture is unit-priced")`) — good. But `Deployers.deployToken()` hardcodes
+**18 decimals for both tokens** (`Deployers.sol:38`), so the unequal-decimals half is untested here.
+`docs/research/withdrawal/FloatWithdraw.t.sol` already runs 18/6. **Phase 1 must use 18/6**, not
+inherit 18/18 by copying the spike's `setUp`.
+
+**Panel review** was run inline by me across the §5 lenses rather than by spawning sub-agents — the
+owner's session instruction this session was not to spawn agents. Findings 1–3 above and the decimals
+gap are its output. Nothing else surfaced at Phase 0; there is no mechanism code to attack yet.
+
+**Decisions taken:** none that touch economics or security. Nothing escalated.
+
+**NEXT ACTION — unchanged and now unblocked: Phase 1, but its first task is the P2 replacement
+(PITFALLS 5.25/5.26), not the allocator.** The allocator arithmetic is proven and reproduces; the
+protocol-fee mechanism in front of it is the thing that does not exist. Also still owed:
+`sweepFloatIntoPosition()` (5.21), the `liquidity`-decrement correction to §B.7 (5.23), and the
+**owner decision on the deposit remainder** (5.24 — refund vs absorb into float; ASK, do not decide).
+
+---
 
 ### 2026-08-26 (session close, final) — P2 + float COMPOSE; but P2's IMPLEMENTATION is DEFECTIVE
 
