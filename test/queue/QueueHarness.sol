@@ -21,14 +21,19 @@ contract QueueHarness is QueueHook {
     error SeatCountMismatch();
     error AlreadySeeded();
 
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp) QueueHook(pm, c0_, c1_, f, sp) {}
+    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster)
+        QueueHook(pm, c0_, c1_, f, sp, roster)
+    {}
 
     function seed(PoolKey calldata k, int24 tl, int24 tu, uint128 liq, uint256[] calldata bps)
         external
         returns (uint256 s0, uint256 s1)
     {
         if (liquidity != 0) revert AlreadySeeded();
-        if (bps.length == 0) revert SeatCountMismatch();
+        // The roster is fixed at construction and `seed` may not extend it — Phase 3 removed every
+        // path that creates a seat, and a harness that quietly grew the queue would be testing a
+        // contract the product does not ship.
+        if (bps.length != q.length) revert SeatCountMismatch();
 
         (s0, s1) = _mintPosition(k, tl, tu, liq);
 
@@ -46,7 +51,17 @@ contract QueueHarness is QueueHook {
             uint256 a1 = last ? s1 - acc1 : FullMath.mulDiv(s1, bps[i], 10_000);
             acc0 += a0;
             acc1 += a1;
-            _pushSeat(a0, a1);
+            q[i].a0 = a0;
+            q[i].a1 = a1;
+        }
+    }
+
+    /// @dev The storage slot of `q`, read from the contract rather than assumed. An earlier version
+    ///      of the oversized-swap test hardcoded slot 0, which was silently wrong the moment
+    ///      `QueueSeats` put three mappings in front of the array.
+    function seatArraySlot() external pure returns (uint256 slot) {
+        assembly {
+            slot := q.slot
         }
     }
 

@@ -6,7 +6,6 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -17,9 +16,9 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
 import {Allocation} from "./libraries/Allocation.sol";
+import {QueueSeats} from "./QueueSeats.sol";
 
 /// @title QUEUE — price-time priority for a Uniswap v4 pool
 ///
@@ -29,7 +28,7 @@ import {Allocation} from "./libraries/Allocation.sol";
 ///         credited the incoming token at the swap's own realised average price.
 ///
 ///         Uniswap has never had a queue, so it has never had a price for one.
-contract QueueHook is BaseHook, IUnlockCallback {
+contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     using CurrencySettler for Currency;
     using StateLibrary for IPoolManager;
     using SafeERC20 for IERC20;
@@ -59,16 +58,22 @@ contract QueueHook is BaseHook, IUnlockCallback {
     ///      these; they are declared here so INVARIANT F is asserted from Phase 1 onward and cannot
     ///      be silently broken when Phase 2 lands.
     ///
-    ///      INVARIANT F:  sum(q[i].aX) == (X redeemable from the position) + floatX,
+    ///      INVARIANT F:  sum(q[i].aX) + pendingTotalX == (X redeemable from the position) + floatX,
     ///                    to within the §E.4 rounding residual.
     uint256 internal float0;
     uint256 internal float1;
 
-    /// @dev PHASE 2, PROVISIONAL. Seats are granted by arrival order, which PLAN §B.8 and PITFALLS
-    ///      5.8 both record as NOT SHIPPABLE: rank must be BOUGHT or Harberger-held, never granted,
-    ///      or the head is dust-griefable. Phase 3 replaces this mapping with the ERC-6909 rank
-    ///      token. It carries a named test (`test_KNOWN_HOLE_rankIsGrantedByArrivalOrder`).
-    mapping(uint256 seatId => address) internal seatOwner;
+    /// @dev What a departing seat holder is still owed after their seat was evacuated, in the rare
+    ///      case the position could not release the whole ledger amount on the spot.
+    ///
+    ///      THIS IS RESIDUAL-SCALE STATE, NOT A PARALLEL LEDGER, and the difference is the whole
+    ///      reason the mechanism is safe — see `_onSeatTransfer`.
+    mapping(address holder => uint256) internal pending0;
+    mapping(address holder => uint256) internal pending1;
+    /// @dev Aggregates, kept so INVARIANT F stays a two-read assertion rather than a sum over an
+    ///      unbounded set of addresses. Written in exactly the two places the per-address maps are.
+    uint256 internal pendingTotal0;
+    uint256 internal pendingTotal1;
 
     bool internal bound;
 
@@ -98,12 +103,16 @@ contract QueueHook is BaseHook, IUnlockCallback {
     ///      would silently under-credit the queue and strand value owed to nobody.
     error ProtocolFeeExceedsInput(uint256 pfDelta, uint256 amtIn);
     error DirectionMismatch();
-    error NotSeatOwner(uint256 seatId, address caller);
     error OverEntitlement(uint256 want, uint256 have);
     error NothingDeposited();
     error PoolNotBound();
     error AlreadyBound();
     error WrongPool();
+    /// @dev A hook with no seats has no queue; every swap would revert `QueueUnderflow` forever and
+    ///      there is no path to add one.
+    error EmptyRoster();
+    error RosterTooLarge(uint256 requested, uint256 max);
+    error ZeroHolder(uint256 seatId);
     /// @dev `modifyLiquidity` charged more than the caller supplied. Structurally prevented by
     ///      sizing one unit of liquidity BELOW the amounts on hand; loud rather than silent because
     ///      the alternative is quietly spending float that belongs to other seats.
@@ -114,11 +123,62 @@ contract QueueHook is BaseHook, IUnlockCallback {
     ///      bind a freshly deployed hook to a junk pool — permanently, since there is no admin to
     ///      unbind it. A free, unrecoverable DoS. Committing the parameters here costs nothing: the
     ///      hook serves exactly one pool by design.
-    constructor(IPoolManager pm, Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing) BaseHook(pm) {
+    ///
+    ///      **THE FOUNDING ROSTER IS FIXED HERE TOO, AND THAT IS THE POINT OF PHASE 3.**
+    ///
+    ///      Until this constructor existed, a seat was created by the act of depositing: the first
+    ///      caller got seat 0, the head of the queue, for one wei of each token. Rank granted by
+    ///      arrival order is rank that is FREE TO OCCUPY, and a seat that is free to occupy has no
+    ///      price — which makes the head dust-griefable and empties the mechanism of its content
+    ///      (PLAN §B.8, §E.16; PITFALLS 5.8).
+    ///
+    ///      So seats are not created by any runtime path at all. The roster is minted once, here,
+    ///      to named holders, and afterwards a seat can only change hands by transfer. There is no
+    ///      `deposit()` that mints, no claim function, no admin that can appoint anyone: the
+    ///      allocation is an immutable fact of the deployment, in the constructor arguments, on
+    ///      chain, for anyone to read. That is what §B.8 means by "an explicit allocation event,
+    ///      never a side effect of depositing".
+    ///
+    ///      **Say the limitation out loud rather than dressing it up:** whoever deploys chooses the
+    ///      founding holders, exactly as an exchange's founding memberships were granted and then
+    ///      traded. Phase 4 replaces the endowment with a continuously priced, always-for-sale
+    ///      Harberger lease, and it is what turns "who got a seat" from a deployment decision into
+    ///      a market outcome. Until then, the honest claim is the narrow one: rank cannot be
+    ///      obtained by dusting, by being early, or at any price the incumbent has not accepted.
+    constructor(
+        IPoolManager pm,
+        Currency currency0,
+        Currency currency1,
+        uint24 fee,
+        int24 tickSpacing,
+        address[] memory foundingRoster
+    ) BaseHook(pm) {
         expected0 = currency0;
         expected1 = currency1;
         expectedFee = fee;
         expectedSpacing = tickSpacing;
+
+        uint256 n = foundingRoster.length;
+        if (n == 0) revert EmptyRoster();
+        if (n > MAX_SEATS) revert RosterTooLarge(n, MAX_SEATS);
+        for (uint256 i; i < n; i++) {
+            address holder = foundingRoster[i];
+            // A seat minted to `address(0)` would be a rank slot nobody can ever hold or sell, in a
+            // roster whose scarcity is the product. `_moveSeat` refuses the same thing.
+            if (holder == address(0)) revert ZeroHolder(i);
+            q.push(Seat({a0: 0, a1: 0}));
+            _mintSeat(holder, i);
+        }
+    }
+
+    /// @dev Seat id IS rank index, in Phase 3. The two are the same number because nothing in this
+    ///      phase permutes the queue, and carrying an `idAtRank`/`rankOfId` indirection that no
+    ///      operation can disturb would be carrying state no test could distinguish from a bug
+    ///      (PITFALLS 5.49). Phase 4's foreclosure — which demotes a seat to the tail — is what
+    ///      forces the indirection, and it is confined to the ownership lookups: the allocator
+    ///      walks `q` by RANK and does not read seat ids at all.
+    function seatCount() public view returns (uint256) {
+        return q.length;
     }
 
     // -------------------------------------------------------------------------- permissions (§B.2)
@@ -318,19 +378,10 @@ contract QueueHook is BaseHook, IUnlockCallback {
 
     // ============================================================== DEPOSIT / WITHDRAW (Phase 2)
 
-    /// @notice Open a new seat at the TAIL of the queue and fund it.
-    /// @dev Seats append at the tail and change no cursor, so opening one can never disturb
-    ///      INVARIANT C for the seats already in front.
-    function deposit(uint256 amount0, uint256 amount1) external returns (uint256 seatId) {
-        seatId = q.length;
-        q.push(Seat({a0: 0, a1: 0}));
-        seatOwner[seatId] = msg.sender;
-        _fundSeat(seatId, amount0, amount1);
-    }
-
-    /// @notice Add capital to a seat you already own.
-    function addToSeat(uint256 seatId, uint256 amount0, uint256 amount1) external {
-        if (seatOwner[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
+    /// @notice Fund a seat you hold. **This is the only way capital enters the queue, and it
+    ///         creates nothing** — the roster was fixed at deployment.
+    function addToSeat(uint256 seatId, uint256 amount0, uint256 amount1) external nonReentrant {
+        if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
         _fundSeat(seatId, amount0, amount1);
     }
 
@@ -389,12 +440,53 @@ contract QueueHook is BaseHook, IUnlockCallback {
     ///      **`withdraw` MUST NEVER CALL `poolManager.swap`.** Rebalancing by swapping would put the
     ///      allocator inside its own withdrawal and skim an unaccounted protocol fee. `_burnPosition`
     ///      only ever calls `modifyLiquidity`.
-    function withdraw(uint256 seatId, uint256 w0, uint256 w1) external returns (uint256 p0, uint256 p1) {
-        if (seatOwner[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
+    function withdraw(uint256 seatId, uint256 w0, uint256 w1) external nonReentrant returns (uint256 p0, uint256 p1) {
+        if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
         Seat storage s = q[seatId];
         if (w0 > s.a0) revert OverEntitlement(w0, s.a0);
         if (w1 > s.a1) revert OverEntitlement(w1, s.a1);
 
+        (p0, p1) = _payOut(w0, w1);
+
+        s.a0 -= p0;
+        s.a1 -= p1;
+
+        // Cursors are deliberately NOT touched. A withdrawal only ever REDUCES a seat, so it cannot
+        // make a cursor lead; leaving them costs a little gas and can never lose money.
+        // Withdrawing to zero does NOT destroy the seat: an empty seat is pure rank with no capital,
+        // and being able to hold, price and sell one is what gives rank a price of its own.
+
+        _send(msg.sender, p0, p1);
+    }
+
+    /// @notice Collect whatever a seat evacuation could not pay on the spot.
+    /// @dev Residual-scale in practice; see `_onSeatTransfer`. It exists because the alternative to
+    ///      a claim is silently rounding a departing holder's last few wei away.
+    function claimPending(uint256 w0, uint256 w1) external nonReentrant returns (uint256 p0, uint256 p1) {
+        uint256 h0 = pending0[msg.sender];
+        uint256 h1 = pending1[msg.sender];
+        if (w0 > h0) revert OverEntitlement(w0, h0);
+        if (w1 > h1) revert OverEntitlement(w1, h1);
+
+        (p0, p1) = _payOut(w0, w1);
+
+        // Decrement, never `= h0 - p0`. A cached read written back whole is a stale-write, and the
+        // only thing standing between it and a reentrant double-claim would be the guard alone.
+        pending0[msg.sender] -= p0;
+        pending1[msg.sender] -= p1;
+        pendingTotal0 -= p0;
+        pendingTotal1 -= p1;
+
+        _send(msg.sender, p0, p1);
+    }
+
+    /// @dev Turn a ledger entitlement into tokens sitting in the float, ready to send. Shared by
+    ///      `withdraw`, `claimPending` and the seat evacuation so there is exactly one place where
+    ///      the position is opened up and exactly one place the dust policy is applied.
+    ///
+    ///      Returns what will actually be paid, which is `min(requested, available)` — the caller
+    ///      must debit the ledger by the RETURNED amount, never by the requested one.
+    function _payOut(uint256 w0, uint256 w1) internal returns (uint256, uint256) {
         uint256 d0 = w0 > float0 ? w0 - float0 : 0;
         uint256 d1 = w1 > float1 ? w1 - float1 : 0;
         if (d0 != 0 || d1 != 0) {
@@ -409,23 +501,83 @@ contract QueueHook is BaseHook, IUnlockCallback {
         // DUST POLICY F1 (PLAN §B.7): pay `min(face, available)`. Face value is an UPPER BOUND, not
         // a promise. v4 computes a swap's amounts and a position's redeemable value with two
         // differently-rounded formulas, so the queue's face value redeems for a few wei LESS —
-        // ~0.26 wei per swap, unfarmable but real. Paying face exactly makes the LAST withdrawer's
+        // ~0.15 wei per swap, unfarmable but real. Paying face exactly makes the LAST withdrawer's
         // call revert; F1 spreads the residual over whoever withdraws instead of dumping it on them.
         (w0, w1) = _applyDustPolicy(w0, w1);
 
-        s.a0 -= w0;
-        s.a1 -= w1;
         float0 -= w0;
         float1 -= w1;
+        return (w0, w1);
+    }
 
-        // Cursors are deliberately NOT touched. A withdrawal only ever REDUCES a seat, so it cannot
-        // make a cursor lead; leaving them costs a little gas and can never lose money.
-        // Withdrawing to zero does NOT destroy the seat: an empty seat is pure rank with no capital,
-        // and being able to hold, price and sell one is what gives rank a price of its own.
+    function _send(address to, uint256 a0, uint256 a1) internal {
+        if (a0 != 0) IERC20(Currency.unwrap(key.currency0)).safeTransfer(to, a0);
+        if (a1 != 0) IERC20(Currency.unwrap(key.currency1)).safeTransfer(to, a1);
+    }
 
-        if (w0 != 0) IERC20(Currency.unwrap(key.currency0)).safeTransfer(msg.sender, w0);
-        if (w1 != 0) IERC20(Currency.unwrap(key.currency1)).safeTransfer(msg.sender, w1);
-        (p0, p1) = (w0, w1);
+    /// @notice Rank moves; capital does not. On every change of holder the seat is emptied and its
+    ///         capital is returned to the holder who is leaving.
+    ///
+    /// @dev **THIS IS A DELIBERATE DEPARTURE FROM PLAN §B.8 AND IT CLOSES A FREE DoS.**
+    ///
+    ///      §B.8 specified evacuation as a pure ledger move: `q[id].(a0,a1)` into the sender's
+    ///      `pendingWithdraw`, position untouched. That is unsound, and not marginally. The
+    ///      allocator sources every swap's output FROM THE SEATS, while the swap's size is set by
+    ///      the POSITION. A ledger-only evacuation drops `sum(q[i].aX)` and leaves the position at
+    ///      full depth, so the pool goes on quoting liquidity the queue can no longer source and
+    ///      `_allocate` reverts `QueueUnderflow`.
+    ///
+    ///      That is not a corner: `transfer(self, id, 1)` is legal, costs gas only, and a tail
+    ///      holder sitting on most of one token can use it to make every swap above the surviving
+    ///      balance revert, for as long as they feel like it, and undo it whenever they want. A
+    ///      free, repeatable denial of the pool's whole purpose, handed to any one seat holder.
+    ///      (`test_3_11_negativeControl_ledgerOnlyEvacuationBricksTheSwapPath` executes it.)
+    ///
+    ///      The fix is to make the capital actually LEAVE. Paying it out burns the matching
+    ///      liquidity, so the position falls in step with the ledger and the queue can still source
+    ///      every swap the pool will quote. `sum(q[i].aX) + pendingTotalX == redeemable X + floatX`
+    ///      is preserved exactly, and INVARIANT F never has to admit a second, unrankable pool of
+    ///      capital that the allocator cannot see.
+    ///
+    ///      **Why not simply refuse to transfer a funded seat?** Because Phase 4 needs this path to
+    ///      be unblockable. A Harberger buyout must be able to take the seat at the incumbent's own
+    ///      self-assessed price at any time; if a funded seat could not move, every incumbent would
+    ///      hold a permanent veto over their own buyout by keeping a wei in the seat.
+    ///
+    ///      **Why can this not be blocked?** The only external calls are `modifyLiquidity` on
+    ///      PoolManager and `transfer` on the pool's own currencies. A plain ERC-20 hands the
+    ///      recipient no control, so a departing holder cannot refuse payment to stop a buyout, and
+    ///      the dust policy clamps rather than reverting when the position is short.
+    function _onSeatTransfer(uint256 seatId, address from) internal virtual override {
+        Seat storage s = q[seatId];
+        uint256 a0 = s.a0;
+        uint256 a1 = s.a1;
+        // The common case, and the one Phase 4 leans on: pure rank, nothing to move, no external
+        // call, no liquidity touched.
+        if (a0 == 0 && a1 == 0) return;
+
+        (uint256 p0, uint256 p1) = _payOut(a0, a1);
+
+        // The seat leaves EMPTY whatever happened above. Anything the position could not release on
+        // the spot — residual-scale, by the §E.4 bound — is retained as a claim on the DEPARTING
+        // holder rather than travelling with the rank to somebody who never owned it.
+        s.a0 = 0;
+        s.a1 = 0;
+        if (p0 != a0) {
+            pending0[from] += a0 - p0;
+            pendingTotal0 += a0 - p0;
+        }
+        if (p1 != a1) {
+            pending1[from] += a1 - p1;
+            pendingTotal1 += a1 - p1;
+        }
+
+        // Cursors are NOT touched, for the same reason `withdraw` does not touch them: emptying a
+        // seat can only make a cursor LAG, never lead, and a lagging cursor costs gas rather than
+        // money. INVARIANT C ("every seat below cursorX holds zero of X") survives trivially — the
+        // seat now holds zero of both.
+
+        _send(from, p0, p1);
     }
 
     /// @dev DUST POLICY F1, isolated behind a seam so the mandatory negative control can replace it
@@ -446,7 +598,7 @@ contract QueueHook is BaseHook, IUnlockCallback {
     ///      It credits NOBODY on purpose: the float is already credited to seats through
     ///      INVARIANT F, so moving it from `floatX` into the position changes no seat's ledger. That
     ///      is exactly why it is safe to let anyone call it — there is nothing to direct anywhere.
-    function sweepFloatIntoPosition() external returns (uint128 added) {
+    function sweepFloatIntoPosition() external nonReentrant returns (uint128 added) {
         if (!bound) revert PoolNotBound();
         added = _liquidityForAmounts(float0, float1);
         if (added == 0) return 0;
@@ -513,7 +665,15 @@ contract QueueHook is BaseHook, IUnlockCallback {
     // real `deposit()` / `withdraw()` in their place, per-seat and paying the caller.
 
     /// @dev The single path to `modifyLiquidity`. Returns the ACTUAL token magnitudes moved, read
-    ///      from the hook's own balance change — never the caller's requested amounts.
+    ///      from the hook's own balance change — never the caller's requested amounts, and not
+    ///      `callerDelta` either, because a fee-on-transfer currency delivers less than the delta
+    ///      says and the float must be credited what ARRIVED.
+    ///
+    ///      **That measurement has a precondition: nothing else may move the hook's balances inside
+    ///      the unlock.** `take` calls `IERC20.transfer`, so a pool currency can seize control right
+    ///      there; a reentrant withdrawal on a float-covered leg needs no second `unlock` and would
+    ///      execute in full. The `nonReentrant` guard on every external ledger path is what makes
+    ///      the precondition hold. See `QueueSeats.nonReentrant`.
     function _modifyPosition(int256 delta) internal returns (uint256 m0, uint256 m1) {
         bytes memory res = poolManager.unlock(abi.encode(delta));
         (m0, m1) = abi.decode(res, (uint256, uint256));
@@ -535,10 +695,6 @@ contract QueueHook is BaseHook, IUnlockCallback {
         tickUpper = tu;
         liquidity = liq;
         return _modifyPosition(int256(uint256(liq)));
-    }
-
-    function _pushSeat(uint256 a0, uint256 a1) internal {
-        q.push(Seat({a0: a0, a1: a1}));
     }
 
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
@@ -587,10 +743,6 @@ contract QueueHook is BaseHook, IUnlockCallback {
 
     // --------------------------------------------------------------------------------------- views
 
-    function seatCount() external view returns (uint256) {
-        return q.length;
-    }
-
     function seat(uint256 i) external view returns (uint256, uint256) {
         return (q[i].a0, q[i].a1);
     }
@@ -610,11 +762,15 @@ contract QueueHook is BaseHook, IUnlockCallback {
         return liquidity;
     }
 
-    function ownerOf(uint256 seatId) external view returns (address) {
-        return seatOwner[seatId];
-    }
-
     function floats() external view returns (uint256, uint256) {
         return (float0, float1);
+    }
+
+    function pendingOf(address holder) external view returns (uint256, uint256) {
+        return (pending0[holder], pending1[holder]);
+    }
+
+    function pendingTotals() external view returns (uint256, uint256) {
+        return (pendingTotal0, pendingTotal1);
     }
 }

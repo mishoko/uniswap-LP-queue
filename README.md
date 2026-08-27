@@ -41,17 +41,41 @@ It does not stop sandwich attacks. It does not reduce total LVR. It does not rec
 searchers. It **prices** adverse selection and routes it to whoever bears it cheapest. Full
 limitations are in [`BUSINESS.md`](BUSINESS.md) §9, stated at full strength.
 
-## Status
+## Status — Phases 0-3 built and green, 2026-08-27
 
-**Design validated. Build not started.** One design gap is open and measured, not glossed: the
-Phase 2 per-seat withdraw path in `PLAN.md` §B.7 does not work as specified (`PITFALLS.md` §5.5).
+```
+forge test        ->  77 passed, 0 failed
+forge lint src/   ->  clean
+49 mutations run on production code across Phases 1-3, ZERO survivors
+```
 
-The core allocation arithmetic is already proven exact to the wei, in both tokens, at a non-unit
-price, against a real `PoolManager` — with three negative controls that go red for the right reasons.
-See [`PROGRESS.md`](PROGRESS.md). **Open hazards are not hidden:** they are listed with their
-evidence grade in [`PITFALLS.md`](PITFALLS.md) §5 — including a MEASURED protocol-fee ledger hazard
-whose remedy is decided but unbuilt, and a MEASURED per-seat withdrawal problem that blocks the claim
-that the queue's face value is redeemable.
+Everything runs against **real v4 contracts deployed locally** — a real `PoolManager`,
+`PositionManager` and `V4SwapRouter`. Nothing is mocked; the rounding is v4's own.
+
+**What is proven.** Front-first allocation is exact to the wei in both tokens, at 1:4, 1:1000 and
+1000:1, at 18/6 and 6/18 decimals. The protocol fee is handled correctly at a maximum fee, with
+`lpFee == 0`, and against a foreign pool sharing a currency. Per-seat withdrawal works from a shared
+float in all six orderings. Rank is an ERC-6909 seat, supply one, and transferring it moves the rank
+while the capital goes back to the seller.
+
+**What is not.** These are stated at full strength, here rather than in a footnote:
+
+- **Rank is not yet *bought*.** The founding roster is fixed at deployment — an endowment, as an
+  exchange's founding memberships were. What is closed is that rank cannot be obtained by dusting,
+  by being early, or at any price the incumbent has not accepted. Continuous pricing is the
+  Harberger lease, which is the next phase.
+- **This is a one-sided market until then.** The honest answer to *"why would anyone hold seat 5?"*
+  is "they wouldn't" — the tail's compensation channel is rent, and rent is the next phase.
+- **The roster is bounded at 32 seats,** because a full sweep of a thousand positions cannot be paid
+  for. This is a professional venue, not a replacement for every Uniswap pool.
+- **One full-range position is thin.** ~1/200th the depth per dollar of a ±1% concentrated position.
+- **Face value is an upper bound, not a promise.** Each seat redeems to within a gap that grows
+  linearly at ~0.15 wei per swap and never compounds.
+
+**Open hazards are not hidden.** Every one is listed with its evidence grade in
+[`PITFALLS.md`](PITFALLS.md) §5, including the ones found by attacking our own work — a free
+denial-of-service in the transfer design this repo's own plan specified, and a seat-theft hole that
+71 passing tests did not see.
 
 ## Start here
 

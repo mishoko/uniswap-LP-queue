@@ -84,11 +84,24 @@ abstract contract QueueFixture is BaseTest {
         }
     }
 
-    function _deployHook(uint160 nonce) internal {
+    /// @dev Phase 3: the roster is fixed at construction, so the fixture must decide up front how
+    ///      many seats exist. `_syntheticRoster` names them; nothing can create one afterwards.
+    function _deployHook(uint160 nonce, uint256 nSeats) internal {
         address a = address(FLAGS ^ (nonce << 144));
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING), a);
+        deployCodeTo(
+            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING, _syntheticRoster(nSeats)), a
+        );
         hook = QueueHarness(a);
         _fundHook(a);
+    }
+
+    /// @dev Distinct, non-zero, deterministic holders for the allocator suites, which care about
+    ///      seat ARITHMETIC and not about who owns what.
+    function _syntheticRoster(uint256 n) internal pure returns (address[] memory r) {
+        r = new address[](n);
+        for (uint256 i; i < n; i++) {
+            r[i] = address(uint160(0x5EA700 + i));
+        }
     }
 
     function _fundHook(address a) internal {
@@ -267,10 +280,25 @@ abstract contract QueueFixture is BaseTest {
     ///      holds tokens it did not receive through `deposit`, a float-accounting bug simply pays
     ///      out of the surplus and stays invisible. Every Phase 2 assertion depends on the hook
     ///      owning exactly what the queue put in.
-    function _deployHookUnfunded(uint160 nonce) internal {
+    function _deployHookUnfunded(uint160 nonce, address[] memory roster) internal {
         address a = address(FLAGS ^ (nonce << 144));
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING), a);
+        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING, roster), a);
         hook = QueueHarness(a);
+    }
+
+    function _roster(address a) internal pure returns (address[] memory r) {
+        r = new address[](1);
+        r[0] = a;
+    }
+
+    function _roster(address a, address b) internal pure returns (address[] memory r) {
+        r = new address[](2);
+        (r[0], r[1]) = (a, b);
+    }
+
+    function _roster(address a, address b, address c_) internal pure returns (address[] memory r) {
+        r = new address[](3);
+        (r[0], r[1], r[2]) = (a, b, c_);
     }
 
     /// @dev Initialize the pool only. `afterInitialize` binds the key inside the hook.
@@ -279,6 +307,14 @@ abstract contract QueueFixture is BaseTest {
         poolManager.initialize(k, startPrice);
         delete ref0;
         delete ref1;
+        // Every seat exists from deployment, empty. The witness must have the same shape as the
+        // queue from the first block, or a seat that is skipped for being empty in one and absent
+        // in the other would agree by accident.
+        uint256 n = hook.seatCount();
+        for (uint256 i; i < n; i++) {
+            ref0.push(0);
+            ref1.push(0);
+        }
         refC0 = 0;
         refC1 = 0;
         expT0 = 0;
@@ -294,26 +330,45 @@ abstract contract QueueFixture is BaseTest {
         vm.stopPrank();
     }
 
-    function _deposit(address who, uint256 a0, uint256 a1) internal returns (uint256 seatId) {
+    /// @dev Fund a seat its holder ALREADY owns. Phase 3 deleted the arrival-order `deposit()`
+    ///      that used to create the seat as a side effect, so the seat id is an input now, not an
+    ///      output — which is exactly the property that made the head dust-griefable.
+    function _addTo(address who, uint256 seatId, uint256 a0, uint256 a1) internal {
         _fund(who, a0, a1);
         vm.prank(who);
-        seatId = hook.deposit(a0, a1);
+        hook.addToSeat(seatId, a0, a1);
         // The seat is credited the FULL amount: what the position consumed plus what became float.
-        ref0.push(a0);
-        ref1.push(a1);
+        ref0[seatId] += a0;
+        ref1[seatId] += a1;
         expT0 += a0;
         expT1 += a1;
+    }
+
+    /// @dev Re-base the witness after a seat evacuation. A transfer empties the seat OUTRIGHT —
+    ///      the dust clamp changes what was PAID, never what the seat is left holding — so the
+    ///      adjustment is exact and does not need to read the contract's arithmetic back. Cursors
+    ///      are deliberately left alone, because evacuation does not move them.
+    function _evacuateRef(uint256 seatId) internal {
+        expT0 -= ref0[seatId];
+        expT1 -= ref1[seatId];
+        ref0[seatId] = 0;
+        ref1[seatId] = 0;
     }
 
     /// @dev INVARIANT F: sum(q[i].aX) == what the position would release in X, PLUS floatX.
     ///      This is the aggregate identity that makes paying seats first-come-first-served out of a
     ///      SHARED float safe. Asserted non-destructively from the live position.
+    ///      Phase 3 adds `pendingTotalX` to the left-hand side. A seat evacuation pays the departing
+    ///      holder immediately, so the term is normally zero; it is non-zero only for whatever the
+    ///      position could not release on the spot. Leaving it out would let a whole class of
+    ///      evacuation bug hide behind the residual tolerance.
     function _checkInvariantF(string memory tag, uint256 tol) internal view {
         (uint256 t0, uint256 t1) = hook.totals();
         (uint256 f0, uint256 f1) = hook.floats();
+        (uint256 w0, uint256 w1) = hook.pendingTotals();
         (uint256 p0, uint256 p1) = _positionValue();
-        assertApproxEqAbs(t0, p0 + f0, tol, string.concat(tag, ": INVARIANT F token0"));
-        assertApproxEqAbs(t1, p1 + f1, tol, string.concat(tag, ": INVARIANT F token1"));
+        assertApproxEqAbs(t0 + w0, p0 + f0, tol, string.concat(tag, ": INVARIANT F token0"));
+        assertApproxEqAbs(t1 + w1, p1 + f1, tol, string.concat(tag, ": INVARIANT F token1"));
     }
 
     /// @dev What the position would actually hand back: PRINCIPAL **plus UNCOLLECTED LP FEES**.

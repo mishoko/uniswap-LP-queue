@@ -19,7 +19,7 @@ contract DustTest is QueueFixture {
         vm.roll(100);
         startPrice = Constants.SQRT_PRICE_1_4;
         _deployTokens();
-        _deployHook(0x8001);
+        _deployHook(0x8001, 3);
         uint256[] memory bps = new uint256[](3);
         (bps[0], bps[1], bps[2]) = (400, 600, 9000);
         _open(bps);

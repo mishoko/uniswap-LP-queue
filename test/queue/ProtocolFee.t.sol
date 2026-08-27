@@ -32,7 +32,7 @@ contract ProtocolFeeTest is QueueFixture {
         vm.roll(100);
         startPrice = Constants.SQRT_PRICE_1_4;
         _deployTokens();
-        _deployHook(0x2001);
+        _deployHook(0x2001, 3);
     }
 
     function _bps() internal pure returns (uint256[] memory bps) {
@@ -46,7 +46,9 @@ contract ProtocolFeeTest is QueueFixture {
         address a = address(FLAGS ^ (uint160(0x9009) << 144));
         // Deployed for ITS OWN pool: the hook now fixes its pool at construction, so a foreign pool
         // on a different fee tier needs a hook constructed for that fee tier.
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, poolFee, SPACING), a);
+        deployCodeTo(
+            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, poolFee, SPACING, _syntheticRoster(1)), a
+        );
         foreignHook = QueueHarness(a);
         _fundHook(a);
 
@@ -206,7 +208,9 @@ contract ProtocolFeeTest is QueueFixture {
     function test_5_3_lpFeeZeroUnderProtocolFee() public {
         // A zero-lpFee pool needs a hook constructed for a zero-lpFee pool.
         address z = address(FLAGS ^ (uint160(0x2009) << 144));
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, uint24(0), SPACING), z);
+        deployCodeTo(
+            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, uint24(0), SPACING, _syntheticRoster(3)), z
+        );
         hook = QueueHarness(z);
         _fundHook(z);
         k = PoolKey({currency0: c0, currency1: c1, fee: 0, tickSpacing: SPACING, hooks: IHooks(address(hook))});

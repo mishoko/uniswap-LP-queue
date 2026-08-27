@@ -25,17 +25,29 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 | **0** | Harness + reproduce the reference spike | ✅ **COMPLETE** 2026-08-27 | §D.2 PASS | 9/9, every §D.2 number reproduced **exactly** |
 | **1** | Allocator core | ✅ **COMPLETE** 2026-08-27 | §D.3 PASS | all 12 criteria; 5 negative controls red; 9 mutations red |
 | **2** | Deposit / withdraw / dust + float | ✅ **COMPLETE** 2026-08-27 | §D.4 PASS | all criteria; 11 mutations red, **0 survivors** |
-| 3 | ERC-6909 rank token ◀ **SUBMITTABLE** | ⬜ NOT STARTED | §D.5 | — |
+| **3** | ERC-6909 rank token ◀ **SUBMITTABLE** | ✅ **COMPLETE** 2026-08-27 | §D.5 PASS | all 10 criteria; 5 negative controls red; **29 mutations red, 0 survivors** |
 | 4 | Harberger rent variant | ⬜ NOT STARTED | §D.6 | — |
 | 5 | Gas + scale | ⬜ NOT STARTED | §D.7 | — |
 | 6 | Adversarial + invariant campaign | ⬜ NOT STARTED | §D.8 | — |
 | 7 | Testnet + demo + video | ⬜ NOT STARTED | — | — |
 
-**Whole suite as of 2026-08-27: `forge test` → 59 passed, 0 failed. `forge lint src/` → clean.**
-**20 production mutations run across Phases 1–2, zero survivors.**
+**Whole suite as of 2026-08-27: `forge test` → 77 passed, 0 failed. `forge lint src/` → clean.**
+**49 production mutations run across Phases 1–3, zero survivors.**
 
-**The one thing blocking a shippable product:** rank is still granted by ARRIVAL ORDER (PITFALLS
-5.8). One wei of each token buys the head seat. Phase 3 closes it.
+**Rank-by-arrival-order is CLOSED.** There is no runtime path that creates a seat; the roster is
+minted once, in the constructor, and a seat can only change hands by transfer. Dusting the head
+buys nothing at any price.
+
+**What is honestly still open, and must be said out loud rather than glossed:**
+
+1. **The FOUNDING roster is an endowment, not a purchase.** Whoever deploys chooses the initial
+   holders — as an exchange'"'"'s founding memberships were granted and then traded. Rank is only
+   *bought* on a secondary market, which PITFALLS 5.11 says does not exist yet. **Phase 4'"'"'s
+   Harberger lease is what turns "who holds a seat" from a deployment decision into a continuously
+   priced market outcome, and it is the reason Phase 4 is not optional for the pitch to be true.**
+2. **Phase 3 alone is a ONE-SIDED MARKET** (PITFALLS 5.19). The honest answer to *"why would anyone
+   hold seat 5?"* is still "they wouldn'"'"'t". Phase 4 rent is the tail'"'"'s compensation channel.
+3. **Rank-then-run** (PITFALLS 5.9) is open under plain transferable rank. Phase 4 closes it.
 
 ---
 
@@ -765,6 +777,17 @@ made** — not in the README, not in the video, not in a comment.
 
 ### Rank moves; capital does not
 
+> ⚠️ **CORRECTED 2026-08-27 — THE RULE BELOW IS RIGHT AND ITS SPECIFIED IMPLEMENTATION WAS WRONG.**
+> A ledger-only evacuation is a **free denial of the swap path**, executed and reproduced. See the
+> correction immediately after this block; `PITFALLS 5.51` carries the hazard row. What ships is:
+>
+> > **On any transfer of a seat token, the seat's `(a0, a1)` are PAID OUT to the sender through the
+> > same float-and-burn path as `withdraw`, and the seat arrives at the recipient empty. Only what
+> > the position could not release on the spot — residual-scale — is retained as a `pendingWithdraw`
+> > claim on the sender.**
+
+The rule as originally written, kept because the reasoning below is still the reasoning:
+
 > **On any transfer of a seat token, the seat's `(a0, a1)` are evacuated to the sender's
 > `pendingWithdraw` balances, and the seat arrives at the recipient empty.**
 
@@ -782,6 +805,41 @@ This is the single most important rule in Phase 3 and it is what makes Phase 4 s
 balances. **You must override both** to call `_evacuate(id, from)` first. Forgetting to override one
 of the two is the classic form of this bug — `transfer` is guarded, `transferFrom` is not. There is a
 mandatory negative control for exactly this in §D.6.
+
+### ⚠️ THE CORRECTION — why the ledger-only evacuation could not ship
+
+**Found by building it and attacking it, 2026-08-27. Executed in
+`test_3_11_negativeControl_ledgerOnlyEvacuationBricksTheSwapPath`.**
+
+The allocator sources every swap's output **from the seats**, while the swap's **size** is set by the
+**position**. Moving a seat's ledger into `pendingWithdraw` and leaving the position untouched drops
+`Σ q[i].aX` without dropping the depth the pool quotes — so the pool goes on offering liquidity the
+queue can no longer source, and `_allocate` reverts `QueueUnderflow`.
+
+That is not a corner case. `transfer(self, id, 1)` is legal and costs only gas. **A tail holder
+sitting on most of one token can make every swap above the surviving balance revert, for as long as
+they like, and undo it whenever they want** — a free, repeatable denial of the pool's entire purpose,
+handed to any single seat holder.
+
+**The fix is to make the capital actually leave.** Paying it out burns the matching liquidity, so the
+position falls in step with the ledger and the identity becomes
+`Σ q[i].aX + pendingTotalX == redeemable X + floatX`, which is INVARIANT F with one new term that is
+zero except at residual scale.
+
+**Two alternatives were considered and rejected:**
+
+- **Refuse to transfer a funded seat** (make the holder withdraw first). Simplest, no new state — and
+  **incompatible with Phase 4**: a Harberger buyout must be able to take the seat at the incumbent's
+  own price at any time, so if a funded seat could not move, every incumbent would hold a permanent
+  veto over their own buyout by keeping one wei in the seat.
+- **Burn the position into the float on evacuation** without paying out. Keeps the ledger and the
+  position in step, but strands value: the sweep is bounded by the smaller leg (PITFALLS 5.43), so
+  transfer-churn would ratchet depth out of the position permanently.
+
+**Why the shipped path cannot be blocked** — which is what Phase 4 needs from it: the only external
+calls are `modifyLiquidity` on PoolManager and `transfer` on the pool's own currencies. A plain
+ERC-20 hands the recipient no control, so a departing holder cannot refuse payment to stop a buyout,
+and the dust policy clamps rather than reverting when the position is short.
 
 ### Where seats come from — **rank must be BOUGHT or HARBERGER-HELD, NEVER GRANTED**
 
@@ -853,6 +911,11 @@ professional market-making venue, not a replacement for every Uniswap pool.
 
 Recommended default: **`MAX_SEATS = 32`.** Round, comfortably inside a 300k budget with headroom for
 the deposit/withdraw path, and large enough that the queue is interesting. Record the choice.
+
+✅ **TAKEN 2026-08-27. `MAX_SEATS = 32`, a `public constant` on `QueueSeats`,** enforced in the
+constructor (`RosterTooLarge`) and asserted at exactly 32 and at 33 (`test_3_6`). The gas regression
+test'"'"'s top depth was moved from 50 to 32 at the same time, because 32 is now the real worst case
+rather than a hypothetical one — a head-only swap stays flat across 1 -> 8 -> 20 -> 32 seats.
 
 ## B.10 The Harberger variant — **DESIGN, Phase 4**
 
@@ -1148,16 +1211,33 @@ rank is a thing you can hold, transfer and price. **This is the phase that makes
 
 | # | Must be true |
 |---|---|
-| 3.1 | Total supply of every seat id is exactly 1, always, under every operation |
-| 3.2 | Transferring a seat moves **rank only**; the sender's capital lands in `pendingWithdraw` and is fully recoverable |
-| 3.3 | **3.2 holds through `transferFrom` and through operator-approved transfers, not just `transfer`** |
-| 3.4 | The new holder's fills go to the transferred seat's index, immediately, on the very next swap |
-| 3.5 | A seat cannot be created by depositing, by being early, or by any path other than the explicit roster allocation |
-| 3.6 | Seat count never exceeds `MAX_SEATS` |
-| 3.7 | An empty seat is transferable and its rank is preserved |
-| 3.8 | Negative control: an implementation that overrides only `transfer` and not `transferFrom` goes **red with a capital-escaped assertion** |
-| 3.9 | Negative control: an implementation that lets a deposit mint a seat goes **red** |
-| 3.10 | Every Phase 1 and Phase 2 exit criterion is **still** true (`forge test` full suite) |
+| ✅ 3.1 | Total supply of every seat id is exactly 1, always, under every operation — **structural**: ownership is one `address` slot per id, so there is no storage in which "two" can be written (`test_3_1`) |
+| ✅ 3.2 | Transferring a seat moves **rank only**. ⚠️ **AMENDED — see the correction in §B.8.** The capital is PAID OUT to the sender, not parked in `pendingWithdraw`; only what the position could not release on the spot is retained as a pending claim, and that is fully recoverable (`test_3_2`, `test_3_14`, `test_3_15`) |
+| ✅ 3.3 | Holds through `transferFrom`, through an allowance, and through an operator (`test_3_3`) |
+| ✅ 3.4 | The new holder's fills go to the transferred seat's index on the very next swap (`test_3_4`) |
+| ✅ 3.5 | A seat cannot be created by depositing, by being early, or by any runtime path at all — `deposit()` was deleted, not guarded (`test_3_5`) |
+| ✅ 3.6 | Seat count never exceeds `MAX_SEATS`; an empty roster and a zero holder are both refused by name (`test_3_6`) |
+| ✅ 3.7 | An empty seat is transferable, keeps its rank, moves no tokens, and does not open the position (`test_3_7`, `test_3_16`) |
+| ✅ 3.8 | Negative control: the forgotten-`transferFrom` variant goes **red on "capital escaped with the rank through transferFrom"** (`test_3_8`) |
+| ✅ 3.9 | Negative control: a variant granting rank by deposit is shown minting a seat for two wei (`test_3_9`) |
+| ✅ 3.10 | Every Phase 1 and Phase 2 exit criterion still true — `forge test` → **77 passed, 0 failed** |
+| ✅ 3.11 | **ADDED.** Negative control: §B.8's own ledger-only evacuation **bricks the swap path** (`test_3_11`; PITFALLS 5.51) |
+| ✅ 3.12 | **ADDED.** Negative control: the reentrancy window is reachable and corrupts `unlockCallback`'"'"'s measurement without the guard (`test_3_12`; PITFALLS 5.55) |
+
+### ✅ PHASE 3 COMPLETE — 2026-08-27
+
+`forge test` **77 passed / 0 failed**, `forge lint src/` clean, **29 mutations run on the Phase 3
+code, ZERO survivors** (both copies of every direction-symmetric rule mutated separately).
+
+**Built:** `src/queue/QueueSeats.sol` (ERC-6909 over a single `seatHolder` source of truth, supply-1
+by construction), a founding roster fixed in the constructor, `_onSeatTransfer` evacuation, per-holder
+`pendingWithdraw` for the residual, `claimPending`, and a transient reentrancy guard on every external
+ledger path. `deposit()`, `seatOwner` and `_pushSeat` were **deleted**.
+
+**Four defects found by attacking it, all fixed:** the §B.8 evacuation DoS (5.51), a seat-theft
+asymmetry between `transfer` and `transferFrom` (5.52), a bound-shaped assertion that a defect could
+pass more comfortably than the real code (5.53), and an entire `pending` path that was dead code
+under test while being asserted about (5.54).
 
 **At the end of this phase the project is submittable.** If the deadline is close, stop here, write
 the README and video (Phase 7), and state plainly what is unbuilt. A correct, tested,
@@ -1616,15 +1696,25 @@ forge test --match-path "test/queue/Rank.t.sol" -vv
 
 | Test | Assertion |
 |---|---|
-| `test_seatSupplyIsAlwaysExactlyOne` | for every id, under every operation |
-| `test_transferMovesRankNotCapital` | sender's `pendingWithdraw` gains exactly the seat's old balances; recipient's seat is empty |
-| **`test_transferFromAlsoMovesRankNotCapital`** | **the same, through `transferFrom` and through an operator** |
-| `test_fillsFollowTheNewHolderImmediately` | the very next swap fills the transferred seat's index for the new holder |
-| `test_seatCannotBeMintedByDepositing` | reverts |
-| `test_seatCountNeverExceedsMax` | reverts at `MAX_SEATS + 1` |
-| `test_emptySeatIsTransferableAndKeepsRank` | index unchanged |
-| **`test_negativeControl_transferFromNotOverridden`** | a variant overriding only `transfer` → **red**, reason asserts capital escaped |
-| **`test_negativeControl_depositMintsASeat`** | a variant granting rank by deposit → **red** |
+✅ **GATE 3 PASSED 2026-08-27 — 19/19 in `Rank.t.sol`, 77/77 overall, 29 mutations red, 0 survivors.**
+
+| Test | Assertion |
+|---|---|
+| ✅ `test_3_1_seatSupplyIsAlwaysExactlyOne` | for every id, under every operation — and structurally, since supply lives in one `address` slot |
+| ✅ `test_3_2_transferMovesRankNotCapital` | sender is made whole in tokens (`paid + retained == the seat`); recipient's seat is empty |
+| ✅ **`test_3_3_transferFromAlsoMovesRankNotCapital`** | **the same, through an allowance and through an operator**; the allowance is spent |
+| ✅ **`test_3_2b` / `test_3_3c`** | **ADDED — a stranger cannot move a seat through EITHER entry point.** Both were mutation survivors and both were seat theft (PITFALLS 5.52) |
+| ✅ `test_3_4_fillsFollowTheNewHolderImmediately` | the very next swap fills the transferred seat's index for the new holder |
+| ✅ `test_3_5_seatCannotBeMintedByDepositing` | `deposit()` does not exist; funding another holder's seat, or a seat id that does not exist, reverts `NotSeatOwner` |
+| ✅ `test_3_6_seatCountNeverExceedsMax` | 32 deploys, 33 reverts `RosterTooLarge`, 0 reverts `EmptyRoster`, a zero holder reverts `ZeroHolder` |
+| ✅ `test_3_7_emptySeatIsTransferableAndKeepsRank` | index unchanged, no tokens moved |
+| ✅ `test_3_16_transferringAnEmptySeatDoesNotOpenThePosition` | **ADDED** — pure-rank trading must not touch the position. 17,939 gas under `vm.cool()`; 23,905 without the early return |
+| ✅ `test_3_13_aClampedWithdrawalDebitsOnlyWhatWasPaid` | **ADDED** — the seat is debited `paid`, exactly, never the request (PITFALLS 5.53) |
+| ✅ `test_3_14` / `test_3_15` | **ADDED** — the residual retained by an unpayable evacuation is the SELLER's, is claimable, is guarded, and INVARIANT F is asserted while it is non-zero (PITFALLS 5.54) |
+| ✅ **`test_3_8_negativeControl_transferFromNotOverridden`** | a variant overriding only `transfer` → **red on "capital escaped with the rank through transferFrom"** |
+| ✅ **`test_3_9_negativeControl_depositMintsASeat`** | a variant granting rank by deposit mints a seat for two wei |
+| ✅ **`test_3_11_negativeControl_ledgerOnlyEvacuationBricksTheSwapPath`** | **ADDED — §B.8's own specified design, executed: the swap path bricks** (PITFALLS 5.51) |
+| ✅ **`test_3_12_negativeControl_reentrantEvacuationCorruptsTheUnlockMeasurement`** | **ADDED** — the reentrancy window is reachable and PoolManager's lock does not close it (PITFALLS 5.55) |
 
 The `transferFrom` control is not paranoia. Overriding `transfer` and forgetting `transferFrom` is
 *the* canonical way this bug ships, because the happy-path test only ever calls `transfer`.

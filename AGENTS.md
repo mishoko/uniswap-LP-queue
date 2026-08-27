@@ -130,7 +130,7 @@ is real, the swaps are real, the rounding is v4's own.
 |---|---|
 | `test/utils/Deployers.sol`, `BaseTest.sol` | Copied from the archive. Deploy the real v4 stack. **Do not edit.** |
 | `test/queue/QueueFixture.sol` | The shared abstract fixture: token deployment at chosen decimals, pool setup, `_swap` (measures PoolManager's own balances net of protocol fees), the **independently written reference allocator**, and the INVARIANT C / INVARIANT F assertions |
-| `test/queue/QueueHarness.sol` | **TEST-ONLY.** Adds `seed()` and `redeemAll()` — both were once on the production hook and both were real holes. It ADDS entry points and OVERRIDES NOTHING, so the code under test is still exactly production |
+| `test/queue/QueueHarness.sol` | **TEST-ONLY.** Adds `seed()`, `redeemAll()` and `seatArraySlot()`. The first two were once on the production hook and both were real holes. It ADDS entry points and OVERRIDES NOTHING, so the code under test is still exactly production. `seed()` funds the FOUNDING ROSTER; it cannot create a seat, because production cannot |
 | `test/queue/*.t.sol` | The suites |
 
 ### The six kinds of test, and what each is for
@@ -161,17 +161,34 @@ and there are exactly three honest responses:
 
 Widening a tolerance until the mutation is "caught" is none of these.
 
-### The three rules this session paid for
+### The rules the build phases paid for
 
-- **Mutate every direction-symmetric rule SEPARATELY.** A rule that appears once per direction can
-  be perfectly covered in one direction and covered by *nothing* in the other. This has now happened
-  **twice, in two different functions** (PITFALLS 5.37, 5.50).
+- **Mutate every copy of a rule SEPARATELY — per direction, per branch, and per ENTRY POINT.** A
+  rule that appears twice can be perfectly covered in one place and covered by *nothing* in the
+  other. This has now happened **four times, in four different functions** (PITFALLS 5.37, 5.50,
+  and 5.52 twice). The fourth was seat theft, not a lost wei: `transferFrom` had a test, `transfer`
+  had none, and removing `transfer`'s ownership check survived all 71 tests.
+- **A BOUND IN THE RIGHT DIRECTION IS NOT A CORRECTNESS ASSERTION.** `assertLt(leftover, 1_000)` is
+  blind to every defect that moves `leftover` the same way the fix does — one such mutant passed
+  *more comfortably* than the real code. **Assert the identity (`after == before - paid`), not the
+  magnitude** (PITFALLS 5.53).
+- **Before believing a path is covered, check that it was ENTERED.** An entire `pendingWithdraw`
+  path was dead code under test while a test was busy asserting things about it, all of which held
+  vacuously at zero. Make the test say so: `assertTrue(x != 0, "nothing happened: this test proves
+  nothing")` (PITFALLS 5.54).
 - **Assert on the CONTRACT's numbers, never on the fixture's own measurements.** Comparing two
   fixture-side quantities is tautological and will pass against a broken implementation
   (PITFALLS 5.34).
 - **Ask what the fixture cannot represent before believing any measurement.** A single-pool fixture
   cannot see a global counter being corrupted; a principal-only position valuation cannot see
   accrued fees. Both produced confident, wrong numbers here (PITFALLS 5.27, 5.46).
+- **Never let a test hardcode a storage layout.** `_seatSlot` assumed `q` sat at slot 0; a new base
+  contract put three mappings in front of it, and the test would have poked an unrelated slot and
+  passed for the wrong reason. Read the slot from the contract.
+- **Write down what you PROVED, not what the guard is for.** A first draft of the reentrancy guard's
+  comment described a double-payment that could not be reproduced. The window is real and the
+  corruption is real; the theft was not demonstrated, and the comment now says exactly that
+  (PITFALLS 5.55).
 
 ---
 

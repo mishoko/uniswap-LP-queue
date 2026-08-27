@@ -11,7 +11,9 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 /// @dev THE MANDATORY DUST CONTROL (PLAN §D.4). Dust policy F1 replaced by face-value payment.
 contract FaceValueQueueHook is QueueHarness {
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp) QueueHarness(pm, c0_, c1_, f, sp) {}
+    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster)
+        QueueHarness(pm, c0_, c1_, f, sp, roster)
+    {}
 
     error FloatShort(uint256 want, uint256 have);
 
@@ -43,7 +45,10 @@ contract ResidualTest is QueueFixture {
     }
 
     function _seedThree() internal returns (uint256, uint256, uint256) {
-        return (_deposit(ALICE, 40e18, 10e18), _deposit(BOB, 60e18, 15e18), _deposit(CARL, 900e18, 225e18));
+        _addTo(ALICE, 0, 40e18, 10e18);
+        _addTo(BOB, 1, 60e18, 15e18);
+        _addTo(CARL, 2, 900e18, 225e18);
+        return (0, 1, 2);
     }
 
     function _residual() internal view returns (uint256 r0, uint256 r1) {
@@ -58,7 +63,7 @@ contract ResidualTest is QueueFixture {
     ///      LINEARLY in swap count. A compounding residual would eventually be real money; a linear
     ///      one at ~7 wei per swap needs ~10^17 swaps to cost a single token.
     function test_2_13_residualIsLinearNotCompounding() public {
-        _deployHookUnfunded(0x6001);
+        _deployHookUnfunded(0x6001, _roster(ALICE, BOB, CARL));
         _initPool();
         _seedThree();
 
@@ -90,7 +95,11 @@ contract ResidualTest is QueueFixture {
     ///      anything at all — the bug is a few hundred wei and is invisible unless hunted.
     function test_2_14_negativeControl_faceValueWithdrawLeavesTheLastWithdrawerShort() public {
         address a = address(FLAGS ^ (uint160(0x6002) << 144));
-        deployCodeTo("Residual.t.sol:FaceValueQueueHook", abi.encode(poolManager, c0, c1, FEE, SPACING), a);
+        deployCodeTo(
+            "Residual.t.sol:FaceValueQueueHook",
+            abi.encode(poolManager, c0, c1, FEE, SPACING, _roster(ALICE, BOB, CARL)),
+            a
+        );
         hook = QueueHarness(a);
         _initPool();
         (uint256 i0, uint256 i1, uint256 i2) = _seedThree();
@@ -120,7 +129,7 @@ contract ResidualTest is QueueFixture {
 
     /// @dev The positive half: with F1 in place, the identical scenario pays everyone.
     function test_2_15_positiveControl_F1DrainsEveryone() public {
-        _deployHookUnfunded(0x6003);
+        _deployHookUnfunded(0x6003, _roster(ALICE, BOB, CARL));
         _initPool();
         (uint256 i0, uint256 i1, uint256 i2) = _seedThree();
 
@@ -148,13 +157,13 @@ contract ResidualTest is QueueFixture {
     ///      other leg arrives and `sweepFloatIntoPosition` can pair it up.
     ///      This is a real consequence of ABSORB-over-REFUND and it must not be a surprise.
     function test_2_16_lopsidedDepositBecomesFloatNotDepth() public {
-        _deployHookUnfunded(0x6004);
+        _deployHookUnfunded(0x6004, _roster(ALICE, BOB));
         _initPool();
-        _deposit(ALICE, 1000e18, 250e18); // on-ratio, establishes the pool
+        _addTo(ALICE, 0, 1000e18, 250e18); // on-ratio, establishes the pool
         uint128 liqBefore = hook.positionLiquidity();
 
         // Wildly off-ratio: lots of token0, almost no token1.
-        _deposit(BOB, 1000e18, 1e6);
+        _addTo(BOB, 1, 1000e18, 1e6);
         uint128 liqAfter = hook.positionLiquidity();
 
         (uint256 f0,) = hook.floats();
@@ -178,10 +187,10 @@ contract ResidualTest is QueueFixture {
     ///      at all. That was too strong: with 1e6 wei of the minority leg it still added 41 units of
     ///      liquidity. Asserting the real behaviour, not the tidier claim.)
     function test_2_17_sweepIsBoundedByTheSmallerLeg() public {
-        _deployHookUnfunded(0x6005);
+        _deployHookUnfunded(0x6005, _roster(ALICE, BOB));
         _initPool();
-        _deposit(ALICE, 1000e18, 250e18);
-        _deposit(BOB, 1000e18, 1e6); // a large token0 float against a sliver of token1
+        _addTo(ALICE, 0, 1000e18, 250e18);
+        _addTo(BOB, 1, 1000e18, 1e6); // a large token0 float against a sliver of token1
 
         (uint256 f0Before, uint256 f1Before) = hook.floats();
         assertGt(f0Before, 900e18, "no lopsided float was created");

@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {QueueFixture} from "./QueueFixture.sol";
 import {QueueHarness} from "./QueueHarness.sol";
 import {QueueHook} from "../../src/queue/QueueHook.sol";
+import {QueueSeats} from "../../src/queue/QueueSeats.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -47,14 +48,17 @@ contract DepositTest is QueueFixture {
         dec0 = 18;
         dec1 = 6; // LAW 1: non-unit price AND asymmetric decimals
         _deployTokens();
-        _deployHookUnfunded(0x4001);
+        _deployHookUnfunded(0x4001, _roster(ALICE, BOB, CARL));
         _initPool();
     }
 
+    /// @dev The founding roster is (ALICE, BOB, CARL) at ranks 0, 1, 2 — fixed at deployment, not
+    ///      earned by depositing first. Funding a seat no longer creates one.
     function _three() internal returns (uint256 a, uint256 b, uint256 c) {
-        a = _deposit(ALICE, 40e18, 10e18);
-        b = _deposit(BOB, 60e18, 15e18);
-        c = _deposit(CARL, 900e18, 225e18);
+        (a, b, c) = (0, 1, 2);
+        _addTo(ALICE, a, 40e18, 10e18);
+        _addTo(BOB, b, 60e18, 15e18);
+        _addTo(CARL, c, 900e18, 225e18);
     }
 
     // ================================================== deposit credits ACTUAL, absorbs the rest
@@ -64,11 +68,12 @@ contract DepositTest is QueueFixture {
     ///      So the assertion is not "the refund arrived" but "the hook kept the remainder, the seat
     ///      was credited for it, and INVARIANT F still balances".
     function test_2_1_depositCreditsActualAndAbsorbsTheRemainder() public {
+        uint256 id = 0;
         _fund(ALICE, 40e18, 10e18);
         vm.prank(ALICE);
-        uint256 id = hook.deposit(40e18, 10e18);
-        ref0.push(40e18);
-        ref1.push(10e6);
+        hook.addToSeat(id, 40e18, 10e18);
+        ref0[id] += 40e18;
+        ref1[id] += 10e6;
         expT0 += 40e18;
         expT1 += 10e6;
 
@@ -107,7 +112,7 @@ contract DepositTest is QueueFixture {
     /// @dev A fresh hook and pool per permutation. (Re-running `setUp()` inside the loop redeploys
     ///      every v4 artifact six times and exceeds the block gas limit.)
     function _runOrdering(uint8[3] memory order, uint160 nonce) internal {
-        _deployHookUnfunded(nonce);
+        _deployHookUnfunded(nonce, _roster(ALICE, BOB, CARL));
         _initPool();
         (uint256 i0, uint256 i1, uint256 i2) = _three();
         uint256[3] memory ids = [i0, i1, i2];
@@ -204,7 +209,7 @@ contract DepositTest is QueueFixture {
         (uint256 id,,) = _three();
         (uint256 a0, uint256 a1) = hook.seat(id);
         vm.prank(BOB);
-        vm.expectRevert(abi.encodeWithSelector(QueueHook.NotSeatOwner.selector, id, BOB));
+        vm.expectRevert(abi.encodeWithSelector(QueueSeats.NotSeatOwner.selector, id, BOB));
         hook.withdraw(id, a0, a1);
     }
 
@@ -388,7 +393,7 @@ contract DepositTest is QueueFixture {
     ///      ask for one wei more than went in. This fuzz is what makes that line provable rather
     ///      than decorative — it was previously untested.
     function testFuzz_2_19_depositNeverChargesMoreThanSupplied(uint96 raw0, uint96 raw1) public {
-        _deposit(ALICE, 1000e18, 250e18); // establish the pool on-ratio
+        _addTo(ALICE, 0, 1000e18, 250e18); // establish the pool on-ratio
 
         uint256 a0 = bound(uint256(raw0), 1, 1e24);
         uint256 a1 = bound(uint256(raw1), 1, 1e24);
@@ -399,7 +404,7 @@ contract DepositTest is QueueFixture {
 
         _fund(BOB, a0, a1);
         vm.prank(BOB);
-        hook.deposit(a0, a1);
+        hook.addToSeat(1, a0, a1);
 
         // Every token the hook holds outside the position is float, and float only ever grows by
         // what was NOT consumed. If the charge exceeded the supply, one of these goes negative.
@@ -417,7 +422,9 @@ contract DepositTest is QueueFixture {
     ///      binding is permanent and there is no admin to undo it.
     function test_2_20_cannotBindTheHookToAForeignPool() public {
         address a = address(FLAGS ^ (uint160(0x4099) << 144));
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING), a);
+        deployCodeTo(
+            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING, _roster(ALICE, BOB, CARL)), a
+        );
         QueueHarness fresh = QueueHarness(a);
 
         // An attacker tries to bind it to the same pair on a different fee tier.
@@ -439,18 +446,5 @@ contract DepositTest is QueueFixture {
             PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(hook))});
         vm.expectRevert();
         poolManager.initialize(second, startPrice);
-    }
-
-    // ========================================================== KNOWN HOLE, carried deliberately
-
-    /// @dev PITFALLS 5.8 / PLAN §B.8: Phase 2 grants rank by ARRIVAL ORDER, which is NOT SHIPPABLE.
-    ///      Rank must be BOUGHT or Harberger-held; while it is granted, the head is dust-griefable.
-    ///      This test exists so the hole is asserted rather than merely written down, and it must
-    ///      be DELETED in Phase 3 when the ERC-6909 rank token replaces `seatOwner`.
-    function test_KNOWN_HOLE_rankIsGrantedByArrivalOrder() public {
-        uint256 first = _deposit(ALICE, 1, 1);
-        assertEq(first, 0, "the first depositor did not receive the head seat");
-        assertEq(hook.ownerOf(0), ALICE, "head seat not owned by the first depositor");
-        // One wei of each token bought the most valuable position in the queue. That is the hole.
     }
 }

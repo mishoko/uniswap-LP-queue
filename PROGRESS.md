@@ -14,7 +14,7 @@ Newest entry first. Never delete an entry — supersede it.
 | 0 | Harness + reproduce the reference spike | **COMPLETE 2026-08-27** | **YES** — 9/9, every §D.2 number exact, +2 fresh mutations red |
 | 1 | Allocator core | **COMPLETE 2026-08-27** | **YES** — 27 tests, all 12 exit criteria met, 9 production mutations red |
 | 2 | Deposit / withdraw + redemption-dust fix | **COMPLETE 2026-08-27** | **YES** — 59 tests, all §D.4 criteria, 11 Phase 2 mutations red, 0 survivors |
-| 3 | ERC-6909 rank token + transfer | NOT STARTED | — |
+| 3 | ERC-6909 rank token + transfer | **COMPLETE 2026-08-27** | **YES** — 77 tests, all 10 §D.5 criteria plus 2 added, 29 Phase 3 mutations red, 0 survivors |
 | 4 | Harberger rent variant | NOT STARTED | — |
 | 5 | Gas + scale (O(1) prefix-sum redesign) | NOT STARTED | — |
 | 6 | Adversarial + invariant campaign | NOT STARTED | — |
@@ -28,9 +28,12 @@ individual exit criteria inside those sections are ticked one by one. This board
 two ever disagree, PLAN's dashboard and the ticked criteria win, because they sit next to the
 criteria they describe.
 
-**Verified 2026-08-27 (end of session):** Phases 0, 1 and 2 are done. `src/queue/QueueHook.sol` and
-`src/queue/libraries/Allocation.sol` are the mechanism. `forge test` is **59/59 green** and
-`forge lint src/` is CLEAN. Every row from Phase 3 down is still accurate.
+**Verified 2026-08-27 (end of the Phase 3 session):** Phases 0-3 are done. `src/queue/QueueHook.sol`,
+`src/queue/QueueSeats.sol` and `src/queue/libraries/Allocation.sol` are the mechanism. `forge test`
+is **77/77 green** and `forge lint src/` is CLEAN with zero notes. Every row from Phase 4 down is
+still accurate.
+
+*(Superseded — earlier the same day:* Phases 0, 1 and 2 are done, 59/59 green.*)*
 
 *(Superseded — 2026-08-26 doc-audit:* every row above is still accurate — **no `src/` directory exists
 at the repo root** and no mechanism code has been written.*)* The two 2026-08-26 sessions below produced
@@ -80,6 +83,90 @@ each row carries its evidence grade. The rows below are the headline items and p
 ---
 
 ## Session log
+
+### 2026-08-27 (third session) — Phase 3: rank becomes an object, and the plan's own transfer design turns out to be a free DoS
+
+**Phase 3 is COMPLETE. `forge test` 77/77, `forge lint src/` clean, 29 mutations on the Phase 3 code,
+ZERO survivors.** The project is at its SUBMITTABLE state.
+
+**What was built**
+
+- `src/queue/QueueSeats.sol` — the ERC-6909 rank token. One id per seat, supply exactly one.
+  Ownership is a single `seatHolder[id]` address slot and the whole ERC-6909 surface is a VIEW over
+  it, so **supply-1 is structural rather than tested**: there is no storage in which "two" could be
+  written. The interface is v4-core's own `IERC6909Claims`, so every selector and event topic is
+  compiler-checked against the canonical definition. `transfer` and `transferFrom` differ only in
+  how they authorise and both funnel through one `_moveSeat`.
+- **The founding roster is fixed in the constructor.** `deposit()`, `seatOwner` and `_pushSeat` were
+  DELETED. There is no runtime path that creates a seat.
+- `_onSeatTransfer` — the evacuation. `pendingWithdraw` + `claimPending` for the residual.
+- A transient reentrancy guard on every external ledger path.
+- `test/queue/Rank.t.sol` — 19 tests including 5 negative controls.
+
+**DECISION TAKEN (recorded per AGENTS.md §4): the founding roster is an endowment fixed at
+deployment.** §B.8 permits "direct assignment by the deployer", and the constructor form adds no
+privileged role, no admin function and no runtime path — the allocation is an immutable fact of the
+deployment. It closes the dusting hole completely: **rank cannot be obtained at any price the
+incumbent has not accepted.** It does NOT make rank *bought* — that needs Phase 4's Harberger lease,
+and the honest sentence is in PITFALLS 5.8. Say the narrow thing on camera.
+
+**FOUR DEFECTS, ALL FOUND BY ATTACKING THE WORK RATHER THAN BY WRITING IT**
+
+1. **PLAN §B.8's specified evacuation is a free DoS on the swap path** (PITFALLS 5.51). A ledger-only
+   move to `pendingWithdraw` drops `Σ q[i].aX` while leaving the position at full depth, so the pool
+   quotes liquidity the queue cannot source and `_allocate` reverts `QueueUnderflow`.
+   `transfer(self, id, 1)` is legal and costs only gas, so **any single seat holder could brick every
+   swap above their surviving balance, indefinitely, and undo it at will.** Fixed by paying the
+   capital out for real, which burns the matching liquidity. Refusing to transfer a funded seat was
+   rejected because Phase 4's buyout must be unblockable. §B.8 is corrected with the full reasoning
+   and both rejected alternatives. **The control runs the spec's design and the shipped one side by
+   side.**
+2. **Seat theft through an unchecked entry point — the paired-rule asymmetry, third instance and the
+   first that was funds rather than wei** (PITFALLS 5.52). Removing the ownership check from
+   `transfer` survived all 71 tests: `transferFrom` had a test and `transfer` had nothing. Removing
+   `transferFrom`'s check ALSO survived, because the only test there used an unapproved third party —
+   and naming yourself as `sender` skips the allowance branch entirely. Either mutant lets anyone
+   take any seat for free and be paid its capital on the way out.
+3. **A bound in the right direction is not a correctness assertion** (PITFALLS 5.53). `withdraw`
+   debiting the REQUEST instead of the PAYMENT survived the whole suite, because the residual tests
+   assert the unpaid leftover is SMALL — and over-debiting makes it smaller. **The mutant passed more
+   comfortably than the real code.** Replaced with the identity `seatAfter == seatBefore - paid`.
+4. **The whole `pending` path was dead code under test while being asserted about** (PITFALLS 5.54).
+   Every pending line survived mutation because no test had ever produced a non-zero pending balance;
+   `test_3_2`'s assertions about it all held vacuously at zero. Reaching it needs ~40 swaps of
+   accumulated §E.4 residual AND the seats in front drained first.
+
+**A fifth finding, reported as what it is and not more** (PITFALLS 5.55). The reentrancy window is
+real: `take` calls `IERC20.transfer`, handing a pool currency control mid-unlock, and PoolManager's
+lock does NOT close it — a withdrawal on the leg the float already covers needs no second `unlock`
+and executes in full. What it corrupts is `unlockCallback`'s balance-difference measurement (which
+must be a difference: a fee-on-transfer currency delivers less than `callerDelta`). In the executed
+control it happens to underflow and revert — **an accident of direction, not a defence.** The guard
+stays. **NOT claimed: no value-extracting sequence was found without it.** The first draft of the
+guard's own comment asserted a double-payment that could not be reproduced, and that comment was
+rewritten rather than left to read well.
+
+**Also done**
+
+- `MAX_SEATS = 32` taken and recorded; the gas regression's top depth moved 50 -> 32, because 32 is
+  now the real worst case. Head-only swap stays flat across 1 -> 8 -> 20 -> 32.
+- Pure-rank (empty-seat) transfer measured under `vm.cool()`: **17,939 gas**, versus 23,905 with the
+  early return removed. The bound sits between them.
+- `_seatSlot` in `Allocator.t.sol` hardcoded storage slot 0 for `q`. `QueueSeats` put three mappings
+  in front of it, so the test would have poked an unrelated slot and passed for the wrong reason. It
+  now reads the slot from the contract.
+- Two dead imports removed and the `nonReentrant` modifier unwrapped: `forge lint src/` is clean with
+  **zero notes**, not just zero errors.
+
+**What is open, and must not be glossed on camera**
+
+- The founding roster is an endowment, not a purchase (PITFALLS 5.8, amended).
+- Phase 3 alone is a one-sided market (5.19); rank-then-run is open (5.9). **Phase 4 is what closes
+  both and what makes rank continuously priced without needing a secondary market to exist.**
+- A seat transfer is a second trigger for the 5.43 depth drain (new row 5.56). Seat trading is not
+  depth-neutral.
+
+---
 
 ### 2026-08-27 (third) — PHASE 2 COMPLETE. Float withdrawal, the sweep, and a DoS closed
 

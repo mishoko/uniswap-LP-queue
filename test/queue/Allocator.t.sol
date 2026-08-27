@@ -99,7 +99,7 @@ contract AllocatorTest is QueueFixture {
     function test_1_1_conservationAndComposition_at1to4() public {
         startPrice = Constants.SQRT_PRICE_1_4;
         _deployTokens();
-        _deployHook(0x1001);
+        _deployHook(0x1001, 3);
         _runScenario();
     }
 
@@ -108,14 +108,14 @@ contract AllocatorTest is QueueFixture {
     function test_1_2_conservation_at1to1000() public {
         startPrice = Constants.SQRT_PRICE_1_1 / 31; // ~1:1000
         _deployTokens();
-        _deployHook(0x1002);
+        _deployHook(0x1002, 3);
         _runScenario();
     }
 
     function test_1_2_conservation_at1000to1() public {
         startPrice = Constants.SQRT_PRICE_1_1 * 31; // ~1000:1
         _deployTokens();
-        _deployHook(0x1003);
+        _deployHook(0x1003, 3);
         _runScenario();
     }
 
@@ -128,7 +128,7 @@ contract AllocatorTest is QueueFixture {
         dec1 = 6;
         startPrice = Constants.SQRT_PRICE_1_4;
         _deployTokens();
-        _deployHook(0x1004);
+        _deployHook(0x1004, 3);
         _runScenario();
     }
 
@@ -137,7 +137,7 @@ contract AllocatorTest is QueueFixture {
         dec1 = 18;
         startPrice = Constants.SQRT_PRICE_1_4;
         _deployTokens();
-        _deployHook(0x1005);
+        _deployHook(0x1005, 3);
         _runScenario();
     }
 
@@ -146,7 +146,7 @@ contract AllocatorTest is QueueFixture {
     function test_1_9_swapLargerThanTheQueueReverts() public {
         startPrice = Constants.SQRT_PRICE_1_4;
         _deployTokens();
-        _deployHook(0x1006);
+        _deployHook(0x1006, 3);
         _open(_bps());
 
         // Drain the queue's token1 down to a sliver, then ask for more than remains.
@@ -175,10 +175,11 @@ contract AllocatorTest is QueueFixture {
         }
     }
 
-    /// @dev `q` is the first declared storage variable, so its elements start at keccak(0); each
-    ///      Seat occupies two slots (a0, a1).
-    function _seatSlot(uint256 i, uint256 which) internal pure returns (bytes32) {
-        return bytes32(uint256(keccak256(abi.encode(uint256(0)))) + i * 2 + which);
+    /// @dev Each `Seat` occupies two slots (a0, a1). The BASE slot is read from the contract, not
+    ///      assumed to be 0 — `QueueSeats` declares three mappings ahead of `q`, and a hardcoded
+    ///      layout would have this test poking at an unrelated slot and passing for the wrong reason.
+    function _seatSlot(uint256 i, uint256 which) internal view returns (bytes32) {
+        return bytes32(uint256(keccak256(abi.encode(hook.seatArraySlot()))) + i * 2 + which);
     }
 
     // ================================================== 1.12 — stateless fuzz of the pure arithmetic
@@ -229,7 +230,7 @@ contract AllocatorTest is QueueFixture {
     function test_invariantC_cursor0IsPulledBackAfterAReverseFill() public {
         startPrice = Constants.SQRT_PRICE_1_4;
         _deployTokens();
-        _deployHook(0x1007);
+        _deployHook(0x1007, 3);
         _open(_bps());
 
         // A: small forward fill. The head must KEEP some token1 for step C to work.
@@ -259,7 +260,9 @@ contract AllocatorTest is QueueFixture {
         assertEq(k0Final, 0, "cursor0 was not pulled back and now LEADS a funded seat");
     }
 
-    /// @dev The cursors only mean anything if a head-only swap costs the same at 50 seats as at 1.
+    /// @dev The cursors only mean anything if a head-only swap costs the same at a FULL roster as
+    ///      at one seat. The top depth is `MAX_SEATS` — 32 — because Phase 3 made that the largest
+    ///      queue that can exist, so it is the real worst case rather than a hypothetical one.
     ///      This is a REGRESSION TEST for a defect in the first draft of `_allocate`, which loaded
     ///      every seat into a memory array before allocating and therefore read the entire roster
     ///      on every swap — throwing the cursor optimisation away silently while every correctness
@@ -269,7 +272,7 @@ contract AllocatorTest is QueueFixture {
     ///      and a warm measurement here was previously 2.5x optimistic.
     function test_headOnlySwapCostIsFlatInQueueDepth() public {
         uint256[] memory depths = new uint256[](4);
-        (depths[0], depths[1], depths[2], depths[3]) = (1, 5, 25, 50);
+        (depths[0], depths[1], depths[2], depths[3]) = (1, 8, 20, 32);
         uint256[] memory costs = new uint256[](4);
 
         for (uint256 d; d < depths.length; d++) {
@@ -277,7 +280,7 @@ contract AllocatorTest is QueueFixture {
             dec1 = 18;
             startPrice = Constants.SQRT_PRICE_1_4;
             _deployTokens();
-            _deployHook(uint160(0x7000 + d));
+            _deployHook(uint160(0x7000 + d), depths[d]);
 
             uint256 n = depths[d];
             uint256[] memory bps = new uint256[](n);
@@ -301,8 +304,8 @@ contract AllocatorTest is QueueFixture {
             assertEq(_countChanged(true, before), 1, "fixture drifted: swap was not head-only");
         }
 
-        // 50 seats must not cost meaningfully more than 1. The old array-loading draft grew by
-        // roughly one cold SLOAD per seat, i.e. thousands of gas by depth 50.
+        // A full 32-seat roster must not cost meaningfully more than a single seat. The old
+        // array-loading draft grew by roughly one cold SLOAD per seat.
         uint256 growth = costs[3] > costs[0] ? costs[3] - costs[0] : 0;
         assertLt(growth, 3_000, "head-only swap cost scales with queue depth: the cursor is not working");
     }
