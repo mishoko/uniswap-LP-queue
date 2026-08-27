@@ -50,9 +50,9 @@ check with each of them often and ALWAYS when a task or sub task is delivered. t
 | Order | File | Why |
 |---|---|---|
 | 1 | `AGENTS.md` (this file) | How to work here. Rules, gotchas, decision framework. |
-| 2 | `PLAN.md` | What to build, phased, with runnable acceptance criteria. |
+| 2 | `PLAN.md` | What to build, phased, with runnable acceptance criteria. **Opens with a BUILD STATUS dashboard — that table, plus the ticked criteria in §C, is the authoritative answer to "what is done". Do not reconstruct status from the log.** |
 | 3 | `BUSINESS.md` | Why it exists, who uses it, what to say about it. |
-| 4 | `PROGRESS.md` | What has already been done. **Update it as you go.** |
+| 4 | `PROGRESS.md` | The narrative of what has already been done, newest first. **Update it as you go.** Its status board mirrors PLAN's dashboard; keep them in step. |
 | 5 | `PITFALLS.md` | **The standing hazard ledger** — every trap, measured hazard, settled decision, proven-impossible idea, and every place two docs disagree (§7), each with its evidence grade. **Re-read at the start of every session**; check it before proposing anything. It sits here because it presumes you already know what the project is (2) and where it stands (4). |
 | 6 | `docs/research/` | The two closed research passes, on demand: `protocol-fee/` (the §E.5 hazard, MEASURED, remedy P2 chosen — but see the SUPERSEDED banner on `VERDICT.md`) and `premise-review/` (economics + fairness, ANALYSIS). Summarised in `PITFALLS.md`; read the source before re-litigating any of it. |
 | 7 | `archive/2026-08-26/` | 25 hard-won v4 facts and every experiment behind the design. Read on demand, guided by `PLAN.md` §I. |
@@ -107,6 +107,71 @@ Violating any of these produces a green test that proves nothing. All five were 
    here was **2.5× optimistic** until cold-access pricing was restored.
 5. **A first-run pass is a reason for suspicion.** Before believing any suite, deliberately break the
    code it covers and confirm the suite goes red.
+
+---
+
+## 3b. The testing architecture — what exists and how it is used
+
+**Added 2026-08-27, after Phases 0–2. This is the working method, not a suggestion.**
+
+**This is NOT TDD.** Nothing here was written test-first. The method is
+**build faithfully → attack it → fix what the attack finds**, and the load-bearing step is the third
+one. Tests written alongside code tend to encode the author's assumptions; a mutation does not care
+what the author assumed. On this project mutation testing has found a real defect **every single
+time it was run** — including three lines that every correctness test passed over.
+
+### The harness
+
+Everything runs against **real v4 contracts** deployed locally (chainid 31337) via `hookmate`
+artifacts — a real `PoolManager`, `PositionManager` and `V4SwapRouter`. Nothing is mocked. The pool
+is real, the swaps are real, the rounding is v4's own.
+
+| File | Role |
+|---|---|
+| `test/utils/Deployers.sol`, `BaseTest.sol` | Copied from the archive. Deploy the real v4 stack. **Do not edit.** |
+| `test/queue/QueueFixture.sol` | The shared abstract fixture: token deployment at chosen decimals, pool setup, `_swap` (measures PoolManager's own balances net of protocol fees), the **independently written reference allocator**, and the INVARIANT C / INVARIANT F assertions |
+| `test/queue/QueueHarness.sol` | **TEST-ONLY.** Adds `seed()` and `redeemAll()` — both were once on the production hook and both were real holes. It ADDS entry points and OVERRIDES NOTHING, so the code under test is still exactly production |
+| `test/queue/*.t.sol` | The suites |
+
+### The six kinds of test, and what each is for
+
+1. **Scenario / acceptance** — the four-swap scenario at several prices and decimal pairs. Proves
+   the mechanism does what it claims.
+2. **Negative controls** — a mutant subclass with exactly one line changed, run against the
+   *identical* harness, asserting the **exact revert reason**. Proves the suite can detect the
+   defect at all. A control asserting only "it reverted" proves nothing (LAW 2).
+3. **Positive controls** — the unmutated contract through the same harness. Without it, a control
+   that passes for an unrelated reason looks like success.
+4. **Fuzz** — the pure arithmetic with no pool at all, plus interleaved deposit/withdraw/swap
+   sequences for the invariants.
+5. **Gas regression** — measured with `vm.cool()` (LAW 4). This exists because a defect that made a
+   head-only swap read the entire queue was **invisible to all 31 correctness tests**.
+6. **Mutation testing** — on-disk edits to `src/`, run, then reverted. **Not committed.** This is
+   the one that finds things, and its results belong in `PROGRESS.md` and `PITFALLS.md`.
+
+### The mutation discipline — do this at every gate
+
+Before declaring a phase done, mutate every load-bearing line in the code you just wrote and confirm
+the suite goes red. Record how many suites caught each one. **A mutation that SURVIVES is a finding**,
+and there are exactly three honest responses:
+
+- write the missing test,
+- **delete the line** if it turns out nothing depends on it (this happened — see PITFALLS 5.49),
+- or write down why it cannot be tested.
+
+Widening a tolerance until the mutation is "caught" is none of these.
+
+### The three rules this session paid for
+
+- **Mutate every direction-symmetric rule SEPARATELY.** A rule that appears once per direction can
+  be perfectly covered in one direction and covered by *nothing* in the other. This has now happened
+  **twice, in two different functions** (PITFALLS 5.37, 5.50).
+- **Assert on the CONTRACT's numbers, never on the fixture's own measurements.** Comparing two
+  fixture-side quantities is tautological and will pass against a broken implementation
+  (PITFALLS 5.34).
+- **Ask what the fixture cannot represent before believing any measurement.** A single-pool fixture
+  cannot see a global counter being corrupted; a principal-only position valuation cannot see
+  accrued fees. Both produced confident, wrong numbers here (PITFALLS 5.27, 5.46).
 
 ---
 

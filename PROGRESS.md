@@ -22,6 +22,12 @@ Newest entry first. Never delete an entry — supersede it.
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
 
+**Where to look for status, so nobody has to read the log to find it:** `PLAN.md` opens with a
+**BUILD STATUS** dashboard, each completed phase carries a ✅ block at its own §C section, and the
+individual exit criteria inside those sections are ticked one by one. This board mirrors it. If the
+two ever disagree, PLAN's dashboard and the ticked criteria win, because they sit next to the
+criteria they describe.
+
 **Verified 2026-08-27 (end of session):** Phases 0, 1 and 2 are done. `src/queue/QueueHook.sol` and
 `src/queue/libraries/Allocation.sol` are the mechanism. `forge test` is **59/59 green** and
 `forge lint src/` is CLEAN. Every row from Phase 3 down is still accurate.
