@@ -12,3 +12,9 @@ via_ir = false
 [lint]
 exclude_lints = ["screaming-snake-case-immutable", "screaming-snake-case-const"]
 lint_on_build = false
+
+# TEMPORARY research profile (protocol-fee experiment, PLAN §E.5). Does not touch the default
+# profile. Points src/test at the archived tree so the archived spike can run unmodified.
+[profile.spike]
+src = "archive/2026-08-26/src"
+test = "archive/2026-08-26/test"

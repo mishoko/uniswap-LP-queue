@@ -9,7 +9,8 @@ at an exact path named here. Where a claim was proven by an executed experiment,
 experiment is given. Where something is unproven, it says **UNPROVEN**.
 
 **Read order:** `AGENTS.md` (how to work here) → **this file** → `PROGRESS.md` (what is already
-done) → the archive, on demand, guided by §I.
+done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) → the archive and
+`docs/research/`, on demand, guided by §I.
 
 ---
 
@@ -101,8 +102,8 @@ managed; they are the honest scope, and stating them is what makes the rest cred
 | "QUEUE stops sandwich attacks." | It does not. Swaps execute normally, at the normal price, through any router. |
 | "QUEUE reduces LVR." | It does not. **Total LVR paid by the pool is unchanged.** What changes is *who bears it and at what known price*. |
 | "QUEUE recaptures value from searchers." | It does not. It creates no new payment and takes nothing from anyone. |
-| "QUEUE detects toxic flow." | It does not, **and it must not try** — proven impossible (§E.9). It sells LPs different slices of the flow and lets them bid. |
-| "The queue's face value is redeemable." | **Not until the Phase 2 dust fix is built and proven.** There is a measured ~0.26 wei/swap shortfall (§E.4). |
+| "QUEUE detects toxic flow." | It does not, **and it must not try** — proven impossible (§E.19). It sells LPs different slices of the flow and lets them bid. |
+| "The queue's face value is redeemable." | **Not until BOTH are resolved: (a) the Phase 2 dust fix is built and proven** — measured ~0.26 wei/swap shortfall (§E.4) — **and (b) per-seat withdrawal feasibility.** §B.7's withdraw spec is MEASURED impossible as specified: after the spike's own 4-swap scenario seat 1 holds 258.877 token0 / 0 token1 and can withdraw **nothing** via `modifyLiquidity(−Δ)` (`PITFALLS.md` §5.5, §5.7; `docs/research/protocol-fee/queue-exposure.md` §A2). Conservation ≠ solvency (§D.1 LAW 3, second corollary). |
 | "Sweeps are O(1)." | **They are O(entries touched).** The O(1) redesign is named, unbuilt and unverified (Phase 5). |
 
 The honest answer to *"the theme slide says neutralize the attack and recapture the value — where is
@@ -512,7 +513,7 @@ uint256 amtIn    = outIsOne ? uint256( e0) : uint256( e1);    // what the queue 
 
 `amtIn` is **fee-inclusive**: the swapper paid input plus the LP fee, and all of it is owed to the
 sole LP. That is correct and it is why the queue's fee accrual needs no separate accounting — **but
-it is exactly true only when the protocol fee is zero.** See §E.5; this is a real, untested hazard
+it is exactly true only when the protocol fee is zero.** See §E.5; this is a real, **MEASURED** hazard
 and Phase 1 must test it.
 
 The ratio `amtIn / amtOut` **is the swap's realised average price.** It is the only price in the
@@ -709,6 +710,16 @@ withdrawer short.** Two acceptable fixes — pick one, record which, in `PROGRES
 
 **Until the fix is built and proven, the claim "the queue's face value is redeemable" must not be
 made** — not in the README, not in the video, not in a comment.
+
+> ⚠️ **AND the dust fix is not the only blocker on that claim.** Research after this section was
+> written MEASURED that **the withdraw spec above is impossible as specified**: a position releases
+> tokens in a ratio fixed by price and range, and front-first allocation deliberately drives seats to
+> single-token composition — after the spike's own 4-swap scenario seat 1 holds 258.877 token0 / 0
+> token1 and can withdraw **nothing** via `modifyLiquidity(−Δ)`; seats 0 and 2 leave their token1 legs
+> unreachable. This is the steady state, not an edge case, and the swap-to-rebalance "fix" is a trap
+> (a hook-initiated swap skips the hook's own `afterSwap`). **Phase 2 BLOCKER — §B.7 is not yet
+> corrected.** Evidence: `docs/research/protocol-fee/queue-exposure.md` §A2 (`WithdrawalPathProbe.t.sol`);
+> ledger rows `PITFALLS.md` §5.5, §5.6, §5.7.
 
 ## B.8 The ERC-6909 rank token — **DESIGN**
 
@@ -988,7 +999,7 @@ it again — in our code, not the spike's.
 | 1.7 | A **reverse-direction** swap fills the head again (the "front seat sees every swap" claim) |
 | 1.8 | **INVARIANT C** (§B.6) holds after every swap in every test |
 | 1.9 | A swap larger than the whole queue reverts with `QueueUnderflow`, and does **not** silently under-fill |
-| 1.10 | **Protocol fee:** with a nonzero protocol fee set on the pool, either the ledger stays consistent, or the hook refuses to operate. **Whichever it is, it is asserted and documented.** (§E.5) |
+| 1.10 | **Protocol fee:** with a nonzero protocol fee set on the pool the ledger stays consistent, via P2 (net out `protocolFeesAccrued`) — **owner decision 2026-08-26**. ⚠️ **Two corrections to this criterion's earlier wording:** (a) it said *"refuses to **operate**"*, which steers an implementer into `unlockCallback` and **permanent loss of funds**; any refusal must gate **allocation only** — swaps revert, withdrawals MUST still succeed. (b) The assertion must be against **`PoolManager balance − protocolFeesAccrued`** or `redeemAll()`, **and** must assert `protocolFeesAccrued > 0` first — as originally written this criterion **cannot fail**. (§E.5) |
 | 1.11 | **Five** negative controls red, each with its asserted specific reason (§D.3) |
 | 1.12 | A stateless fuzz of `Allocation.allocate` over random `(amtIn, amtOut, balances[])` never loses or invents a wei |
 
@@ -1319,6 +1330,14 @@ uint256 n0 = MockERC20(Currency.unwrap(c0)).balanceOf(address(poolManager));
 inAmt = n0 - p0;    // this is TRUTH. hook.totals() is the thing on trial.
 ```
 
+> ⚠️ **AMENDED 2026-08-26 — the raw-balance form above is BLIND to a whole bug class, and this was
+> paid for.** `protocolFeesAccrued` money stays inside PoolManager's ERC20 balance until it is
+> collected, so **the spike's own LAW 3 conservation test passes at 0 wei error while the position is
+> short 0.354e18 token0.** Measure against **`PoolManager balance − protocolFeesAccrued(currency)`**,
+> or directly against `redeemAll()`. Any test written the old way is blind to every
+> protocol-fee-shaped bug. Evidence: `docs/research/protocol-fee/experiment.md` F3/§6 (7 tests incl.
+> 3 mutations); `PITFALLS.md` §2.6; §E.5; AGENTS.md §3.3.
+
 **Corollary:** an assertion of the form `hook.internalTotal() == hook.internalSum()` is worth
 nothing. Both sides come from the defendant.
 
@@ -1637,7 +1656,7 @@ You will hit ambiguity. This table is the answer. Use it instead of guessing or 
 | **The plan contradicts the code** | The **code wins as evidence**; the **plan wins as intent**. Record the divergence in `PROGRESS.md` and **update `PLAN.md`**. |
 | **The archive contradicts this plan** | This plan and `AGENTS.md` win. The archive is history. Note the contradiction in `PROGRESS.md` — the archive being wrong is itself information. |
 | **You find a bug in the *design*, not the code** | Write it up, with a failing test if you can. **This is valuable output, not a setback.** Do not patch around it silently — a silent patch converts a known limitation into an unknown one. |
-| **You are tempted to add something not in the plan** | Ask: does it make the mechanism more correct, or does it make it bigger? Scope drift here has a specific shape — an admin function "for flexibility," an off-chain helper "just for the demo." **Both are forbidden** (§E.9). |
+| **You are tempted to add something not in the plan** | Ask: does it make the mechanism more correct, or does it make it bigger? Scope drift here has a specific shape — an admin function "for flexibility," an off-chain helper "just for the demo." **Both are forbidden** (§E.19). |
 | **A green result arrives on the first try** | Suspicion, not satisfaction. Break it deliberately. If you cannot make it go red, you have not tested it. |
 | **You cannot make a control go red** | The control is wrong, or the code path is not reachable from your fixture. Both are bugs. Do not delete the control. |
 
@@ -1694,7 +1713,39 @@ Covered in §B.7. Restated because someone will re-derive the wrong cause:
 
 Do not re-run that experiment expecting a different answer. Do not write "fee rounding" in a comment.
 
-## E.5 Protocol fee — **UNTESTED HAZARD, and it is yours to close in Phase 1**
+## E.5 Protocol fee — **TESTED 2026-08-26. REAL AND LARGE. Remedy is Phase 1's job.**
+
+> **STATUS UPDATE (2026-08-26).** This section is no longer speculative. The hazard was executed and
+> measured: `archive/2026-08-26/test/spike/ProtocolFeeHazard.t.sol` (7 tests incl. mutations), written
+> up in `docs/research/protocol-fee/`. Headline numbers, at the maximum legal fee:
+> **the queue is short 0.354e18 token0 over the 4-swap scenario — 0.1% of input, which is 33.4% of the
+> LP's entire fee income.** It leaks at the minimum 1-pip fee too. The shortfall equals
+> `protocolFeesAccrued` exactly. Because allocation is front-first, **the tail of the queue absorbs
+> 100% of it.**
+>
+> **The trap that makes this worse than written below:** `protocolFeesAccrued` stays inside
+> PoolManager's ERC20 balance until collected, so **the spike's LAW 3 conservation test passes at 0 wei
+> error while the position is short 0.354 token0.** LAW 3 is hereby amended project-wide: measure
+> conservation on `PoolManager ERC20 balance - protocolFeesAccrued(currency)`.
+>
+> **P2 is no longer speculative either** — a netted allocator was measured to close the gap to 3 wei in
+> ~10 lines plus one SLOAD (`test_M3`). It is the known upgrade path.
+>
+> ✅ **OWNER DECISION 2026-08-26 — SHIP P2. The choice below is CLOSED; do not re-open it without the
+> owner.** Net out `protocolFeesAccrued` in `_afterSwap`; do **NOT** ship a refusal. Rationale: P1
+> hands the PoolManager owner's `protocolFeeController` a permanent off-switch for the product, its
+> stated justification here was factually wrong (retracted below), and the fee switch is *reportedly*
+> already live (Governance Proposal 100, 2026-07-27 — **UNVERIFIED, press-sourced only**; verify with
+> `poolManager.protocolFeeController()` + `StateLibrary.getSlot0(poolId)` before relying on it).
+> **Consequence to remember:** with P2 the ledger no longer over-credits, so the "33.4% of LP income"
+> figure and the "the tail absorbs 100% of it" behaviour BOTH disappear — they were artefacts of the
+> bug, not properties of the mechanism. See `PROGRESS.md` 2026-08-26 and `PITFALLS.md` §3.1, §3.2,
+> §5.1–§5.4.
+>
+> **P1 correction:** a one-shot check at initialization is NOT enough. The controller can set the fee
+> *after* the pool is live, so the check must be re-read per swap. P1 is withdrawal-safe: hook
+> permissions are only `{beforeAddLiquidity, afterSwap}`, and withdrawal is an unhooked
+> `modifyLiquidity(negative)`, so a revert in `_afterSwap` halts trading without trapping funds.
 
 The allocator credits the queue with `amtIn` = the swapper's full input, **fee included**, because the
 sole LP is owed all of it. That is correct **when the protocol fee is zero**, which is the default and
@@ -1704,14 +1755,34 @@ which is what every spike measurement above was taken under.
 reaches the LP position.** The ledger would then credit more than the position can pay — a slow,
 silent insolvency with exactly the shape of a real bug. The spike never tested this.
 
-**Phase 1 must resolve it, one of two ways, and assert whichever it chose:**
-- **(P1) Refuse.** Read the pool's protocol fee and revert/disable if nonzero. Simple, honest, and
-  losing nothing since we control the pool we deploy. **Recommended.**
-- **(P2) Account for it.** Subtract the protocol fee from `amtIn` before allocating. More correct in
-  general, more code, more to get wrong.
+**Phase 1 must resolve it. The owner chose (P2); (P1) is kept below only as the rejected
+alternative and as the record of why.** Assert whichever is built:
+- **(P1) Refuse.** Read the pool's protocol fee and revert/disable if nonzero. Simple and honest.
+  ⚠️ **The original justification here — "losing nothing since we control the pool we deploy" — is
+  FACTUALLY WRONG and has been retracted.** We control *deployment*, not the *fee*: the controller can
+  set it at any time after the pool is live. P1 therefore hands that controller a permanent off-switch
+  for the product. It is withdrawal-safe (PROVEN by execution:
+  `test_E5_P1_refuseInAfterSwap_doesNotBrickWithdrawal`), **but only while the check stays in
+  `_afterSwap`** — moving it into a shared modifier or the removal path converts a governance fee-set
+  into total permanent loss of funds.
+- **(P2) Account for it.** Subtract the protocol fee from `amtIn` before allocating. **MEASURED to
+  close the gap to 3 wei** (`test_M3_mutation_P2NettedAllocatorClosesTheGap`), ~10 lines. It needs **no
+  extra hook permission**. ⚠️ **BUT THE `protocolFeesAccrued`-DIFF IMPLEMENTATION IS DEFECTIVE AND
+  MUST NOT BE SHIPPED — PHASE 1 BLOCKER.** That mapping is **global per currency, not per pool**
+  (`ProtocolFees.sol:21`), so the diff absorbs every other v4 pool's protocol fees on either
+  currency: **X1** silent under-credit from ordinary foreign volume (no attacker needed), and
+  **X2** a **permanent brick** — `amtIn -= pfDelta` underflows in `afterSwap`, the swap reverts,
+  `pfSeen` never advances, the pool is dead. PROVEN: `docs/research/withdrawal/`
+  `FeeFloatComposition.t.sol` `test_X1`/`test_X2`. The **decision** (net out the fee) stands; the
+  **mechanism** must be re-derived arithmetically and given its own experiment + negative control. The pool
+  keeps trading under any fee; no off-switch. **Edge case that must be handled or refused:** `lpFee == 0`
+  ⇒ `swapFee == protocolFee` ⇒ v4 takes the entire `feeAmount` via a different formula
+  (`Pool.sol:391-392`). If P2 is built, LAW 3's conservation assertion must ALSO be updated or it goes
+  red while the code is correct.
 
 Either way: **a test that sets a protocol fee and asserts the chosen behaviour.** Do not leave this
-one open.
+one open. **The test MUST assert `protocolFeesAccrued > 0` before any other claim** — `setProtocolFee`
+silently no-ops for a non-controller caller, and without that guard the test proves nothing.
 
 ## E.6 `donate()` pays whoever is in range NOW
 
@@ -2089,7 +2160,7 @@ Current riskiest-assumption ranking, for what it is worth:
 |---:|---|---|---|
 | 1 | Front-first allocation at the realised price is exact | **PROVEN** | done — the spike |
 | 2 | The queue's face value is redeemable | **FALSE as stated**; fixable | done — the residual measurement |
-| 3 | Protocol fee does not break the ledger | **UNTESTED** | set a protocol fee, run the conservation test (§E.5) |
+| 3 | Protocol fee does not break the ledger | **TESTED 2026-08-26 — HAZARD CONFIRMED** | ⚠️ **The instruction previously here was BLIND.** "Set a protocol fee, run the conservation test" goes GREEN while the position is short 0.354e18, because `protocolFeesAccrued` still sits in PoolManager's ERC20 balance. Assert against `PoolManager balance − protocolFeesAccrued`, or against `redeemAll()`. See §E.5 and `docs/research/protocol-fee/`. |
 | 4 | Cursors can be maintained O(1) under bidirectional flow without leading | **UNPROVEN** | the N4 control (§D.3) |
 | 5 | Rank transfers can be made safe without any price | **UNPROVEN** | the capital-evacuation controls (§D.5) |
 | 6 | The O(1) prefix-sum redesign can be exactly conservative | **UNPROVEN, and doubted** (§B.11) | the differential test (§D.7 G7) |
@@ -2209,6 +2280,9 @@ evidence** — read on demand, do not treat as instructions.
 | `PLAN.md` | This file | Second, all of it |
 | `BUSINESS.md` | Why QUEUE exists, who buys and sells the seat, what to say about it | Before writing the README or video |
 | `PROGRESS.md` | Status board, what is already proven, session log | Third, then every session |
+| `PITFALLS.md` | **The standing hazard ledger.** v4 facts that bite · testing traps · settled decisions and the alternatives they killed · proven-impossible ideas · **§5 open hazards** · §6 hard rules · **§7 where the sources disagree** — every row graded PROVEN / MEASURED / REASONED / UNVERIFIED / OPINION | **Fourth, and re-read at the start of every session.** Before proposing anything, check it is not already settled or already known to bite |
+| `docs/research/protocol-fee/` | The §E.5 experiment: `experiment.md` (executed, 7 tests + 3 mutations), `v4-mechanics.md`, `queue-exposure.md`, and `VERDICT.md` (**§5–§7 SUPERSEDED — banner in the file**) | Before Phase 1, and before touching anything fee-related |
+| `docs/research/premise-review/` | `economics.md` + `fairness.md` — the premise review. ANALYSIS, nothing executed. The Fairness Theorem, the leverage identity, and the full-range capital-efficiency attack live here | Before the pitch, the README or the video; before proposing any "fairness mechanism" |
 | `README.md` | Ships with the submission | Phase 7 |
 
 ## I.2 The essential archive — read these

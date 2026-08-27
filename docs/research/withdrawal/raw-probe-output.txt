@@ -1,0 +1,55 @@
+Compiling 107 files with Solc 0.8.30
+Solc 0.8.30 finished in 1.03s
+Compiler run successful with warnings:
+Warning (2519): This declaration shadows an existing declaration.
+  --> archive/2026-08-26/src/assay/AssayStack.sol:90:9:
+   |
+90 |         address[] memory subHooks,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+Note: The shadowed declaration is here:
+   --> archive/2026-08-26/src/assay/AssayStack.sol:136:5:
+    |
+136 |     function subHooks() public view returns (address[] memory out, uint16[] memory budgets) {
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+
+Ran 1 test for docs/research/protocol-fee/WithdrawalPathProbe.t.sol:WithdrawalPathProbe
+[PASS] test_Q2_seatCompositionVersusWhatThePositionCanRelease() (gas: 1163612)
+Logs:
+  position releases token0: 2247491145997694428657
+  position releases token1: 444940573750774563491
+  
+  seat: 0
+     ledger a0: 66531939204193927195
+     ledger a1: 20000000000000000000
+     liquidity needed to release a0: 29602759202265697587
+     liquidity needed to release a1: 44949822919953888579
+     with D=min, actually releases token0: 66531939204193927193
+     with D=min, actually releases token1: 13171468664062121000
+     SHORT token0 vs ledger: -2
+     SHORT token1 vs ledger: -6828531335937879000
+  
+  seat: 1
+     ledger a0: 258877453809749247723
+     ledger a1: 0
+     liquidity needed to release a0: 115185082829249470666
+     liquidity needed to release a1: 0
+     with D=min, actually releases token0: 0
+     with D=min, actually releases token1: 0
+     SHORT token0 vs ledger: -258877453809749247723
+     SHORT token1 vs ledger: 0
+  
+  seat: 2
+     ledger a0: 1923143752983751253742
+     ledger a1: 425000573750774563494
+     liquidity needed to release a0: 855684684857808154332
+     liquidity needed to release a1: 955185026548805973091
+     with D=min, actually releases token0: 1923143752983751253740
+     with D=min, actually releases token1: 380728834630383879473
+     SHORT token0 vs ledger: -2
+     SHORT token1 vs ledger: -44271739120390684021
+  
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 2.49ms (1.01ms CPU time)
+
+Ran 1 test suite in 159.34ms (2.49ms CPU time): 1 tests passed, 0 failed, 0 skipped (1 total tests)

@@ -43,11 +43,15 @@ limitations are in [`BUSINESS.md`](BUSINESS.md) §9, stated at full strength.
 
 ## Status
 
-**Design complete and validated. Build not started.**
+**Design validated. Build not started.** One design gap is open and measured, not glossed: the
+Phase 2 per-seat withdraw path in `PLAN.md` §B.7 does not work as specified (`PITFALLS.md` §5.5).
 
 The core allocation arithmetic is already proven exact to the wei, in both tokens, at a non-unit
 price, against a real `PoolManager` — with three negative controls that go red for the right reasons.
-See [`PROGRESS.md`](PROGRESS.md).
+See [`PROGRESS.md`](PROGRESS.md). **Open hazards are not hidden:** they are listed with their
+evidence grade in [`PITFALLS.md`](PITFALLS.md) §5 — including a MEASURED protocol-fee ledger hazard
+whose remedy is decided but unbuilt, and a MEASURED per-seat withdrawal problem that blocks the claim
+that the queue's face value is redeemable.
 
 ## Start here
 
@@ -57,6 +61,9 @@ See [`PROGRESS.md`](PROGRESS.md).
 | [`PLAN.md`](PLAN.md) | What to build, phased, with runnable acceptance criteria. |
 | [`BUSINESS.md`](BUSINESS.md) | What QUEUE is, why it has never existed, who uses it, and what may honestly be claimed. |
 | [`PROGRESS.md`](PROGRESS.md) | What is proven, what is open, what to do next. |
+| [`PITFALLS.md`](PITFALLS.md) | The standing hazard ledger: v4 facts that bite, testing traps, settled decisions, proven-impossible ideas, **open hazards (§5)**, and **where two documents disagree (§7)**. Every row graded PROVEN / MEASURED / REASONED / UNVERIFIED / OPINION. |
+| [`docs/research/protocol-fee/`](docs/research/protocol-fee/) | The executed protocol-fee experiment (7 tests + 3 mutations) and the v4 source-level mechanics behind it. |
+| [`docs/research/premise-review/`](docs/research/premise-review/) | The economic and fairness review of the premise. Analysis, nothing executed. |
 | [`NEXT_SESSION_PROMPT.md`](NEXT_SESSION_PROMPT.md) | The prompt to hand a fresh agent. |
 | `archive/2026-08-26/` | The design phase: 25 hard-won v4 facts, every experiment, and every rejected candidate with the evidence that killed it. |
 

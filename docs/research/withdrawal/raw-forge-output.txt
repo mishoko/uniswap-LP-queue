@@ -1,0 +1,316 @@
+No files changed, compilation skipped
+
+Ran 1 test for docs/research/withdrawal/FloatWithdraw.t.sol:FloatWithdrawAsymmetricDecimalsTest
+[PASS] test_X1_floatWithdrawSurvivesUnequalDecimals() (gas: 1342988)
+Logs:
+  token0 decimals: 6
+  token1 decimals: 18
+  seeded token0 (raw): 1000000000000
+  seeded token1 (raw): 4000000000000000000000000
+  seat: 0
+     a0: 33265969602
+     a1: 160000000000000000000000
+  seat: 1
+     a0: 129438726904
+     a1: 0
+  seat: 2
+     a0: 961571876493
+     a1: 3400004590006196508365287
+  TARGET seat: 1
+  float0 after: 530999999
+  float1 after: 410484134729883251678109
+  LEFTOVER ledger dust token0: 2
+  LEFTOVER ledger dust token1: 1
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 4.67ms (1.74ms CPU time)
+
+Ran 21 tests for docs/research/withdrawal/FloatWithdraw.t.sol:FloatWithdrawTest
+[PASS] test_A1_aggregateInvariant_ledgerSumEqualsRedeemable() (gas: 1198172)
+Logs:
+  ledger sum a0                 : 2248553145997694428660
+  position PRINCIPAL only  t0   : 2247491145997694428657
+    gap (ledger - principal) t0  : 1062000000000000003
+  ledger sum a1                 : 445000573750774563494
+  position PRINCIPAL only  t1   : 444940573750774563491
+    gap (ledger - principal) t1  : 60000000000000003
+  LP fee earned on token0 in    : 1062000000000000000
+  LP fee earned on token1 in    : 60000000000000000
+  REDEEMED token0 (real ERC20)  : 2248553145997694428657
+  REDEEMED token1 (real ERC20)  : 445000573750774563490
+  residual token0 (redeemed-ledg): -3
+  residual token1 (redeemed-ledg): -4
+
+[PASS] test_ATK_1_minorityLegWithdrawalDestroysDepth() (gas: 1570422)
+Logs:
+  attacker seat2 a0             : 1923143752983751253742
+  attacker seat2 a1             : 425000573750774563494
+  liquidity before              : 1000000000000000000000
+  liquidity after               : 44814973451194026908
+  depth destroyed (bps of pool) : 9551
+  float0 now idle               : 2147831889958014114172
+  float1 now idle               : 59999999999999999
+  attacker's OWN a0 still in q  : 1923143752983751253742
+    ^ the attackers own idled capital, earning no fees
+  swaps after the grief         : 2
+
+[PASS] test_ATK_2_emptySeatCannotTouchTheFloat() (gas: 1417963)
+[PASS] test_C1_conservation_amendedForm() (gas: 1454706)
+Logs:
+  PRE-WITHDRAW ledger t0        : 2248553145997694428660
+  PRE-WITHDRAW backing t0       : 2248553145997694428660
+  POST-WITHDRAW ledger t0       : 1989675692187945180937
+  POST-WITHDRAW backing t0      : 1989675692187945180937
+    slack token0                : 0
+  POST-WITHDRAW ledger t1       : 445000573750774563494
+  POST-WITHDRAW backing t1      : 445000573750774563494
+    slack token1                : 0
+
+[PASS] test_D1_floatCostsPoolDepth() (gas: 1410971)
+Logs:
+  liquidity before any withdrawal: 1000000000000000000000
+  liquidity after seat1 withdrew : 884814917170750529333
+  float0 idle                    : 1062000000000000000
+  float1 idle                    : 51310516841576750919
+  position principal left t0     : 1988613692187945180934
+  position principal left t1     : 393690056909197812571
+  float as %% of remaining t1 (bps): 1303
+
+[PASS] test_F1_hardCase_fullyConvertedSeatFirst() (gas: 1422876)
+Logs:
+  seat1 paid token0             : 258877453809749247723
+  seat1 paid token1             : 0
+  liquidity pulled              : 115185082829249470667
+  float0 retained after         : 1062000000000000000
+  float1 retained after         : 51310516841576750919
+
+[PASS] test_F2a_allSeats_convertedFIRST() (gas: 1505642)
+Logs:
+    withdrew seat: 1
+       face a0  : 258877453809749247723
+       paid a0  : 258877453809749247723
+       face a1  : 0
+       paid a1  : 0
+       liq left : 884814917170750529333
+       float0   : 1062000000000000000
+       float1   : 51310516841576750919
+    withdrew seat: 0
+       face a0  : 66531939204193927195
+       paid a0  : 66531939204193927195
+       face a1  : 20000000000000000000
+       paid a1  : 20000000000000000000
+       liq left : 855684684857808154331
+       float0   : 1
+       float1   : 44271739120390684017
+    withdrew seat: 2
+       face a0  : 1923143752983751253742
+       paid a0  : 1923143752983751253739
+       face a1  : 425000573750774563494
+       paid a1  : 425000573750774563489
+       liq left : 0
+       float0   : 0
+       float1   : 0
+  LEFTOVER ledger dust token0   : 3
+  LEFTOVER ledger dust token1   : 5
+  float0 at end                 : 0
+  float1 at end                 : 0
+  liquidity at end              : 0
+
+[PASS] test_F2b_allSeats_convertedLAST() (gas: 1447594)
+Logs:
+    withdrew seat: 0
+       face a0  : 66531939204193927195
+       paid a0  : 66531939204193927195
+       face a1  : 20000000000000000000
+       paid a1  : 20000000000000000000
+       liq left : 955050177080046111420
+       float0   : 35554389822566669093
+       float1   : 59999999999999999
+    withdrew seat: 2
+       face a0  : 1923143752983751253742
+       paid a0  : 1923143752983751253742
+       face a1  : 425000573750774563494
+       paid a1  : 425000573750774563490
+       liq left : 0
+       float0   : 258877453809749247720
+       float1   : 0
+    withdrew seat: 1
+       face a0  : 258877453809749247723
+       paid a0  : 258877453809749247720
+       face a1  : 0
+       paid a1  : 0
+       liq left : 0
+       float0   : 0
+       float1   : 0
+  LEFTOVER ledger dust token0   : 3
+  LEFTOVER ledger dust token1   : 4
+  float0 at end                 : 0
+  float1 at end                 : 0
+  liquidity at end              : 0
+
+[PASS] test_F2c_allSeats_reverse() (gas: 1506469)
+Logs:
+    withdrew seat: 2
+       face a0  : 1923143752983751253742
+       paid a0  : 1923143752983751253742
+       face a1  : 425000573750774563494
+       paid a1  : 425000573750774563494
+       liq left : 44814973451194026908
+       float0   : 224688136974262860430
+       float1   : 59999999999999999
+    withdrew seat: 1
+       face a0  : 258877453809749247723
+       paid a0  : 258877453809749247723
+       face a1  : 0
+       paid a1  : 0
+       liq left : 29602759202265697586
+       float0   : 1
+       float1   : 6828531335937878995
+    withdrew seat: 0
+       face a0  : 66531939204193927195
+       paid a0  : 66531939204193927191
+       face a1  : 20000000000000000000
+       paid a1  : 19999999999999999995
+       liq left : 0
+       float0   : 0
+       float1   : 0
+  LEFTOVER ledger dust token0   : 4
+  LEFTOVER ledger dust token1   : 5
+  float0 at end                 : 0
+  float1 at end                 : 0
+  liquidity at end              : 0
+
+[PASS] test_F2d_allSeats_inOrder() (gas: 1506447)
+Logs:
+    withdrew seat: 0
+       face a0  : 66531939204193927195
+       paid a0  : 66531939204193927195
+       face a1  : 20000000000000000000
+       paid a1  : 20000000000000000000
+       liq left : 955050177080046111420
+       float0   : 35554389822566669093
+       float1   : 59999999999999999
+    withdrew seat: 1
+       face a0  : 258877453809749247723
+       paid a0  : 258877453809749247723
+       face a1  : 0
+       paid a1  : 0
+       liq left : 855684684857808154331
+       float0   : 1
+       float1   : 44271739120390684017
+    withdrew seat: 2
+       face a0  : 1923143752983751253742
+       paid a0  : 1923143752983751253739
+       face a1  : 425000573750774563494
+       paid a1  : 425000573750774563489
+       liq left : 0
+       float0   : 0
+       float1   : 0
+  LEFTOVER ledger dust token0   : 3
+  LEFTOVER ledger dust token1   : 5
+  float0 at end                 : 0
+  float1 at end                 : 0
+  liquidity at end              : 0
+
+[PASS] test_F3_interleavedWithSwaps() (gas: 1784802)
+Logs:
+  after w(seat1): liq           : 884814917170750529333
+  after w(seat1): float0        : 1062000000000000000
+  after w(seat1): float1        : 51310516841576750919
+  after 2 swaps: liq            : 884814917170750529333
+    withdrew seat: 0
+       face a0  : 25595895524382906664
+       paid a0  : 25595895524382906664
+       face a1  : 11553295498564004626
+       paid a1  : 11553295498564004626
+       liq left : 864538117180148759144
+       float0   : 14999999999999999
+       float1   : 36349447351796678472
+    withdrew seat: 2
+       face a0  : 1923143752983751253742
+       paid a0  : 1923143752983751253736
+       face a1  : 425000573750774563494
+       paid a1  : 425000573750774563486
+       liq left : 0
+       float0   : 0
+       float1   : 0
+    withdrew seat: 1
+       face a0  : 0
+       paid a0  : 0
+       face a1  : 0
+       paid a1  : 0
+       liq left : 0
+       float0   : 0
+       float1   : 0
+  LEFTOVER ledger dust token0   : 6
+  LEFTOVER ledger dust token1   : 8
+
+[PASS] test_G1_gasOfTheFloatWithdraw() (gas: 1475593)
+Logs:
+  HARD CASE withdraw gas (cold, incl. call overhead): 252672
+    hook-internal measurement                       : 227954
+  float0 before seat0           : 1062000000000000000
+  float1 before seat0           : 51310516841576750919
+  FLOAT-ONLY withdraw gas (cold, incl. call overhead): 45358
+    liquidity pulled (must be 0)                     : 0
+
+[PASS] test_NC_A_floatOffByOne_goesRed() (gas: 1397859)
+Logs:
+  hook REAL token0 above base   : 1062000000000000000
+  hook CLAIMED float0           : 1062000000000000001
+
+[PASS] test_NC_B_wrongCurrency_goesRed() (gas: 1401578)
+Logs:
+  mutant paid token0            : 86531939204193927195
+  mutant paid token1            : 0
+
+[PASS] test_NC_C_naiveWithdrawStillFails() (gas: 1454863)
+Logs:
+  naive seat: 0
+     face a0          : 66531939204193927195
+     paid a0          : 66531939204193927195
+     face a1          : 20000000000000000000
+     paid a1          : 13231468664062120999
+     STRANDED token1  : 6768531335937879001
+     UNACCOUNTED t0 so far: 1061999999999999998
+  naive seat: 2
+     face a0          : 1923143752983751253742
+     paid a0          : 1923143752983751253740
+     face a1          : 425000573750774563494
+     paid a1          : 380728834630383879473
+     STRANDED token1  : 44271739120390684021
+     UNACCOUNTED t0 so far: 1061999999999999998
+  TOTAL UNACCOUNTED token0: 1061999999999999998
+  TOTAL UNACCOUNTED token1: 0
+
+[PASS] test_NC_D_cannotExceedEntitlement() (gas: 1404650)
+[PASS] test_NC_E_positiveControl() (gas: 1389205)
+[PASS] test_NC_F_lastWithdrawerHitsTheResidual() (gas: 1546143)
+Logs:
+  last seat face a0             : 1923143752983751253742
+  last seat face a1             : 425000573750774563494
+  float0 available              : 1
+  liq remaining                 : 855684684857808154331
+  last withdrawal succeeded?: NO
+    FloatShort want             : 1923143752983751253742
+    FloatShort have             : 1923143752983751253739
+    SHORTFALL (wei)             : 3
+
+[PASS] test_NC_G_minLegSizing_goesRed() (gas: 1380708)
+Logs:
+  min-leg mutant: want          : 20000000000000000000
+  min-leg mutant: have          : 13231468664062121000
+  min-leg mutant: SHORT by      : 6768531335937879000
+
+[PASS] test_NC_H_withdrawEmitsNoSwapEvent() (gas: 1459383)
+Logs:
+  PoolManager logs during withdrawals: 9
+  Swap events emitted                : 0
+
+[PASS] test_R1_reproduceTheMeasuredFailure() (gas: 1206703)
+Logs:
+  seat1 ledger a0: 258877453809749247723
+  seat1 ledger a1: 0
+
+Suite result: ok. 21 passed; 0 failed; 0 skipped; finished in 9.45ms (55.34ms CPU time)
+
+Ran 2 test suites in 185.74ms (14.12ms CPU time): 22 tests passed, 0 failed, 0 skipped (22 total tests)

@@ -1,0 +1,91 @@
+Compiling 105 files with Solc 0.8.30
+Solc 0.8.30 finished in 976.64ms
+Compiler run successful with warnings:
+Warning (2519): This declaration shadows an existing declaration.
+  --> archive/2026-08-26/src/assay/AssayStack.sol:90:9:
+   |
+90 |         address[] memory subHooks,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+Note: The shadowed declaration is here:
+   --> archive/2026-08-26/src/assay/AssayStack.sol:136:5:
+    |
+136 |     function subHooks() public view returns (address[] memory out, uint16[] memory budgets) {
+    |     ^ (Relevant source part starts here and spans across multiple lines).
+
+
+Ran 9 tests for archive/2026-08-26/test/spike/QueueAllocator.t.sol:QueueAllocatorSpikeTest
+[PASS] test_Q1_allocationIsExact_butFaceValueRedemptionIsNot() (gas: 1427493)
+Logs:
+  queue total token0: 2248553145997694428660
+  queue total token1: 445000573750774563494
+  PoolManager-measured token0: 2248553145997694428660
+  PoolManager-measured token1: 445000573750774563494
+  redeemed token0 (real ERC20): 2248553145997694428657
+  redeemed token1 (real ERC20): 445000573750774563490
+  residual token0 (redeemed - queue): -3
+  residual token1 (redeemed - queue): -4
+
+[PASS] test_Q1b_residualWithZeroSwaps() (gas: 911307)
+Logs:
+  ZERO-SWAP residual token0: -1
+  ZERO-SWAP residual token1: -1
+
+[PASS] test_Q1c_residualDoesNotGrowWithSwapCount() (gas: 22605842)
+Logs:
+  residual token0 @2 swaps: -2
+  residual token1 @2 swaps: -3
+  residual token0 @40 swaps: -9
+  residual token1 @40 swaps: -11
+  residual token0 @200 swaps: -52
+  residual token1 @200 swaps: -54
+
+[PASS] test_Q1d_mechanism_zeroFeePoolDoesNotAccumulate() (gas: 35129728)
+Logs:
+  200 swaps @ 0.30% fee, residual token0: -52
+  200 swaps @ 0.30% fee, residual token1: -54
+  200 swaps @ 0    fee, residual token0: -46
+  200 swaps @ 0    fee, residual token1: -50
+
+[PASS] test_Q2_gasProfileVersusQueueDepth() (gas: 11392306)
+Logs:
+  --- entries: 1
+      afterSwap alloc gas, head-only swap: 31864
+      afterSwap alloc gas, sweeping swap: 11964
+      entries touched by the sweep: 1
+  --- entries: 2
+      afterSwap alloc gas, head-only swap: 31874
+      afterSwap alloc gas, sweeping swap: 18717
+      entries touched by the sweep: 2
+  --- entries: 5
+      afterSwap alloc gas, head-only swap: 31874
+      afterSwap alloc gas, sweeping swap: 38976
+      entries touched by the sweep: 5
+  --- entries: 10
+      afterSwap alloc gas, head-only swap: 31874
+      afterSwap alloc gas, sweeping swap: 65998
+      entries touched by the sweep: 9
+  --- entries: 25
+      afterSwap alloc gas, head-only swap: 31874
+      afterSwap alloc gas, sweeping swap: 160540
+      entries touched by the sweep: 23
+  --- entries: 50
+      afterSwap alloc gas, head-only swap: 31874
+      afterSwap alloc gas, sweeping swap: 309106
+      entries touched by the sweep: 45
+
+[PASS] test_negativeControl_flooredSharesGoesRed() (gas: 1265674)
+Logs:
+     control reverted with: swap2: token0 conservation
+
+[PASS] test_negativeControl_offByOneCursorGoesRed() (gas: 1162935)
+Logs:
+     control reverted with: swap1: entry a0
+
+[PASS] test_negativeControl_proRataGoesRed() (gas: 1171262)
+Logs:
+     control reverted with: swap1: entry a0
+
+[PASS] test_positiveControl_sameHarnessPassesUnmutated() (gas: 1435546)
+Suite result: ok. 9 passed; 0 failed; 0 skipped; finished in 79.03ms (135.64ms CPU time)
+
+Ran 1 test suite in 148.25ms (79.03ms CPU time): 9 tests passed, 0 failed, 0 skipped (9 total tests)

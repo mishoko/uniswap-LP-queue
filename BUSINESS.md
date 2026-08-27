@@ -551,6 +551,17 @@ pure market-design parameter and the deployer should set it, per pool.
 
 Stated at full strength. Nothing here is softened.
 
+> ⚠️ **This list is NOT complete, and the gaps are on the record elsewhere.** Research closed on
+> 2026-08-26 named four limitations that appear **nowhere in this document**: **full-range capital
+> efficiency** (one full-range position offers ~1/200th the depth per dollar of a ±1% concentrated
+> one — the sharpest unanswered attack, `PITFALLS.md` §5.17); **the Ratchet** (front-first applies in
+> both directions, so the tail is a one-way accumulator with no priority to exit — §5.18); **Phase 3
+> is a one-sided market** (the tail's compensation channel is Harberger rent, which is Phase 4 —
+> §5.19); and **"the seat price IS the toxicity" is OVERCLAIMED** (§5.20). All four are [ANALYSIS],
+> from `docs/research/premise-review/`. A **MEASURED** protocol-fee ledger hazard and a **MEASURED**
+> per-seat withdrawal problem are likewise absent here — `PITFALLS.md` §5.1–§5.7. **Read
+> `PITFALLS.md` §5 before quoting this section as the full limitation set.**
+
 **1. QUEUE does not stop sandwiches.** A sandwich is front-run, victim, back-run. QUEUE changes which
 LP is the counterparty to each of those three swaps. It does not prevent any of them, does not raise
 their cost, and does not detect them. The cohort's mission statement is *"Protect LPs · kill the

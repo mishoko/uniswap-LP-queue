@@ -1,0 +1,252 @@
+Compiling 2 files with Solc 0.8.30
+Solc 0.8.30 finished in 660.20ms
+Compiler run successful with warnings:
+Warning (2072): Unused local variable.
+   --> archive/2026-08-26/test/spike/ProtocolFeeHazard.t.sol:854:21:
+    |
+854 |         (int256 d0, int256 d1) = _report("E2: protocolFee = 1 pip each direction");
+    |                     ^^^^^^^^^
+
+
+Ran 7 tests for archive/2026-08-26/test/spike/ProtocolFeeHazard.t.sol:ProtocolFeeHazardTest
+[PASS] test_C1_control_zeroProtocolFee_reproducesTheSpike() (gas: 1949061)
+Logs:
+  =============== C1: protocolFee = 0 (control)
+  protocol fee packed (uint24): 0
+  queue ledger total token0: 2248553145997694428660
+  queue ledger total token1: 445000573750774563494
+  PoolManager-measured GROSS token0: 2248553145997694428660
+  PoolManager-measured GROSS token1: 445000573750774563494
+  protocolFeesAccrued(c0): 0
+  protocolFeesAccrued(c1): 0
+  expected ledger token0 (allocator under test): 2248553145997694428660
+  expected ledger token1 (allocator under test): 445000573750774563494
+  GROSS conservation gap token0 (ledger - PM): 0
+  GROSS conservation gap token1 (ledger - PM): 0
+  NET  conservation gap token0 (ledger - (PM - pfAccrued)): 0
+  NET  conservation gap token1 (ledger - (PM - pfAccrued)): 0
+  --- swap #: 1
+      direction: 0 -> 1
+      input (PM balance delta, wei): 4000000000000000000
+      output (PM balance delta, wei): 995015938219190933
+      protocol fee skimmed this swap (wei): 0
+      protocol fee as ppm of input: 0
+      LP fee this swap (wei, derived): 12000000000000000
+      protocol fee as ppm of LP fee: 0
+  --- swap #: 2
+      direction: 0 -> 1
+      input (PM balance delta, wei): 300000000000000000000
+      output (PM balance delta, wei): 64805335589816211968
+      protocol fee skimmed this swap (wei): 0
+      protocol fee as ppm of input: 0
+      LP fee this swap (wei, derived): 900000000000000000
+      protocol fee as ppm of LP fee: 0
+  --- swap #: 3
+      direction: 0 -> 1
+      input (PM balance delta, wei): 50000000000000000000
+      output (PM balance delta, wei): 9199074721190033551
+      protocol fee skimmed this swap (wei): 0
+      protocol fee as ppm of input: 0
+      LP fee this swap (wei, derived): 150000000000000000
+      protocol fee as ppm of LP fee: 0
+  --- swap #: 4
+      direction: 1 -> 0
+      input (PM balance delta, wei): 20000000000000000000
+      output (PM balance delta, wei): 105446854002305571286
+      protocol fee skimmed this swap (wei): 0
+      protocol fee as ppm of input: 0
+      LP fee this swap (wei, derived): 60000000000000000
+      protocol fee as ppm of LP fee: 0
+  redeemed token0 (real ERC20): 2248553145997694428657
+  redeemed token1 (real ERC20): 445000573750774563490
+  REDEMPTION residual token0 (redeemed - ledger): -3
+  REDEMPTION residual token1 (redeemed - ledger): -4
+  protocolFeesAccrued(c0) at end: 0
+  protocolFeesAccrued(c1) at end: 0
+
+[PASS] test_C2_control_maxProtocolFeeBoundaryIsReal() (gas: 1086387)
+Logs:
+  max legal packed protocol fee accepted: 4097000
+
+[PASS] test_E1_maxProtocolFee_breaksTheLedger() (gas: 2176965)
+Logs:
+  =============== E1: protocolFee = MAX (1000|1000<<12)
+  protocol fee packed (uint24): 4097000
+  queue ledger total token0: 2248684765720959878379
+  queue ledger total token1: 445064332912949525426
+  PoolManager-measured GROSS token0: 2248684765720959878379
+  PoolManager-measured GROSS token1: 445064332912949525426
+  protocolFeesAccrued(c0): 353999999999999999
+  protocolFeesAccrued(c1): 20000000000000000
+  expected ledger token0 (allocator under test): 2248684765720959878379
+  expected ledger token1 (allocator under test): 445064332912949525426
+  GROSS conservation gap token0 (ledger - PM): 0
+  GROSS conservation gap token1 (ledger - PM): 0
+  NET  conservation gap token0 (ledger - (PM - pfAccrued)): 353999999999999999
+  NET  conservation gap token1 (ledger - (PM - pfAccrued)): 20000000000000000
+  --- swap #: 1
+      direction: 0 -> 1
+      input (PM balance delta, wei): 4000000000000000000
+      output (PM balance delta, wei): 994022900418229484
+      protocol fee skimmed this swap (wei): 4000000000000000
+      protocol fee as ppm of input: 1000
+      LP fee this swap (wei, derived): 11988000000000000
+      protocol fee as ppm of LP fee: 333667
+  --- swap #: 2
+      direction: 0 -> 1
+      input (PM balance delta, wei): 300000000000000000000
+      output (PM balance delta, wei): 64749180127828813328
+      protocol fee skimmed this swap (wei): 299999999999999999
+      protocol fee as ppm of input: 999
+      LP fee this swap (wei, derived): 899100000000000000
+      protocol fee as ppm of LP fee: 333667
+  --- swap #: 3
+      direction: 0 -> 1
+      input (PM balance delta, wei): 50000000000000000000
+      output (PM balance delta, wei): 9192464058803431708
+      protocol fee skimmed this swap (wei): 50000000000000000
+      protocol fee as ppm of input: 1000
+      LP fee this swap (wei, derived): 149850000000000000
+      protocol fee as ppm of LP fee: 333667
+  --- swap #: 4
+      direction: 1 -> 0
+      input (PM balance delta, wei): 20000000000000000000
+      output (PM balance delta, wei): 105315234279040121567
+      protocol fee skimmed this swap (wei): 20000000000000000
+      protocol fee as ppm of input: 1000
+      LP fee this swap (wei, derived): 59940000000000000
+      protocol fee as ppm of LP fee: 333667
+  redeemed token0 (real ERC20): 2248330765720959878377
+  redeemed token1 (real ERC20): 445044332912949525423
+  REDEMPTION residual token0 (redeemed - ledger): -354000000000000002
+  REDEMPTION residual token1 (redeemed - ledger): -20000000000000003
+  protocolFeesAccrued(c0) at end: 353999999999999999
+  protocolFeesAccrued(c1) at end: 20000000000000000
+  shortfall0 - protocolFeesAccrued(c0): 3
+  shortfall1 - protocolFeesAccrued(c1): 3
+  shortfall token0 per swap (wei): 88500000000000000
+  x larger than the 0.26 wei/swap benign residual (token0): 340384615384615386
+
+[PASS] test_E2_oneWeiPipProtocolFee_alsoLeaks() (gas: 2159972)
+Logs:
+  =============== E2: protocolFee = 1 pip each direction
+  protocol fee packed (uint24): 4097
+  queue ledger total token0: 2248553278040030812965
+  queue ledger total token1: 445000637692206825219
+  PoolManager-measured GROSS token0: 2248553278040030812965
+  PoolManager-measured GROSS token1: 445000637692206825219
+  protocolFeesAccrued(c0): 353999999999999
+  protocolFeesAccrued(c1): 20000000000000
+  expected ledger token0 (allocator under test): 2248553278040030812965
+  expected ledger token1 (allocator under test): 445000637692206825219
+  GROSS conservation gap token0 (ledger - PM): 0
+  GROSS conservation gap token1 (ledger - PM): 0
+  NET  conservation gap token0 (ledger - (PM - pfAccrued)): 353999999999999
+  NET  conservation gap token1 (ledger - (PM - pfAccrued)): 20000000000000
+  --- swap #: 1
+      direction: 0 -> 1
+      input (PM balance delta, wei): 4000000000000000000
+      output (PM balance delta, wei): 995014942195292471
+      protocol fee skimmed this swap (wei): 4000000000000
+      protocol fee as ppm of input: 1
+      LP fee this swap (wei, derived): 11999988000000000
+      protocol fee as ppm of LP fee: 333
+  --- swap #: 2
+      direction: 0 -> 1
+      input (PM balance delta, wei): 300000000000000000000
+      output (PM balance delta, wei): 64805279272914786428
+      protocol fee skimmed this swap (wei): 299999999999999
+      protocol fee as ppm of input: 0
+      LP fee this swap (wei, derived): 899999100000000000
+      protocol fee as ppm of LP fee: 333
+  --- swap #: 3
+      direction: 0 -> 1
+      input (PM balance delta, wei): 50000000000000000000
+      output (PM balance delta, wei): 9199068092683095828
+      protocol fee skimmed this swap (wei): 50000000000000
+      protocol fee as ppm of input: 1
+      LP fee this swap (wei, derived): 149999850000000000
+      protocol fee as ppm of LP fee: 333
+  --- swap #: 4
+      direction: 1 -> 0
+      input (PM balance delta, wei): 20000000000000000000
+      output (PM balance delta, wei): 105446721959969186981
+      protocol fee skimmed this swap (wei): 20000000000000
+      protocol fee as ppm of input: 1
+      LP fee this swap (wei, derived): 59999940000000000
+      protocol fee as ppm of LP fee: 333
+  redeemed token0 (real ERC20): 2248552924040030812963
+  redeemed token1 (real ERC20): 445000617692206825216
+  REDEMPTION residual token0 (redeemed - ledger): -354000000000002
+  REDEMPTION residual token1 (redeemed - ledger): -20000000000003
+  protocolFeesAccrued(c0) at end: 353999999999999
+  protocolFeesAccrued(c1) at end: 20000000000000
+
+[PASS] test_M1_mutation_E1AssertionsFailWithoutTheFee() (gas: 1809299)
+Logs:
+  cumPf0 with fee OFF: 0
+  shortfall token0 with fee OFF: -3
+
+[PASS] test_M2_mutation_C1BoundIsViolatedWithTheFee() (gas: 2024770)
+Logs:
+  shortfall token0 vs C1 bound of 8 wei: -354000000000000002
+  shortfall token1 vs C1 bound of 8 wei: -20000000000000003
+
+[PASS] test_M3_mutation_P2NettedAllocatorClosesTheGap() (gas: 2248665)
+Logs:
+  =============== M3: P2-netted allocator, protocolFee = MAX
+  protocol fee packed (uint24): 4097000
+  queue ledger total token0: 2248330765720959878380
+  queue ledger total token1: 445044332912949525426
+  PoolManager-measured GROSS token0: 2248684765720959878379
+  PoolManager-measured GROSS token1: 445064332912949525426
+  protocolFeesAccrued(c0): 353999999999999999
+  protocolFeesAccrued(c1): 20000000000000000
+  expected ledger token0 (allocator under test): 2248330765720959878380
+  expected ledger token1 (allocator under test): 445044332912949525426
+  GROSS conservation gap token0 (ledger - PM): -353999999999999999
+  GROSS conservation gap token1 (ledger - PM): -20000000000000000
+  NET  conservation gap token0 (ledger - (PM - pfAccrued)): 0
+  NET  conservation gap token1 (ledger - (PM - pfAccrued)): 0
+  --- swap #: 1
+      direction: 0 -> 1
+      input (PM balance delta, wei): 4000000000000000000
+      output (PM balance delta, wei): 994022900418229484
+      protocol fee skimmed this swap (wei): 4000000000000000
+      protocol fee as ppm of input: 1000
+      LP fee this swap (wei, derived): 11988000000000000
+      protocol fee as ppm of LP fee: 333667
+  --- swap #: 2
+      direction: 0 -> 1
+      input (PM balance delta, wei): 300000000000000000000
+      output (PM balance delta, wei): 64749180127828813328
+      protocol fee skimmed this swap (wei): 299999999999999999
+      protocol fee as ppm of input: 999
+      LP fee this swap (wei, derived): 899100000000000000
+      protocol fee as ppm of LP fee: 333667
+  --- swap #: 3
+      direction: 0 -> 1
+      input (PM balance delta, wei): 50000000000000000000
+      output (PM balance delta, wei): 9192464058803431708
+      protocol fee skimmed this swap (wei): 50000000000000000
+      protocol fee as ppm of input: 1000
+      LP fee this swap (wei, derived): 149850000000000000
+      protocol fee as ppm of LP fee: 333667
+  --- swap #: 4
+      direction: 1 -> 0
+      input (PM balance delta, wei): 20000000000000000000
+      output (PM balance delta, wei): 105315234279040121567
+      protocol fee skimmed this swap (wei): 20000000000000000
+      protocol fee as ppm of input: 1000
+      LP fee this swap (wei, derived): 59940000000000000
+      protocol fee as ppm of LP fee: 333667
+  redeemed token0 (real ERC20): 2248330765720959878377
+  redeemed token1 (real ERC20): 445044332912949525423
+  REDEMPTION residual token0 (redeemed - ledger): -3
+  REDEMPTION residual token1 (redeemed - ledger): -3
+  protocolFeesAccrued(c0) at end: 353999999999999999
+  protocolFeesAccrued(c1) at end: 20000000000000000
+
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 3.84ms (11.23ms CPU time)
+
+Ran 1 test suite in 152.59ms (3.84ms CPU time): 7 tests passed, 0 failed, 0 skipped (7 total tests)

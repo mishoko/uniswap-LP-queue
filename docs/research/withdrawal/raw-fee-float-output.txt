@@ -1,0 +1,351 @@
+No files changed, compilation skipped
+
+Ran 1 test for docs/research/withdrawal/FeeFloatComposition.t.sol:FeeFloatAsymmetricDecimalsTest
+[PASS] test_X1_composition_survivesUnequalDecimalsWithMaxFee() (gas: 1546721)
+Logs:
+  token0 decimals: 6
+  token1 decimals: 18
+  seeded token0 (raw): 1000000000000
+  seeded token1 (raw): 4000000000000000000000000
+  protocolFeesAccrued c0: 177000000
+  protocolFeesAccrued c1: 160000000000000000000
+  asym INV-F slack t0: 0
+  asym INV-F slack t1: 0
+  asym INV-F slack t0: 0
+  asym INV-F slack t1: 0
+  asym INV-F slack t0: 0
+  asym INV-F slack t1: 0
+  asym LEFTOVER ledger dust token0: 2
+  asym LEFTOVER ledger dust token1: 3
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 3.98ms (2.06ms CPU time)
+
+Ran 18 tests for docs/research/withdrawal/FeeFloatComposition.t.sol:FeeFloatCompositionTest
+[PASS] test_G1_gasOfTheFloatWithdrawUnderAProtocolFee() (gas: 1733671)
+Logs:
+  HARD CASE withdraw gas, fee ON (cold, incl. call overhead): 252694
+  float-only baseline (FloatWithdraw.t.sol test_G1)         : 252672
+  GAS DELTA vs the float-only baseline                      : 22
+  allocator gas last swap (P2 SLOAD included)               : 48641
+
+[PASS] test_NC1_nettingRemoved_goesRed() (gas: 1751755)
+Logs:
+  NC1 INV-F slack t0 (backing-ledger): -353999999999999999
+  NC1 INV-F slack t1 (backing-ledger): -20000000000000000
+  NC1 protocolFeesAccrued c0        : 353999999999999999
+  NC1 protocolFeesAccrued c1        : 20000000000000000
+  NC1 FloatShort want           : 1922942404817326980722
+  NC1 FloatShort have           : 1922588404817326980719
+  NC1 SHORTFALL (wei)           : 354000000000000003
+  NC1 shortfall / DUST bound    : 44250000000000000
+
+[PASS] test_NC1b_theInvariantFAssertionIsLoadBearing() (gas: 1404797)
+Logs:
+    INV-F slack t0 (backing-ledger) mutation: -353999999999999999
+    INV-F slack t1 (backing-ledger) mutation: -20000000000000000
+
+[PASS] test_NC1c_nettingRemoved_F1_silentlyStripsTheLastWithdrawers() (gas: 1557477)
+Logs:
+    seat            : 1
+       SHORT-PAID t0: 0
+       SHORT-PAID t1: 0
+    seat            : 0
+       SHORT-PAID t0: 0
+       SHORT-PAID t1: 0
+    seat            : 2
+       SHORT-PAID t0: 354000000000000003
+       SHORT-PAID t1: 20000000000000004
+  NC1c leftover UNPAID ledger t0: 354000000000000003
+  NC1c leftover UNPAID ledger t1: 20000000000000004
+  NC1c protocolFeesAccrued c0   : 353999999999999999
+  NC1c protocolFeesAccrued c1   : 20000000000000000
+  NC1c unpaid / the 8-wei bound : 46750000000000000
+
+[PASS] test_NC2_zeroProtocolFee_reproducesTheFloatSuiteExactly() (gas: 1562859)
+Logs:
+    INV-F slack t0 (backing-ledger) NC2: 0
+    INV-F slack t1 (backing-ledger) NC2: 0
+    INV-F slack t0 (backing-ledger) NC2/drain: 0
+    INV-F slack t1 (backing-ledger) NC2/drain: 0
+    INV-F slack t0 (backing-ledger) NC2/drain: 0
+    INV-F slack t1 (backing-ledger) NC2/drain: 0
+  NC2 leftover ledger dust t0   : 3
+  NC2 leftover ledger dust t1   : 5
+
+[PASS] test_NC3_cannotExceedEntitlement_feeOn() (gas: 1666676)
+Logs:
+    INV-F slack t0 (backing-ledger) NC3: 0
+    INV-F slack t1 (backing-ledger) NC3: 0
+  PM raw balance c0 after full teardown: 354000000000000003
+  protocolFeesAccrued c0               : 353999999999999999
+
+[PASS] test_P0_maxLegalProtocolFeeIsActuallyOn() (gas: 1491113)
+Logs:
+  protocolFeesAccrued(c0) after 4 swaps (wei): 353999999999999999
+  protocolFeesAccrued(c1) after 4 swaps (wei): 20000000000000000
+  hook cumulative NETTED out of amtIn      (wei): 373999999999999999
+
+[PASS] test_P1_invariantF_survivesMaxProtocolFee() (gas: 1712666)
+Logs:
+  ledger t0                     : 2248330765720959878380
+  ledger t1                     : 445044332912949525426
+  PM raw balance c0             : 2248684765720959878379
+  protocolFeesAccrued c0        : 353999999999999999
+  PM backing c0 (raw - pfee)    : 2248330765720959878380
+    INV-F slack t0 (backing-ledger) P1/pre-withdraw: 0
+    INV-F slack t1 (backing-ledger) P1/pre-withdraw: 0
+  seat1 ledger a0 (fee ON)      : 258858901104999807724
+    INV-F slack t0 (backing-ledger) P1/float-engaged: 0
+    INV-F slack t1 (backing-ledger) P1/float-engaged: 0
+  REDEEMED t0 + float0          : 1989471864615960070652
+  ledger t0                     : 1989471864615960070656
+  RESIDUAL t0 (have - ledger)   : -4
+  REDEEMED t1 + float1          : 445044332912949525422
+  ledger t1                     : 445044332912949525426
+  RESIDUAL t1 (have - ledger)   : -4
+  protocolFeesAccrued c0 (for scale): 353999999999999999
+
+[PASS] test_P2a_allSeats_convertedFIRST() (gas: 1844053)
+Logs:
+    withdrew seat: 1
+       face a0  : 258858901104999807724
+       paid a0  : 258858901104999807724
+       face a1  : 0
+       paid a1  : 0
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) fee/order[1,0,2]: 0
+    INV-F slack t1 (backing-ledger) fee/order[1,0,2]: 0
+    withdrew seat: 0
+       face a0  : 66652402203450416915
+       paid a0  : 66652402203450416915
+       face a1  : 19980000000000000000
+       paid a1  : 19980000000000000000
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) fee/order[1,0,2]: 0
+    INV-F slack t1 (backing-ledger) fee/order[1,0,2]: 0
+    withdrew seat: 2
+       face a0  : 1922819462412509653741
+       paid a0  : 1922819462412509653737
+       face a1  : 425064332912949525426
+       paid a1  : 425064332912949525421
+       SHORT a0 : 4
+       SHORT a1 : 5
+    INV-F slack t0 (backing-ledger) fee/order[1,0,2]: 0
+    INV-F slack t1 (backing-ledger) fee/order[1,0,2]: 0
+  LEFTOVER ledger dust token0   : 4
+  LEFTOVER ledger dust token1   : 5
+  protocolFeesAccrued c0 (scale): 353999999999999999
+
+[PASS] test_P2b_allSeats_convertedLAST() (gas: 1786114)
+Logs:
+    withdrew seat: 0
+       face a0  : 66652402203450416915
+       paid a0  : 66652402203450416915
+       face a1  : 19980000000000000000
+       paid a1  : 19980000000000000000
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) fee/order[0,2,1]: 0
+    INV-F slack t1 (backing-ledger) fee/order[0,2,1]: 0
+    withdrew seat: 2
+       face a0  : 1922819462412509653741
+       paid a0  : 1922819462412509653741
+       face a1  : 425064332912949525426
+       paid a1  : 425064332912949525422
+       SHORT a0 : 0
+       SHORT a1 : 4
+    INV-F slack t0 (backing-ledger) fee/order[0,2,1]: 0
+    INV-F slack t1 (backing-ledger) fee/order[0,2,1]: 0
+    withdrew seat: 1
+       face a0  : 258858901104999807724
+       paid a0  : 258858901104999807721
+       face a1  : 0
+       paid a1  : 0
+       SHORT a0 : 3
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) fee/order[0,2,1]: 0
+    INV-F slack t1 (backing-ledger) fee/order[0,2,1]: 0
+  LEFTOVER ledger dust token0   : 3
+  LEFTOVER ledger dust token1   : 4
+  protocolFeesAccrued c0 (scale): 353999999999999999
+
+[PASS] test_P2c_allSeats_reverse() (gas: 1844920)
+Logs:
+    withdrew seat: 2
+       face a0  : 1922819462412509653741
+       paid a0  : 1922819462412509653741
+       face a1  : 425064332912949525426
+       paid a1  : 425064332912949525426
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) fee/order[2,1,0]: 0
+    INV-F slack t1 (backing-ledger) fee/order[2,1,0]: 0
+    withdrew seat: 1
+       face a0  : 258858901104999807724
+       paid a0  : 258858901104999807724
+       face a1  : 0
+       paid a1  : 0
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) fee/order[2,1,0]: 0
+    INV-F slack t1 (backing-ledger) fee/order[2,1,0]: 0
+    withdrew seat: 0
+       face a0  : 66652402203450416915
+       paid a0  : 66652402203450416911
+       face a1  : 19980000000000000000
+       paid a1  : 19979999999999999996
+       SHORT a0 : 4
+       SHORT a1 : 4
+    INV-F slack t0 (backing-ledger) fee/order[2,1,0]: 0
+    INV-F slack t1 (backing-ledger) fee/order[2,1,0]: 0
+  LEFTOVER ledger dust token0   : 4
+  LEFTOVER ledger dust token1   : 4
+  protocolFeesAccrued c0 (scale): 353999999999999999
+
+[PASS] test_P2d_allSeats_inOrder() (gas: 1844943)
+Logs:
+    withdrew seat: 0
+       face a0  : 66652402203450416915
+       paid a0  : 66652402203450416915
+       face a1  : 19980000000000000000
+       paid a1  : 19980000000000000000
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) fee/order[0,1,2]: 0
+    INV-F slack t1 (backing-ledger) fee/order[0,1,2]: 0
+    withdrew seat: 1
+       face a0  : 258858901104999807724
+       paid a0  : 258858901104999807724
+       face a1  : 0
+       paid a1  : 0
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) fee/order[0,1,2]: 0
+    INV-F slack t1 (backing-ledger) fee/order[0,1,2]: 0
+    withdrew seat: 2
+       face a0  : 1922819462412509653741
+       paid a0  : 1922819462412509653737
+       face a1  : 425064332912949525426
+       paid a1  : 425064332912949525422
+       SHORT a0 : 4
+       SHORT a1 : 4
+    INV-F slack t0 (backing-ledger) fee/order[0,1,2]: 0
+    INV-F slack t1 (backing-ledger) fee/order[0,1,2]: 0
+  LEFTOVER ledger dust token0   : 4
+  LEFTOVER ledger dust token1   : 4
+  protocolFeesAccrued c0 (scale): 353999999999999999
+
+[PASS] test_P2e_interleavedWithSwaps() (gas: 2238474)
+Logs:
+    INV-F slack t0 (backing-ledger) interleave/w1: 0
+    INV-F slack t1 (backing-ledger) interleave/w1: 0
+    INV-F slack t0 (backing-ledger) interleave/s1: 0
+    INV-F slack t1 (backing-ledger) interleave/s1: 0
+    INV-F slack t0 (backing-ledger) interleave/s2: 0
+    INV-F slack t1 (backing-ledger) interleave/s2: 0
+    INV-F slack t0 (backing-ledger) interleave/w0partial: 0
+    INV-F slack t1 (backing-ledger) interleave/w0partial: 0
+    INV-F slack t0 (backing-ledger) interleave/s3: 0
+    INV-F slack t1 (backing-ledger) interleave/s3: 0
+    withdrew seat: 0
+       face a0  : 25668612915723650303
+       paid a0  : 25668612915723650303
+       face a1  : 11541068011143014478
+       paid a1  : 11541068011143014478
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) interleave/drain: 0
+    INV-F slack t1 (backing-ledger) interleave/drain: 0
+    withdrew seat: 2
+       face a0  : 1922819462412509653741
+       paid a0  : 1922819462412509653734
+       face a1  : 425064332912949525426
+       paid a1  : 425064332912949525419
+       SHORT a0 : 7
+       SHORT a1 : 7
+    INV-F slack t0 (backing-ledger) interleave/drain: 0
+    INV-F slack t1 (backing-ledger) interleave/drain: 0
+    withdrew seat: 1
+       face a0  : 0
+       paid a0  : 0
+       face a1  : 0
+       paid a1  : 0
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) interleave/drain: 0
+    INV-F slack t1 (backing-ledger) interleave/drain: 0
+  LEFTOVER ledger dust token0   : 7
+  LEFTOVER ledger dust token1   : 7
+  protocolFeesAccrued c0 (scale): 383999999999999999
+
+[PASS] test_P3a_dustPolicyExactPayout_lastWithdrawerUnderMaxFee() (gas: 1834978)
+Logs:
+  last seat face a0             : 1922819462412509653741
+  last seat face a1             : 425064332912949525426
+  float0 available              : 1
+  float1 available              : 44324716953901368837
+  last withdrawal succeeded?: NO
+    FloatShort want             : 1922819462412509653741
+    FloatShort have             : 1922819462412509653737
+    SHORTFALL (wei)             : 4
+    protocolFeesAccrued (scale) : 353999999999999999
+
+[PASS] test_P3b_dustPolicyF1_lastWithdrawerUnderMaxFee() (gas: 1822799)
+Logs:
+    withdrew seat: 1
+       face a0  : 258858901104999807724
+       paid a0  : 258858901104999807724
+       face a1  : 0
+       paid a1  : 0
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) P3/F1: 0
+    INV-F slack t1 (backing-ledger) P3/F1: 0
+    withdrew seat: 0
+       face a0  : 66652402203450416915
+       paid a0  : 66652402203450416915
+       face a1  : 19980000000000000000
+       paid a1  : 19980000000000000000
+       SHORT a0 : 0
+       SHORT a1 : 0
+    INV-F slack t0 (backing-ledger) P3/F1: 0
+    INV-F slack t1 (backing-ledger) P3/F1: 0
+    withdrew seat: 2
+       face a0  : 1922819462412509653741
+       paid a0  : 1922819462412509653737
+       face a1  : 425064332912949525426
+       paid a1  : 425064332912949525421
+       SHORT a0 : 4
+       SHORT a1 : 5
+    INV-F slack t0 (backing-ledger) P3/F1: 0
+    INV-F slack t1 (backing-ledger) P3/F1: 0
+  F1 leftover ledger dust t0    : 4
+  F1 leftover ledger dust t1    : 5
+  protocolFeesAccrued c0 (scale): 353999999999999999
+
+[PASS] test_P4_ordering_withdrawDoesNotAccrueProtocolFees() (gas: 1734743)
+Logs:
+  PoolManager Swap events during withdrawals: 0
+
+[PASS] test_X1_foreignPoolSharingACurrencyCorruptsTheP2Diff() (gas: 1873845)
+Logs:
+  foreign pool accrued protocolFees(c0): 2000000000000000
+  our swap input (PM delta)     : 300000000000000000000
+  our pool's OWN protocol fee   : 299999999999999999
+  CORRECT credit (in - ourFee)  : 299700000000000000001
+  hook ACTUALLY credited        : 299698000000000000001
+  hook lastPfDelta (over-netted): 301999999999999999
+  foreign pool's fee            : 2000000000000000
+
+[PASS] test_X2_foreignPoolCanBrickTheHookEntirely() (gas: 1961316)
+Logs:
+  control swap OK, hook pfSeen0: 1000000000000
+  foreign fee parked in the counter: 4000000000000000
+  small swap after the foreign accrual: REVERTED
+  hook pfSeen0 after the failed swap (unchanged => permanent): 1000000000000
+
+Suite result: ok. 18 passed; 0 failed; 0 skipped; finished in 7.72ms (37.41ms CPU time)
+
+Ran 2 test suites in 168.21ms (11.70ms CPU time): 19 tests passed, 0 failed, 0 skipped (19 total tests)
