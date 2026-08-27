@@ -1759,7 +1759,7 @@ The `transferFrom` control is not paranoia. Overriding `transfer` and forgetting
 
 **Commands**
 ```bash
-forge test --match-path "test/queue/Harberger.t.sol" -vv   # 26 passed
+forge test --match-path "test/queue/Harberger.t.sol" -vv   # 48 passed
 python3 script/mutate.py                                   # 53 mutations, 0 survivors
 ```
 
