@@ -357,20 +357,28 @@ it transacts with is a depositor inside the hook's own `unlock()`, and it knows 
 ```solidity
 function getHookPermissions() public pure override returns (Hooks.Permissions memory p) {
     p.beforeAddLiquidity = true;   // refuse every external LP
+    p.beforeSwap         = true;   // open the protocol-fee measurement window (§E.5)
     p.afterSwap          = true;   // allocate the fill
 }
 ```
+
+> **CHANGED 2026-08-27.** `beforeSwap` was added when the protocol-fee fix was built. It snapshots
+> `protocolFeesAccrued(inputCurrency)` into TRANSIENT storage and returns a ZERO delta; it changes
+> nothing about the swap. Without it the fee can only be measured across transactions against a
+> counter that is **global per currency**, which is the defect that killed the previous design
+> (§E.5). `BEFORE_SWAP_RETURNS_DELTA` stays OFF.
 
 Flag bits (from `@uniswap/v4-core/src/libraries/Hooks.sol`, verified):
 
 | Flag | Value | Used? |
 |---|---|---|
 | `BEFORE_ADD_LIQUIDITY_FLAG` | `1 << 11` = `0x800` | **yes** |
+| `BEFORE_SWAP_FLAG` | `1 << 7` = `0x80` | **yes** (added 2026-08-27, §E.5) |
 | `AFTER_SWAP_FLAG` | `1 << 6` = `0x40` | **yes** |
 | `AFTER_SWAP_RETURNS_DELTA_FLAG` | `1 << 2` | **no** — `afterSwap` returns `0` |
 | everything else | | no |
 
-⇒ **the hook address must have its low 14 bits equal to `0x0840`.** `PoolManager` enforces this;
+⇒ **the hook address must have its low 14 bits equal to `0x08C0`** (`0x800 | 0x80 | 0x40`). `PoolManager` enforces this;
 `Hooks.validateHookPermissions` reverts on a mismatch, so a wrong address is a loud failure, not a
 silent one.
 
@@ -1005,6 +1013,33 @@ it again — in our code, not the spike's.
 
 **Gate:** §D.3.
 
+> ### ✅ PHASE 1 COMPLETE — 2026-08-27. All twelve criteria met.
+>
+> `src/queue/libraries/Allocation.sol` + `src/queue/QueueHook.sol`; tests in `test/queue/`.
+> **36/36 green, `forge lint src/` clean, nine production mutations confirmed red.**
+>
+> Criterion **1.10 is solved by snapshotting `protocolFeesAccrued` across the
+> `beforeSwap`->`afterSwap` window** rather than deriving the fee — see the rewritten §E.5. This
+> added the `beforeSwap` permission (§B.2). Every fee test runs against a FOREIGN POOL sharing a
+> currency, and all six were confirmed to go RED against the superseded mechanism.
+>
+> **Four defects were found in the Phase 1 code itself, none by the correctness suite** — all fixed,
+> all now carrying tests (PITFALLS 5.37–5.42):
+> 1. `_allocate` loaded every seat into memory, discarding the cursor design (98k->215k gas at depth
+>    50, linear). All 31 correctness tests stayed green under it. Now flat, with a `vm.cool()` gas
+>    regression test.
+> 2. Deriving direction from the delta's SIGN bricked dust swaps (1–3 wei reverted
+>    `DirectionMismatch`). Now taken from `params.zeroForOne`, with the degenerate zero-output fill
+>    credited to the cursor seat rather than dropped.
+> 3. `seed()` and `redeemAll()` were permissionless on the production hook. Moved to
+>    `test/queue/QueueHarness.sol`; **the shipping contract now has no permissionless
+>    state-changing entry point.**
+> 4. Settlement ignored ERC20 return values; now uses v4's `CurrencySettler` (SafeERC20).
+>
+> **The sharpest testing lesson (PITFALLS 5.37):** the cursor pull-back exists once per direction.
+> Deleting one copy was caught by 7 tests; deleting its mirror was caught by **zero**. When a rule
+> appears twice, mutate both copies.
+
 **Risk to watch:** the temptation to "clean up" the allocator while porting it. Every simplification
 you make is a mutation you have not tested. Port it faithfully first, prove it, *then* refactor —
 with the controls still red.
@@ -1470,11 +1505,11 @@ witnesses rather than one.
 
 | # | Mutation | Must go red on |
 |---|---|---|
-| N1 | Pro-rata instead of front-first | seat composition, swap 1 |
-| N2 | Cursor starts at seat 1 | seat composition, swap 1 |
-| N3 | **Remainder line deleted** (floor everything) | **conservation, swap 2 — not swap 1** |
-| N4 | `cursorY = min(cursorY, start)` deleted (§B.6) | seat composition, after an out-back-out sequence |
-| N5 | `beforeAddLiquidity` guard removed, then an external LP adds | conservation, immediately |
+| N1 | Pro-rata instead of front-first | seat composition, swap 1 — observed reason `swap1: seat a0` |
+| N2 | Cursor starts at seat 1 | seat composition, swap 1 — observed reason `swap1: seat a0` |
+| N3 | **Remainder line deleted** (floor everything) | **conservation, swap 2 — not swap 1**. Observed `swap2: token0 conservation` |
+| N4 | `cursorY = min(cursorY, start)` deleted (§B.6) | **INVARIANT C, at swap 3** — observed `swap3: INVARIANT C cursor1 leads`. *Corrected 2026-08-27: this fires one swap EARLIER and more directly than "composition at swap 4", because the reverse leg credits token Y from index 0 upward and the un-pulled cursor immediately leads a funded seat* |
+| N5 | `beforeAddLiquidity` guard removed, then an external LP adds | **SOLVENCY** (`redeemAll()` no longer covers the ledger) — *corrected 2026-08-27, see below* |
 
 **N3's reason string must specifically assert that swap 1 passed and swap 2 failed.** If your control
 dies at swap 1, your fixture has only one seat being filled and you are not testing the remainder
@@ -1482,6 +1517,15 @@ line at all.
 
 **N5 is the one people skip.** It is the guard that makes the hook the sole LP, i.e. the premise of
 every other number. Test it.
+
+**N5's expected failure was WRONG in this document until 2026-08-27, and the reason is instructive.**
+It predicted "conservation, immediately". It does not fail conservation at all: the fixture derives
+expected totals from PoolManager's balance movements, which cover the WHOLE swap — and the hook
+credits the queue that same whole swap. Both sides move together and the LEDGER ties out perfectly.
+What actually breaks is **solvency**: an outside LP takes a pro-rata share of every fill, so the
+hook's own position can no longer cover the ledger it is writing. Assert it with `redeemAll()`.
+This is LAW 3's second corollary yet again — **ledger conservation and position redeemability are
+different claims and need different assertions.**
 
 **Fuzz:**
 ```bash
@@ -1713,76 +1757,96 @@ Covered in §B.7. Restated because someone will re-derive the wrong cause:
 
 Do not re-run that experiment expecting a different answer. Do not write "fee rounding" in a comment.
 
-## E.5 Protocol fee — **TESTED 2026-08-26. REAL AND LARGE. Remedy is Phase 1's job.**
+## E.5 Protocol fee — **SOLVED AND BUILT 2026-08-27. Phase 1 ships the fix.**
 
-> **STATUS UPDATE (2026-08-26).** This section is no longer speculative. The hazard was executed and
-> measured: `archive/2026-08-26/test/spike/ProtocolFeeHazard.t.sol` (7 tests incl. mutations), written
-> up in `docs/research/protocol-fee/`. Headline numbers, at the maximum legal fee:
-> **the queue is short 0.354e18 token0 over the 4-swap scenario — 0.1% of input, which is 33.4% of the
-> LP's entire fee income.** It leaks at the minimum 1-pip fee too. The shortfall equals
-> `protocolFeesAccrued` exactly. Because allocation is front-first, **the tail of the queue absorbs
-> 100% of it.**
->
-> **The trap that makes this worse than written below:** `protocolFeesAccrued` stays inside
-> PoolManager's ERC20 balance until collected, so **the spike's LAW 3 conservation test passes at 0 wei
-> error while the position is short 0.354 token0.** LAW 3 is hereby amended project-wide: measure
-> conservation on `PoolManager ERC20 balance - protocolFeesAccrued(currency)`.
->
-> **P2 is no longer speculative either** — a netted allocator was measured to close the gap to 3 wei in
-> ~10 lines plus one SLOAD (`test_M3`). It is the known upgrade path.
->
-> ✅ **OWNER DECISION 2026-08-26 — SHIP P2. The choice below is CLOSED; do not re-open it without the
-> owner.** Net out `protocolFeesAccrued` in `_afterSwap`; do **NOT** ship a refusal. Rationale: P1
-> hands the PoolManager owner's `protocolFeeController` a permanent off-switch for the product, its
-> stated justification here was factually wrong (retracted below), and the fee switch is *reportedly*
-> already live (Governance Proposal 100, 2026-07-27 — **UNVERIFIED, press-sourced only**; verify with
-> `poolManager.protocolFeeController()` + `StateLibrary.getSlot0(poolId)` before relying on it).
-> **Consequence to remember:** with P2 the ledger no longer over-credits, so the "33.4% of LP income"
-> figure and the "the tail absorbs 100% of it" behaviour BOTH disappear — they were artefacts of the
-> bug, not properties of the mechanism. See `PROGRESS.md` 2026-08-26 and `PITFALLS.md` §3.1, §3.2,
-> §5.1–§5.4.
->
-> **P1 correction:** a one-shot check at initialization is NOT enough. The controller can set the fee
-> *after* the pool is live, so the check must be re-read per swap. P1 is withdrawal-safe: hook
-> permissions are only `{beforeAddLiquidity, afterSwap}`, and withdrawal is an unhooked
-> `modifyLiquidity(negative)`, so a revert in `_afterSwap` halts trading without trapping funds.
+> **STATUS: CLOSED.** The hazard is real, was measured, and is now fixed in production code with a
+> mechanism that carries its own multi-pool negative control. `src/queue/QueueHook.sol::_beforeSwap`
+> + `_afterSwap`; tests in `test/queue/ProtocolFee.t.sol` (6 tests, all of which go RED against the
+> superseded mechanism). **Everything below about "re-derive it arithmetically" was the previous
+> plan and is WRONG — deleted rather than annotated.**
 
-The allocator credits the queue with `amtIn` = the swapper's full input, **fee included**, because the
-sole LP is owed all of it. That is correct **when the protocol fee is zero**, which is the default and
-which is what every spike measurement above was taken under.
+### The hazard
 
-**If a protocol fee is set on the pool, part of the input is skimmed to the protocol and never
-reaches the LP position.** The ledger would then credit more than the position can pay — a slow,
-silent insolvency with exactly the shape of a real bug. The spike never tested this.
+The allocator credits the queue with `amtIn` = the swapper's full input, fee included, because the
+sole LP is owed all of it. That is exactly right **when the protocol fee is zero**. When a protocol
+fee is set, part of the input is skimmed to the protocol and **never reaches the LP position**, so
+the ledger credits more than the position can pay — a slow, silent insolvency.
 
-**Phase 1 must resolve it. The owner chose (P2); (P1) is kept below only as the rejected
-alternative and as the record of why.** Assert whichever is built:
-- **(P1) Refuse.** Read the pool's protocol fee and revert/disable if nonzero. Simple and honest.
-  ⚠️ **The original justification here — "losing nothing since we control the pool we deploy" — is
-  FACTUALLY WRONG and has been retracted.** We control *deployment*, not the *fee*: the controller can
-  set it at any time after the pool is live. P1 therefore hands that controller a permanent off-switch
-  for the product. It is withdrawal-safe (PROVEN by execution:
-  `test_E5_P1_refuseInAfterSwap_doesNotBrickWithdrawal`), **but only while the check stays in
-  `_afterSwap`** — moving it into a shared modifier or the removal path converts a governance fee-set
-  into total permanent loss of funds.
-- **(P2) Account for it.** Subtract the protocol fee from `amtIn` before allocating. **MEASURED to
-  close the gap to 3 wei** (`test_M3_mutation_P2NettedAllocatorClosesTheGap`), ~10 lines. It needs **no
-  extra hook permission**. ⚠️ **BUT THE `protocolFeesAccrued`-DIFF IMPLEMENTATION IS DEFECTIVE AND
-  MUST NOT BE SHIPPED — PHASE 1 BLOCKER.** That mapping is **global per currency, not per pool**
-  (`ProtocolFees.sol:21`), so the diff absorbs every other v4 pool's protocol fees on either
-  currency: **X1** silent under-credit from ordinary foreign volume (no attacker needed), and
-  **X2** a **permanent brick** — `amtIn -= pfDelta` underflows in `afterSwap`, the swap reverts,
-  `pfSeen` never advances, the pool is dead. PROVEN: `docs/research/withdrawal/`
-  `FeeFloatComposition.t.sol` `test_X1`/`test_X2`. The **decision** (net out the fee) stands; the
-  **mechanism** must be re-derived arithmetically and given its own experiment + negative control. The pool
-  keeps trading under any fee; no off-switch. **Edge case that must be handled or refused:** `lpFee == 0`
-  ⇒ `swapFee == protocolFee` ⇒ v4 takes the entire `feeAmount` via a different formula
-  (`Pool.sol:391-392`). If P2 is built, LAW 3's conservation assertion must ALSO be updated or it goes
-  red while the code is correct.
+Measured at the maximum legal fee: the queue was short **0.354e18 token0** over the four-swap
+scenario. Because allocation is front-first, **the tail absorbed 100% of it**.
 
-Either way: **a test that sets a protocol fee and asserts the chosen behaviour.** Do not leave this
-one open. **The test MUST assert `protocolFeesAccrued > 0` before any other claim** — `setProtocolFee`
-silently no-ops for a non-controller caller, and without that guard the test proves nothing.
+Worse, the obvious test is blind: `protocolFeesAccrued` money stays inside PoolManager's ERC20
+balance until it is collected, so a raw-balance conservation test **passes at 0 wei error while the
+position is short 0.354e18**. That is why LAW 3 is amended project-wide.
+
+### The decision (unchanged): P2, account for it
+
+Net the protocol fee out of `amtIn` before allocating. Not P1 (refuse) — P1 hands the
+`protocolFeeController` a permanent off-switch for the product.
+
+### The mechanism, AS BUILT — snapshot the window, do not diff a counter
+
+**The previous implementation diffed `poolManager.protocolFeesAccrued(currency)` ACROSS
+TRANSACTIONS. That was broken**, because the mapping is `mapping(Currency => uint256)` — global per
+currency, no `PoolId` (`ProtocolFees.sol:21`). It therefore absorbed every other v4 pool's protocol
+fees on either token: **X1** silent under-credit from ordinary foreign volume, **X2** a permanent
+brick when foreign accrual exceeded the next swap's input.
+
+**The counter was never the problem. The measurement window was.** The fix:
+
+```solidity
+// beforeSwap — open the window
+pfSnapshotPlusOne = poolManager.protocolFeesAccrued(inputCurrency) + 1;
+
+// afterSwap — close it
+uint256 pfDelta = poolManager.protocolFeesAccrued(inputCurrency) - (snap - 1);
+amtIn -= pfDelta;
+```
+
+Between those two callbacks `PoolManager.swap` executes exactly one `Pool.swap` on exactly one pool
+and calls `_updateProtocolFees(inputCurrency, amountToProtocol)`. **That window contains no external
+call**, so no foreign pool can accrue inside it and `collectProtocolFees` cannot run inside it. The
+difference is therefore *exactly this swap's protocol fee, on this pool, to the wei.*
+
+**Why this is better than deriving the fee arithmetically.** Because the number is *read* rather than
+*computed*, every difficulty the previous plan listed simply does not arise:
+
+| Previously feared | Why it is now a non-issue |
+|---|---|
+| `amountToProtocol` is summed **per swap step** with per-step rounding across tick crossings | We never compute it; we read the sum v4 itself accumulated |
+| `lpFee == 0` ⇒ `swapFee == protocolFee` ⇒ v4 takes the ENTIRE `feeAmount` by a different formula (`Pool.sol:391-392`) | Same read, no special case. Asserted: `test_5_3_lpFeeZeroUnderProtocolFee` |
+| Exact-output rounds the other way | Same read, no special case |
+| Clamping removes the BRICK but not the UNDER-CREDIT | Nothing is clamped. `pfDelta > amtIn` is now structurally impossible and **reverts by name** rather than being silently absorbed |
+
+**The snapshot is TRANSIENT storage on purpose.** It cannot survive the transaction, so a stale or
+never-initialised snapshot — the third documented failure of the old design — is impossible by
+construction rather than by convention.
+
+**Cost:** one extra hook permission (`beforeSwap`, see §B.2), one `SLOAD` and one `TSTORE` per swap.
+
+### What this required changing elsewhere
+
+- **§B.2 permissions gain `beforeSwap`.** The hook address low bits move from `0x0840` to `0x08C0`.
+- **`AFTER_SWAP_RETURNS_DELTA` is still OFF** and `beforeSwap` returns a ZERO delta. QUEUE still
+  takes nothing from the swap.
+
+### The doctrine this cost us, and the rule that follows
+
+The superseded mechanism was "MEASURED closing the gap to 3 wei" by `test_M3` — **in a single-pool
+fixture**. The mechanism was right about *what* to subtract; the **instrument** was wrong, and the
+fixture was structurally incapable of showing it.
+
+> **Before trusting any measurement on this project, ask what the fixture is structurally incapable
+> of representing.**
+
+Every test in `test/queue/ProtocolFee.t.sol` therefore runs with a **foreign pool sharing a
+currency**, and all six were confirmed to go RED when the superseded mechanism is reinstated. One of
+them originally passed against it — because the foreign volume came *after* the measurement — and
+was strengthened. That near-miss is recorded because it is the same mistake, one layer down.
+
+**Still required of any future change here:** a test that sets a protocol fee must assert
+`protocolFeesAccrued > 0` **first** — `setProtocolFee` silently no-ops for a non-controller caller,
+and without that guard the test cannot fail.
 
 ## E.6 `donate()` pays whoever is in range NOW
 

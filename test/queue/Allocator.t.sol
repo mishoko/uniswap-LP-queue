@@ -1,0 +1,345 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.26;
+
+import {QueueFixture} from "./QueueFixture.sol";
+import {QueueHook} from "../../src/queue/QueueHook.sol";
+import {Allocation} from "../../src/queue/libraries/Allocation.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
+import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
+
+/// @dev Exposes the pure library so it can be fuzzed with no pool at all (§C.1 1.12).
+contract AllocationHarness {
+    function allocate(uint256[] memory balances, uint256 start, uint256 amtIn, uint256 amtOut)
+        external
+        pure
+        returns (Allocation.Fill[] memory fills, uint256 nextCursor)
+    {
+        return Allocation.allocate(balances, start, amtIn, amtOut);
+    }
+}
+
+contract AllocatorTest is QueueFixture {
+    AllocationHarness harness;
+
+    function setUp() public {
+        deployArtifactsAndLabel();
+        harness = new AllocationHarness();
+        vm.roll(100);
+    }
+
+    function _bps() internal pure returns (uint256[] memory bps) {
+        bps = new uint256[](3);
+        (bps[0], bps[1], bps[2]) = (400, 600, 9000);
+    }
+
+    /// @dev The four-swap scenario. Sizes are FRACTIONS OF THE SEEDED RESERVES, not constants, so
+    ///      the identical scenario runs at any price and any decimals.
+    function _runScenario() internal {
+        _open(_bps());
+        uint256 s0 = expT0;
+        uint256 s1 = expT1;
+
+        (uint256 h0Start, uint256 h1Start) = hook.seat(0);
+        (, uint256 seat1Start) = hook.seat(1);
+
+        // --- SWAP 1: small. Must land entirely inside the head seat. (1.5)
+        _swap(true, s0 / 500);
+        _check("swap1");
+        {
+            (uint256 h0, uint256 h1) = hook.seat(0);
+            (, uint256 a1) = hook.seat(1);
+            assertEq(a1, seat1Start, "swap1: fill smeared past the head (pro-rata)");
+            assertLt(h1, h1Start, "swap1: head gave up no token1");
+            assertGt(h0, h0Start, "swap1: head received no token0");
+            assertEq(lastTouched, 1, "swap1: touched != 1");
+        }
+
+        // --- SWAP 2: sweeping. Must EXHAUST >=2 seats and partially fill a third. (1.6)
+        _swap(true, (s0 * 16) / 100);
+        _check("swap2");
+        {
+            (, uint256 a1) = hook.seat(0);
+            (, uint256 b1) = hook.seat(1);
+            (, uint256 c1_) = hook.seat(2);
+            assertEq(a1, 0, "swap2: seat0 not exhausted");
+            assertEq(b1, 0, "swap2: seat1 not exhausted");
+            assertGt(c1_, 0, "swap2: seat2 should be partial, not exhausted");
+            assertGe(lastTouched, 2, "swap2: cursor never advanced");
+        }
+
+        // --- SWAP 3: lands mid-seat. Only seat 2 has token1 left.
+        {
+            (, uint256 before2) = hook.seat(2);
+            _swap(true, (s0 * 26) / 1000);
+            _check("swap3");
+            (, uint256 after2) = hook.seat(2);
+            assertGt(after2, 0, "swap3: not a partial fill");
+            assertLt(after2, before2, "swap3: seat2 did not fill");
+            assertEq(lastTouched, 1, "swap3: touched != 1");
+        }
+
+        // --- SWAP 4: REVERSE. The head holds token0 now, so the head must fill again. (1.7)
+        //     This is the "the front seat sees every swap" claim, executed.
+        {
+            (uint256 h0Before,) = hook.seat(0);
+            _swap(false, s1 / 100);
+            _check("swap4");
+            (uint256 h0After, uint256 h1After) = hook.seat(0);
+            assertLt(h0After, h0Before, "swap4: head did not fill on the reverse leg");
+            assertGt(h1After, 0, "swap4: head received no token1");
+        }
+    }
+
+    // =========================================================== 1.1 / 1.4 / 1.5-1.8 — the 1:4 case
+
+    function test_1_1_conservationAndComposition_at1to4() public {
+        startPrice = Constants.SQRT_PRICE_1_4;
+        _deployTokens();
+        _deployHook(0x1001);
+        _runScenario();
+    }
+
+    // ============================================================= 1.2 — two more non-unit fixtures
+
+    function test_1_2_conservation_at1to1000() public {
+        startPrice = Constants.SQRT_PRICE_1_1 / 31; // ~1:1000
+        _deployTokens();
+        _deployHook(0x1002);
+        _runScenario();
+    }
+
+    function test_1_2_conservation_at1000to1() public {
+        startPrice = Constants.SQRT_PRICE_1_1 * 31; // ~1000:1
+        _deployTokens();
+        _deployHook(0x1003);
+        _runScenario();
+    }
+
+    // ==================================================================== 1.3 — asymmetric decimals
+
+    /// @dev Phase 0 found the reference spike runs 18/18 and so only half-satisfies LAW 1
+    ///      (PITFALLS 5.31). This is the missing half.
+    function test_1_3_conservation_at18by6decimals() public {
+        dec0 = 18;
+        dec1 = 6;
+        startPrice = Constants.SQRT_PRICE_1_4;
+        _deployTokens();
+        _deployHook(0x1004);
+        _runScenario();
+    }
+
+    function test_1_3_conservation_at6by18decimals() public {
+        dec0 = 6;
+        dec1 = 18;
+        startPrice = Constants.SQRT_PRICE_1_4;
+        _deployTokens();
+        _deployHook(0x1005);
+        _runScenario();
+    }
+
+    // ======================================================== 1.9 — oversized swap reverts, loudly
+
+    function test_1_9_swapLargerThanTheQueueReverts() public {
+        startPrice = Constants.SQRT_PRICE_1_4;
+        _deployTokens();
+        _deployHook(0x1006);
+        _open(_bps());
+
+        // Drain the queue's token1 down to a sliver, then ask for more than remains.
+        _swap(true, (expT0 * 30) / 100);
+        _check("drain");
+
+        // Zero every seat's token1 so the next swap CANNOT be covered by the ledger, while the
+        // POSITION still has token1 to pay out. The allocator must refuse rather than under-fill.
+        uint256 n = hook.seatCount();
+        for (uint256 i; i < n; i++) {
+            (, uint256 a1) = hook.seat(i);
+            if (a1 != 0) vm.store(address(hook), _seatSlot(i, 1), bytes32(uint256(0)));
+        }
+
+        bytes memory reason = _expectSwapRevert(
+            true, expT0 / 100, Allocation.QueueUnderflow.selector, "oversized swap silently under-filled"
+        );
+        (uint256 shortfall) = abi.decode(_tail(reason), (uint256));
+        assertGt(shortfall, 0, "QueueUnderflow reported a zero shortfall");
+    }
+
+    function _tail(bytes memory err) internal pure returns (bytes memory out) {
+        out = new bytes(err.length - 4);
+        for (uint256 i; i < out.length; i++) {
+            out[i] = err[i + 4];
+        }
+    }
+
+    /// @dev `q` is the first declared storage variable, so its elements start at keccak(0); each
+    ///      Seat occupies two slots (a0, a1).
+    function _seatSlot(uint256 i, uint256 which) internal pure returns (bytes32) {
+        return bytes32(uint256(keccak256(abi.encode(uint256(0)))) + i * 2 + which);
+    }
+
+    // ================================================== 1.12 — stateless fuzz of the pure arithmetic
+
+    /// @dev No tolerance. `sum(give) == amtIn` and `sum(take) == amtOut`, EXACTLY. This is where the
+    ///      remainder line earns its keep.
+    function testFuzz_allocationNeverLosesAWei(uint256[8] memory rawBalances, uint256 rawIn, uint256 rawOut)
+        public
+        view
+    {
+        uint256[] memory balances = new uint256[](8);
+        uint256 total;
+        for (uint256 i; i < 8; i++) {
+            balances[i] = bound(rawBalances[i], 0, 1e30);
+            total += balances[i];
+        }
+        vm.assume(total > 0);
+
+        uint256 amtOut = bound(rawOut, 1, total);
+        uint256 amtIn = bound(rawIn, 1, 1e36);
+
+        (Allocation.Fill[] memory fills,) = harness.allocate(balances, 0, amtIn, amtOut);
+
+        uint256 sumTake;
+        uint256 sumGive;
+        for (uint256 f; f < fills.length; f++) {
+            sumTake += fills[f].take;
+            sumGive += fills[f].give;
+            assertLe(fills[f].take, balances[fills[f].index], "fill exceeds the seat's balance");
+        }
+        assertEq(sumTake, amtOut, "sum(take) != amtOut: a wei was lost or invented");
+        assertEq(sumGive, amtIn, "sum(give) != amtIn: a wei was lost or invented");
+    }
+
+    /// @dev INVARIANT C for the cursor0 branch specifically.
+    ///
+    ///      MUTATION TESTING FOUND THIS GAP, and it is the classic paired-branch asymmetry: the
+    ///      pull-back exists twice, once per direction, and the whole Phase 1 suite covered only
+    ///      ONE of them. Deleting `if (start < cursor1) cursor1 = start;` was caught by 7 tests.
+    ///      Deleting its mirror `if (start < cursor0) cursor0 = start;` was caught by ZERO, because
+    ///      every scenario happened to END on the reverse leg, so cursor0 never got the chance to
+    ///      lead.
+    ///
+    ///      The sequence that exposes it: forward (head keeps some token1) -> reverse until the
+    ///      head's token0 is exhausted so cursor0 advances -> forward again, which credits token0
+    ///      straight back to the head. Without the pull-back, cursor0 now LEADS a funded seat and
+    ///      the next reverse swap would skip it — silent theft of rank.
+    function test_invariantC_cursor0IsPulledBackAfterAReverseFill() public {
+        startPrice = Constants.SQRT_PRICE_1_4;
+        _deployTokens();
+        _deployHook(0x1007);
+        _open(_bps());
+
+        // A: small forward fill. The head must KEEP some token1 for step C to work.
+        _swap(true, expT0 / 2000);
+        _check("C-A");
+        (, uint256 headA1) = hook.seat(0);
+        assertGt(headA1, 0, "fixture drifted: the head must still hold token1");
+
+        // B: reverse until the head's token0 is exhausted and cursor0 actually advances.
+        for (uint256 i; i < 12; i++) {
+            (uint256 k0,) = hook.cursors();
+            if (k0 > 0) break;
+            _swap(false, expT1 / 40);
+            _check("C-B");
+        }
+        (uint256 c0After,) = hook.cursors();
+        assertGt(c0After, 0, "fixture drifted: cursor0 never advanced, nothing to pull back");
+
+        // C: forward again. This credits token0 to seats from cursor1 upward — including the head,
+        // which sits BELOW cursor0. The pull-back is the only thing keeping INVARIANT C true.
+        _swap(true, expT0 / 2000);
+        _check("C-C");
+
+        (uint256 h0,) = hook.seat(0);
+        (uint256 k0Final,) = hook.cursors();
+        assertGt(h0, 0, "fixture drifted: the head was not re-credited token0");
+        assertEq(k0Final, 0, "cursor0 was not pulled back and now LEADS a funded seat");
+    }
+
+    /// @dev The cursors only mean anything if a head-only swap costs the same at 50 seats as at 1.
+    ///      This is a REGRESSION TEST for a defect in the first draft of `_allocate`, which loaded
+    ///      every seat into a memory array before allocating and therefore read the entire roster
+    ///      on every swap — throwing the cursor optimisation away silently while every correctness
+    ///      test stayed green.
+    ///
+    ///      LAW 4 — measured with `vm.cool()`, because Forge keeps storage warm inside a test body
+    ///      and a warm measurement here was previously 2.5x optimistic.
+    function test_headOnlySwapCostIsFlatInQueueDepth() public {
+        uint256[] memory depths = new uint256[](4);
+        (depths[0], depths[1], depths[2], depths[3]) = (1, 5, 25, 50);
+        uint256[] memory costs = new uint256[](4);
+
+        for (uint256 d; d < depths.length; d++) {
+            dec0 = 18;
+            dec1 = 18;
+            startPrice = Constants.SQRT_PRICE_1_4;
+            _deployTokens();
+            _deployHook(uint160(0x7000 + d));
+
+            uint256 n = depths[d];
+            uint256[] memory bps = new uint256[](n);
+            for (uint256 i; i < n; i++) {
+                bps[i] = 10_000 / n;
+            }
+            bps[n - 1] = 10_000 - (10_000 / n) * (n - 1);
+            _open(bps);
+
+            // A swap small enough to land entirely inside the head seat at every depth.
+            uint256 amt = expT0 / (n * 400);
+            uint256[] memory before = _snapshot(true);
+
+            vm.cool(address(hook));
+            uint256 g = gasleft();
+            this.doSwap(true, amt);
+            costs[d] = g - gasleft();
+
+            emit log_named_uint(string.concat("head-only swap gas @ seats=", vm.toString(n)), costs[d]);
+            // `doSwap` bypasses `_swap`'s bookkeeping on purpose, so count the touched seats here.
+            assertEq(_countChanged(true, before), 1, "fixture drifted: swap was not head-only");
+        }
+
+        // 50 seats must not cost meaningfully more than 1. The old array-loading draft grew by
+        // roughly one cold SLOAD per seat, i.e. thousands of gas by depth 50.
+        uint256 growth = costs[3] > costs[0] ? costs[3] - costs[0] : 0;
+        assertLt(growth, 3_000, "head-only swap cost scales with queue depth: the cursor is not working");
+    }
+
+    /// @dev A swap the queue cannot cover must REVERT, never silently under-fill. Under-filling
+    ///      would hand the swapper tokens no seat owns. Mutation testing showed the pool-level test
+    ///      alone was the only thing covering this; the fuzz makes it cheap to cover properly.
+    function testFuzz_oversizedAllocationAlwaysReverts(uint256[5] memory rawBalances, uint256 excess) public {
+        uint256[] memory balances = new uint256[](5);
+        uint256 total;
+        for (uint256 i; i < 5; i++) {
+            balances[i] = bound(rawBalances[i], 0, 1e24);
+            total += balances[i];
+        }
+        uint256 amtOut = total + bound(excess, 1, 1e24);
+
+        vm.expectPartialRevert(Allocation.QueueUnderflow.selector);
+        harness.allocate(balances, 0, 1e18, amtOut);
+    }
+
+    /// @dev Front-first is an ORDERING claim, not just a conservation claim: with the cursor at 0,
+    ///      no seat may be touched while an earlier seat still holds the outgoing token.
+    function testFuzz_allocationIsStrictlyFrontFirst(uint256[6] memory rawBalances, uint256 rawOut) public view {
+        uint256[] memory balances = new uint256[](6);
+        uint256 total;
+        for (uint256 i; i < 6; i++) {
+            balances[i] = bound(rawBalances[i], 0, 1e24);
+            total += balances[i];
+        }
+        vm.assume(total > 0);
+        uint256 amtOut = bound(rawOut, 1, total);
+
+        (Allocation.Fill[] memory fills,) = harness.allocate(balances, 0, 1e18, amtOut);
+
+        for (uint256 f; f + 1 < fills.length; f++) {
+            assertLt(fills[f].index, fills[f + 1].index, "fills are not in rank order");
+            assertEq(fills[f].take, balances[fills[f].index], "an earlier seat was left partially filled");
+        }
+    }
+}

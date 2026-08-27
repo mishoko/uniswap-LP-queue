@@ -12,7 +12,7 @@ Newest entry first. Never delete an entry — supersede it.
 | Phase | Name | Status | Proven? |
 |---|---|---|---|
 | 0 | Harness + reproduce the reference spike | **COMPLETE 2026-08-27** | **YES** — 9/9, every §D.2 number exact, +2 fresh mutations red |
-| 1 | Allocator core | NOT STARTED | — |
+| 1 | Allocator core | **COMPLETE 2026-08-27** | **YES** — 27 tests, all 12 exit criteria met, 9 production mutations red |
 | 2 | Deposit / withdraw + redemption-dust fix | NOT STARTED | — |
 | 3 | ERC-6909 rank token + transfer | NOT STARTED | — |
 | 4 | Harberger rent variant | NOT STARTED | — |
@@ -22,9 +22,9 @@ Newest entry first. Never delete an entry — supersede it.
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
 
-**Verified 2026-08-27:** Phase 0 is done. `src/queue/` and `src/queue/libraries/` now exist but are
-**EMPTY — still no mechanism code**. `test/` holds only the three files copied verbatim from the
-archive per §A.9. Every row from Phase 1 down is still accurate.
+**Verified 2026-08-27 (end of session):** Phases 0 and 1 are done. `src/queue/QueueHook.sol` (359
+lines) and `src/queue/libraries/Allocation.sol` (89 lines) are the mechanism. `forge test` is
+36/36 green and `forge lint src/` is CLEAN. Every row from Phase 2 down is still accurate.
 
 *(Superseded — 2026-08-26 doc-audit:* every row above is still accurate — **no `src/` directory exists
 at the repo root** and no mechanism code has been written.*)* The two 2026-08-26 sessions below produced
@@ -74,6 +74,137 @@ each row carries its evidence grade. The rows below are the headline items and p
 ---
 
 ## Session log
+
+### 2026-08-27 (second) — PHASE 1 COMPLETE. Protocol fee SOLVED; four real defects found and fixed
+
+**All twelve §C.1 exit criteria met. Gate §D.3 passes. 36/36 tests, `forge lint src/` clean.**
+
+Built: `src/queue/libraries/Allocation.sol` (the arithmetic, 89 lines) and
+`src/queue/QueueHook.sol` (the hook, 359 lines). Tests: `test/queue/` — `Allocator.t.sol` (11),
+`Controls.t.sol` (7), `ProtocolFee.t.sol` (6), `Dust.t.sol` (3), plus `QueueFixture.sol` and the
+test-only `QueueHarness.sol`.
+
+---
+
+#### 1. THE PROTOCOL FEE IS SOLVED, and the fix is one SLOAD rather than a derivation
+
+The handoff said the replacement "is NOT a one-liner" and listed four arithmetic hazards to
+overcome (per-step rounding across tick crossings, `lpFee == 0` taking the whole `feeAmount`,
+exact-output rounding the other way, clamping not fixing the under-credit). **None of them apply,
+because the fee should not be derived at all.**
+
+`protocolFeesAccrued` being global per currency was never the problem. **The measurement window
+was.** Verified at source: `PoolManager.swap` calls `beforeSwap` -> `_swap` (which calls
+`_updateProtocolFees(inputCurrency, amountToProtocol)`) -> `afterSwap`, and **that window contains
+no external call**, so no foreign pool can accrue inside it and `collectProtocolFees` cannot run
+inside it. Snapshot in `beforeSwap`, read in `afterSwap`, and the difference is *exactly this
+swap's protocol fee on this pool, to the wei*.
+
+- **Cost:** one hook permission (`beforeSwap`; address bits `0x0840` -> `0x08C0`), one SLOAD, one TSTORE.
+- **The snapshot is TRANSIENT**, so a stale or uninitialised snapshot — the third documented failure
+  of the old design — is impossible by construction, not by convention.
+- **Nothing is clamped.** `pfDelta > amtIn` reverts by name. A clamp would silently under-credit.
+- `lpFee == 0` needs no special case: `test_5_3_lpFeeZeroUnderProtocolFee`.
+
+**X1 and X2 are dead, and I proved it by reinstating the old mechanism against the new suite:**
+
+| Test | vs. old mechanism |
+|---|---|
+| `test_X1_foreignAccrualCannotCorruptTheLedger` | RED — ledger short `499999999999999999` wei, **exactly** the foreign pool's take |
+| `test_X2_foreignAccrualCannotBrickTheHook` | RED — `ProtocolFeeExceedsInput(pfDelta 1e19, amtIn 2e16)`; under the old bare subtraction this is an underflow panic and a permanent brick |
+| the other four | RED |
+| all six | GREEN on the fix |
+
+**Every fee test runs with a FOREIGN POOL sharing a currency.** A single-pool fixture cannot observe
+this and that is exactly how the previous mechanism passed review.
+
+**THE NEAR-MISS, and it is the more valuable finding.** `test_measurementWindowSeesExactlyOneSwapsFee`
+**passed against the broken mechanism twice** before it was any good:
+1. It compared `lastPfDelta` (the FIXTURE's own measurement) to another fixture-side number —
+   tautological, never touched the hook. Fixed by asserting `lastHookCreditedIn`, the hook's own
+   ledger movement.
+2. Its foreign swap came AFTER the window it was checking. A multi-pool fixture is **necessary but
+   not sufficient** — the contamination has to exist at the moment the instrument reads.
+Both are PITFALLS 5.27 one layer down, and neither was visible without executing the old mechanism.
+
+---
+
+#### 2. FOUR REAL DEFECTS IN MY OWN CODE, found by the review lenses and by mutation
+
+None of these were caught by the correctness suite. All are fixed properly, not annotated.
+
+**(a) The cursor design was silently thrown away.** The first `_allocate` loaded every seat into a
+memory array before allocating, so a head-only swap read the entire roster. Measured **98,294 gas at
+1 seat -> 215,296 at 50**, linear. **All 31 correctness tests stayed green under it.** Fixed by
+driving `Allocation.step` directly over storage with early exit; now flat (97,737 -> 95,220), with a
+gas regression test measured under `vm.cool()` per LAW 4, confirmed to go red against the old draft.
+
+**(b) Dust swaps were bricked.** Deriving the direction from the SIGN of the balance delta reads it
+backwards when the output leg rounds to exactly zero. **Measured: 1, 2 and 3 wei on a 0.30% pool
+reverted `DirectionMismatch`** — swaps v4 itself accepts. Fixed by taking the direction from
+`params.zeroForOne` and handling the degenerate fill explicitly: the input is still owed to the
+queue, so it is credited to the seat at the cursor. Dropping it would leave the ledger UNDER-counting
+the position — the same strand-value-owed-to-nobody pathology as the fee under-credit.
+
+**(c) `seed()` and `redeemAll()` were PERMISSIONLESS on the production hook.** `seed()` funds the
+position from the hook's OWN balance, so the first caller of a pre-funded deployment would claim the
+entire queue for free; `redeemAll()` burns the whole position and anyone could call it. Both moved to
+`test/queue/QueueHarness.sol`. **The shipping contract now has no permissionless state-changing
+entry point at all** — only `unlockCallback` (guarded to PoolManager) and five views.
+
+**(d) Settlement ignored ERC20 return values.** Replaced the hand-rolled `IERC20Minimal.transfer`
+with v4's `CurrencySettler` (SafeERC20). Also fixes native-currency support and a
+`-type(int128).min` negation. `forge lint src/` is now clean.
+
+---
+
+#### 3. THE MUTATION FINDING THAT MATTERS MOST — a paired-branch asymmetry
+
+The cursor pull-back exists **twice**, once per direction. Mutating them separately:
+
+- deleting `if (start < cursor1) cursor1 = start;` -> caught by **7 tests**
+- deleting its mirror `if (start < cursor0) cursor0 = start;` -> caught by **ZERO**
+
+Every scenario happened to END on the reverse leg, so cursor0 never got the chance to lead. A
+suite can cover one half of a symmetric rule perfectly and the other half not at all.
+`test_invariantC_cursor0IsPulledBackAfterAReverseFill` closes it and is confirmed red against that
+mutation. **Standing rule (PITFALLS 5.37): when a rule appears once per direction, mutate BOTH.**
+
+**Nine production mutations run in total**, every one confirmed red: remainder line, underflow guard
+(library AND hook — separate lines, one test each), cursor advance, both pull-backs, fee not netted,
+window snapshot zeroed, dust credit dropped, array preload.
+
+---
+
+#### 4. Corrections made to the plan, because the code is the evidence
+
+- **§B.2** — permissions gain `beforeSwap`; address low bits `0x0840` -> `0x08C0`.
+- **§E.5** — REWRITTEN. It instructed the next agent to derive the fee arithmetically, which is now
+  the wrong instruction. Deleted rather than annotated.
+- **§D.3 N5** — predicted "conservation, immediately". **Wrong.** An external LP does NOT break
+  ledger conservation: the fixture's expected totals and the hook's credit both move by the whole
+  swap. What breaks is SOLVENCY (`redeemAll()`). LAW 3's second corollary again.
+- **§D.3 N1/N2/N4** — predicted reasons corrected to the observed ones. N4 fires one swap EARLIER
+  than predicted and on INVARIANT C rather than composition, which is the better outcome.
+
+---
+
+**Decisions taken (implementation-level, per the owner's 2026-08-27 authorisation):** add the
+`beforeSwap` permission; transient snapshot over persistent counter; revert rather than clamp on
+`pfDelta > amtIn`; credit the degenerate fill to the cursor seat; move scaffolding to a test harness;
+`CurrencySettler` for settlement. None changes who receives fees or how seats are allocated.
+
+**Nothing escalated. No admin function, no privileged role, no off-chain component, no upgrade path.**
+
+**NEXT ACTION — Phase 2 (§C.2): deposit / withdraw, the float, and `sweepFloatIntoPosition()`.**
+Carried in: INVARIANT F is already declared next to `float0`/`float1` and asserted at zero, so
+Phase 2 cannot break it silently. `withdraw` MUST decrement `liquidity` (PITFALLS 5.23 — §B.7 never
+does). The deposit-remainder question (5.24) is still open and is the owner's call.
+
+**STILL TRUE AND STILL UNADDRESSED:** full-range depth (5.17) is the sharpest unanswered attack and
+appears in no document. It is a business/pitch question, not a correctness one.
+
+---
 
 ### 2026-08-27 — PHASE 0 GREEN. Reference spike reproduced EXACTLY; suite survived two fresh mutations
 
