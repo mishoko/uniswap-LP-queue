@@ -41,12 +41,38 @@ It does not stop sandwich attacks. It does not reduce total LVR. It does not rec
 searchers. It **prices** adverse selection and routes it to whoever bears it cheapest. Full
 limitations are in [`BUSINESS.md`](BUSINESS.md) §9, stated at full strength.
 
-## Status — Phases 0-3 built and green, 2026-08-27
+## How rank is held: a self-assessed, always-for-sale lease
+
+A seat is not just an ordering — it is a **lease you price yourself**.
+
+- You post a `selfPrice` in the pool's `currency0`. Nobody else sets it; there is no oracle, no
+  mark, and no admin.
+- You pay **rent** on that number, continuously, in elapsed seconds. It goes to **the seats behind
+  you** — the tail's compensation for standing aside — pro-rata by their `currency0` balance, and
+  the split sums to what you were charged **to the wei**.
+- **Anyone may take your seat at your own price, at any time.** Price it low and somebody will.
+- Rent is paid from a **prepaid meter** you top up. Let it run dry and you are **demoted to the back
+  of the queue** — not liquidated, not seized. You keep the seat, you keep every wei of your capital,
+  you lose your place.
+
+Two properties are worth stating because they are what make the above true rather than decorative:
+
+**Your ask is firm.** A seat stays available at the *lowest* price it has been asked at, or paid for,
+within a fixed window. Without that, a holder watching the mempool raises the price the instant they
+see a buyer, for the cost of a few seconds of rent — four parts in ten million, per block — and
+"always for sale" means nothing. A raise applies immediately to what you *pay* and only after the
+window to what you can be *taken* at.
+
+**The founding endowment dissolves itself.** Every seat on the deployed roster starts unpriced, and
+an unpriced seat is free for anyone to take. Whoever deploys chooses the first holders, and that
+choice is worth a head start of one transaction.
+
+## Status — Phases 0-4 built and green, 2026-08-27
 
 ```
-forge test        ->  77 passed, 0 failed
-forge lint src/   ->  clean
-49 mutations run on production code across Phases 1-3, ZERO survivors
+forge test              ->  125 passed, 0 failed
+forge lint src/         ->  clean, zero notes
+python3 script/mutate.py -> 53 mutations on production code, ZERO survivors
 ```
 
 Everything runs against **real v4 contracts deployed locally** — a real `PoolManager`,
@@ -56,26 +82,38 @@ Everything runs against **real v4 contracts deployed locally** — a real `PoolM
 1000:1, at 18/6 and 6/18 decimals. The protocol fee is handled correctly at a maximum fee, with
 `lpFee == 0`, and against a foreign pool sharing a currency. Per-seat withdrawal works from a shared
 float in all six orderings. Rank is an ERC-6909 seat, supply one, and transferring it moves the rank
-while the capital goes back to the seller.
+while the capital goes back to the seller. Rent accrues exactly linearly in time, splits to the wei,
+is never lost when nobody is eligible, and cannot be captured by a flash loan. A seat that
+under-prices itself is bought out; one that over-prices pays for it. Foreclosure demotes and never
+seizes. The whole always-for-sale guarantee survives a holder who front-runs their own buyout.
 
-**What is not.** These are stated at full strength, here rather than in a footnote:
+**What is not.** Stated at full strength, here rather than in a footnote:
 
-- **Rank is not yet *bought*.** The founding roster is fixed at deployment — an endowment, as an
-  exchange's founding memberships were. What is closed is that rank cannot be obtained by dusting,
-  by being early, or at any price the incumbent has not accepted. Continuous pricing is the
-  Harberger lease, which is the next phase.
-- **This is a one-sided market until then.** The honest answer to *"why would anyone hold seat 5?"*
-  is "they wouldn't" — the tail's compensation channel is rent, and rent is the next phase.
+- **Harberger cannot express a negative seat value.** Under toxic flow every holder declares near
+  zero, no rent flows, and the front is free to take. That is the mechanism behaving correctly and
+  it is also the point at which the price signal is censored. Unsolved, and not solvable inside this
+  design.
+- **Rent is `currency0`, weighted by `currency0`.** Weighting a two-token basket needs a price and
+  QUEUE is not allowed to have one. A tail holding only `currency1` is paid nothing; the rent waits
+  until an eligible recipient exists.
+- **Enforcement needs somebody to poke it.** No keeper ships and none is required — the seats behind
+  are paid by the poke, and a buyer must poke to clear a delinquent incumbent out of the way — but a
+  seat nobody wants and nobody pokes accrues a debt nothing collects.
 - **The roster is bounded at 32 seats,** because a full sweep of a thousand positions cannot be paid
-  for. This is a professional venue, not a replacement for every Uniswap pool.
+  for — and because the queue's whole order is one 32-byte word. This is a professional venue, not a
+  replacement for every Uniswap pool.
 - **One full-range position is thin.** ~1/200th the depth per dollar of a ±1% concentrated position.
 - **Face value is an upper bound, not a promise.** Each seat redeems to within a gap that grows
   linearly at ~0.15 wei per swap and never compounds.
+- **Seat trading is not depth-neutral.** Evacuating a single-token seat moves position into float,
+  exactly as withdrawal churn does.
 
 **Open hazards are not hidden.** Every one is listed with its evidence grade in
-[`PITFALLS.md`](PITFALLS.md) §5, including the ones found by attacking our own work — a free
-denial-of-service in the transfer design this repo's own plan specified, and a seat-theft hole that
-71 passing tests did not see.
+[`PITFALLS.md`](PITFALLS.md) §5, including the ones found by attacking our own work: a free
+denial-of-service in the transfer design this repo's own plan specified, a seat-theft hole that 71
+passing tests did not see, a rent payment source the plan specified that would have set rank by
+which way the market traded, and two brand-new entry points that shipped with no ownership check
+past a 99-test green suite.
 
 ## Start here
 

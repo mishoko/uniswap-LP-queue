@@ -46,9 +46,7 @@ contract ProtocolFeeTest is QueueFixture {
         address a = address(FLAGS ^ (uint160(0x9009) << 144));
         // Deployed for ITS OWN pool: the hook now fixes its pool at construction, so a foreign pool
         // on a different fee tier needs a hook constructed for that fee tier.
-        deployCodeTo(
-            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, poolFee, SPACING, _syntheticRoster(1)), a
-        );
+        deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgs(_syntheticRoster(1), poolFee), a);
         foreignHook = QueueHarness(a);
         _fundHook(a);
 
@@ -208,19 +206,19 @@ contract ProtocolFeeTest is QueueFixture {
     function test_5_3_lpFeeZeroUnderProtocolFee() public {
         // A zero-lpFee pool needs a hook constructed for a zero-lpFee pool.
         address z = address(FLAGS ^ (uint160(0x2009) << 144));
-        deployCodeTo(
-            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, uint24(0), SPACING, _syntheticRoster(3)), z
-        );
+        deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgs(_syntheticRoster(3), uint24(0)), z);
         hook = QueueHarness(z);
         _fundHook(z);
         k = PoolKey({currency0: c0, currency1: c1, fee: 0, tickSpacing: SPACING, hooks: IHooks(address(hook))});
         poolManager.initialize(k, startPrice);
         (uint256 s0, uint256 s1) =
             hook.seed(k, TickMath.minUsableTick(SPACING), TickMath.maxUsableTick(SPACING), LIQ, _bps());
+        delete refOrder;
         for (uint256 i; i < 3; i++) {
             (uint256 a0, uint256 a1) = hook.seat(i);
             ref0.push(a0);
             ref1.push(a1);
+            refOrder.push(i);
         }
         expT0 = s0;
         expT1 = s1;

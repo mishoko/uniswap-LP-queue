@@ -25,8 +25,8 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 | **0** | Harness + reproduce the reference spike | ✅ **COMPLETE** 2026-08-27 | §D.2 PASS | 9/9, every §D.2 number reproduced **exactly** |
 | **1** | Allocator core | ✅ **COMPLETE** 2026-08-27 | §D.3 PASS | all 12 criteria; 5 negative controls red; 9 mutations red |
 | **2** | Deposit / withdraw / dust + float | ✅ **COMPLETE** 2026-08-27 | §D.4 PASS | all criteria; 11 mutations red, **0 survivors** |
-| **3** | ERC-6909 rank token ◀ **SUBMITTABLE** | ✅ **COMPLETE** 2026-08-27 | §D.5 PASS | all 10 criteria; 5 negative controls red; **29 mutations red, 0 survivors** |
-| 4 | Harberger rent variant | ⬜ NOT STARTED | §D.6 | — |
+| **3** | ERC-6909 rank token | ✅ **COMPLETE** 2026-08-27 | §D.5 PASS | all 10 criteria; 5 negative controls red; **29 mutations red, 0 survivors** |
+| **4** | Harberger rent variant ◀ **SUBMITTABLE** | ✅ **COMPLETE** 2026-08-27 | §D.6 PASS | all 10 criteria; 5 negative controls red; **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | ⬜ NOT STARTED | §D.7 | — |
 | 6 | Adversarial + invariant campaign | ⬜ NOT STARTED | §D.8 | — |
 | 7 | Testnet + demo + video | ⬜ NOT STARTED | — | — |
@@ -917,7 +917,7 @@ constructor (`RosterTooLarge`) and asserted at exactly 32 and at 33 (`test_3_6`)
 test'"'"'s top depth was moved from 50 to 32 at the same time, because 32 is now the real worst case
 rather than a hypothetical one — a head-only swap stays flat across 1 -> 8 -> 20 -> 32 seats.
 
-## B.10 The Harberger variant — **DESIGN, Phase 4**
+## B.10 The Harberger variant — ✅ **BUILT 2026-08-27. Two rows of the table below were WRONG and are corrected in place.**
 
 Plain transferable rank has one hole this project could not close (§E.13): **rank-then-run.** Buy the
 front cheaply during a quiet stretch, then dump the rank token before a scheduled event. You eat the
@@ -935,9 +935,12 @@ Specification:
 | **Rent** | `rentOwed = τ · selfPrice · (block.timestamp − lastSettled) / RENT_PERIOD`. Use **timestamps**, not block numbers — block times differ by chain and a block-denominated rate silently changes meaning on deploy. Record τ and `RENT_PERIOD` as immutables. |
 | **Who is paid** | The seats **behind** you, pro-rata **by their `currency0` balance**. Same-token pro-rata only — mixing `a0` and `a1` into one "value" requires a price and is forbidden. |
 | **No eligible recipient** | If every seat behind holds `a0 == 0`, the rent accrues to `unallocatedRent0` and is distributed at the next settlement that has a recipient. Do **not** use `poolManager.donate()` (§E.6). |
-| **Payment source** | Deducted from the seat's own `a0`. |
-| **Foreclosure** | If `a0` cannot cover accrued rent: settle what it can, zero `selfPrice`, and **move the seat to the tail**. Then recompute cursors conservatively. This is the whole enforcement mechanism. |
-| **Buyout** | Anyone may pay `selfPrice` in `currency0` to the holder at any time. Outstanding rent settles first. **The seat transfers empty** — the seller's `(a0, a1)` go to their `pendingWithdraw` (B.8). The buyer sets a new `selfPrice` and deposits. |
+| **Payment source** | ⚠️ **CORRECTED — the original rule was broken.** ~~Deducted from the seat's own `a0`.~~ Rent is drawn from a **per-seat prepaid meter**, `rentEscrow[seatId]`, in `currency0`, held outside the position, outside `float0` and outside the allocator. `fundRent` tops it up (anyone may); `withdrawRent` takes back what is unspent (holder only, settles first). **Why the original is broken, twice over:** (1) front-first allocation drives seats to single-token composition on purpose, and INVARIANT C says so outright — *every seat below `cursor0` holds `a0 == 0`.* After any run of one-for-zero flow the FRONT seats hold exactly zero of the rent currency and would be foreclosed one after another **because of the direction the market traded**, which is the one thing QUEUE claims rank is not set by. (2) An EMPTY seat is pure rank, which §B.8 exists to make holdable and sellable — and under `a0` rent it cannot be held at any price above zero at all. Executed side by side against the spec's own implementation in `test_4_13` / `test_4_13b`. **This is not collateral:** nothing marks it, nothing values it against anything, nobody is paid to seize it, and running it dry costs a place in the queue rather than the seat or its capital. |
+| **Foreclosure** | If the meter cannot cover accrued rent: settle what it can, zero `selfPrice`, and **move the seat to the tail**. The seat keeps its holder and every wei of its capital — this is a DEMOTION, not a seizure. Cursor adjustment is EXACT rather than merely conservative: ranks above the vacated one each move down by one, so a cursor at `c > r` describes the same seats at `c-1`, and the demoted seat lands at the LAST rank, which no cursor can lead. |
+| **Buyout** | Anyone may pay the seat's **ask** in `currency0` at any time. Outstanding rent settles first — a delinquent seat is foreclosed and demoted *before* it is priced, so the buyer pays what it is worth then. **The seat transfers empty**, through §B.8's corrected evacuation: the seller's `(a0, a1)` are PAID OUT (not moved to `pendingWithdraw` — see §B.8's correction), the unspent meter is refunded with them, and the price is credited to the seller as a `pendingWithdraw` claim rather than transferred on, so a seller who is a contract cannot refuse payment and thereby veto their own buyout. The buyer's own `selfPrice` is applied in the same call, so the seat is never left unpriced — and therefore free — for even one block. |
+| **⚠️ THE FIRM QUOTE — ADDED, and without it Harberger delivers nothing but a tax** | A seat is always available at **the lowest price it has been asked at, or paid for, within `FIRM_WINDOW`**. Reason: "always for sale at your own price" is worth nothing if the holder can raise the price the instant they see a buyer — and they can see one, because a buyout is an ordinary transaction in an ordinary mempool, and repricing costs only rent for the seconds the raise is in effect (at τ = 10%/yr, **four parts in ten million of the price per block**). Left alone, EVERY buyout is vetoable. A raise takes effect immediately for RENT and only after the window for the SALE. The three ways out are each self-destructive rather than merely refused: raising blocks nothing because the old price is still firm; dropping to zero and re-raising in one transaction makes the window minimum ZERO; and handing the seat to your own second address arms the window at what was paid for it, which for a plain transfer is zero. `FIRM_WINDOW` is a SECURITY parameter, not an economic one — it only has to exceed the time a holder needs to react. `buyPrice()`, `test_4_11`, `test_4_12`, `test_4_26`. |
+| **⚠️ SETTLE-AHEAD ON FUNDING — ADDED, and it closes a flash-loan grab** | Rent is split by the recipients' `currency0` balance READ AT SETTLEMENT, and funding a seat is the only way a holder can raise that number at will. So `addToSeat` settles every seat AHEAD of it first. Without that line, `addToSeat(tail, huge) → settleRent(everyoneAhead) → withdraw(tail)` captures rent that accrued over a period the depositor was not there for, in one transaction, with borrowed money. Measured at **16×** the honest share in `test_4_14`. A per-block cooldown would also close it and is the WRONG instrument: §B.12 counts "waiting one block boundary" as a proven evasion, and QUEUE passes that table precisely because it has no per-block reference. Worst-case cost measured: **2,337,576 gas** at a full 32-seat roster with every seat ahead priced and funded (`test_4_44`). |
+| **⚠️ SEAT ID ≠ RANK — the indirection foreclosure forces** | Demotion permutes the queue, so seat id stops being rank index. The order lives in **one `uint256`**, one seat id per byte: `MAX_SEATS == 32` and the 32 bytes of a word are the same fact, which is why the roster bound is 32 and why a demotion rewrites the whole order in a single `SSTORE` and the allocator reads it in a single `SLOAD`. There is deliberately **no `rankOfId` mapping** — a second copy of the order would be a writer/reader pair that can disagree, and on this project a rule kept in two places has been wrong four times; `rankOfId` scans the word instead. Everything keyed to a SEAT — capital, holder, lease — is keyed by id and never moves. Only the ORDER moves. |
 
 **What Harberger is NOT:** it is not a margin engine and must never become one. There is no
 collateral, no liquidation crank, no oracle, and no mark. Foreclosure is a demotion, not a seizure.
@@ -1274,6 +1277,39 @@ is an owner-level decision (§D.8).
 | 4.10 | Reentrancy: a malicious `currency0` that re-enters during a buyout payout cannot double-spend a seat |
 
 **Gate:** §D.6.
+
+---
+
+### ✅ PHASE 4 COMPLETE — 2026-08-27
+
+`forge test` → **125 passed, 0 failed**. `forge lint src/` → **clean, zero notes**.
+**53 mutations run against the Phase 4 code, ZERO survivors** (`script/mutate.py`).
+
+| # | Criterion | Evidence |
+|---|---|---|
+| ✅ 4.1 | Rent accrues linearly in elapsed time, exact vs. hand-computed | `test_4_1` — 1e18 / 2e18 / 10e18 at a tenth, a fifth and a whole year on a 100e18 assessment. Literals, not a fixture-side copy of the formula |
+| ✅ 4.2 | The split sums **exactly** to the charge, remainder rule included | `test_4_2` asserts the IDENTITY `Σcredited + unallocatedAfter == charged + unallocatedBefore` and first proves a naive floored split would be short, so the remainder line is not vacuous. `testFuzz_4_2` fuzzes the same identity with no pool |
+| ✅ 4.3 | With no eligible recipient the rent is HELD, not lost | `test_4_3`; `test_4_30` proves the pot ACCUMULATES across two settlements rather than being replaced |
+| ✅ 4.4 | A buyout transfers rank only; the seller's capital is fully recoverable | `test_4_4` — seat arrives empty, seller receives capital + unspent meter and claims the price |
+| ✅ 4.5 | Under-pricing is punished, over-pricing is paid for, both numerically | `test_4_5a` (bought out, and the head then fills first) / `test_4_5b` (20e18 of rent on a 1000e18 assessment over a fifth of a year, to the wei) |
+| ✅ 4.6 | Foreclosure fires exactly on shortfall, demotes to the tail, cursors stay correct | `test_4_6`, plus `test_4_29` on the exact-cover boundary, `test_4_32` at a NON-ZERO seat id and rank, `test_4_34` for cursor1's copy of the rule, `test_4_33` at a full 32-seat roster |
+| ✅ 4.7 | **Rank-then-run closed, both variants side by side** | `test_4_7` — three arms in one test on one fixture. Unpriced (= Phase 3): abandon and refund, cost 0, rank kept. Priced: the same window costs exactly 30 days of rent. Unpriced to dodge the bill: the seat is taken for free |
+| ✅ 4.8 | No oracle, no collateral, no liquidation crank anywhere | `test_4_8` reads the shipping source, strips comments (which discuss all three at length in order to say the code has none) and greps what is left, with a positive control proving the stripper left real code behind |
+| ✅ 4.9 | Negative controls: settle-without-charging RED, rent-paid-AHEAD RED | `test_4_9a` / `test_4_9b`, each paired with the production run of the identical scenario |
+| ✅ 4.10 | A reentrant `currency0` during a buyout cannot double-spend a seat | `test_4_10` — the seat moves once, arrives empty, the seller is paid once, and both reentrant attempts are refused |
+
+**Added beyond the gate, because building it faithfully found the need:**
+
+| | |
+|---|---|
+| **§B.10's payment source was broken** | `test_4_13` / `test_4_13b` run the spec's own implementation beside the shipped one. See the corrected row in §B.10 |
+| **The firm quote** | `test_4_11` (the reactive raise, with the control), `test_4_12` (the other two dodges), `test_4_26` (the running minimum), `test_4_27` (a buyer is firm at what they paid) |
+| **The flash-loan rent grab** | `test_4_14`, control side by side, 16× |
+| **Authorisation** | `test_4_19` / `test_4_20` — both were completely untested and both were theft. Found by mutation, not by review |
+| **Settlement ordering** | `test_4_22` (repricing is not retroactive), `test_4_23` (draining the meter cannot outrun the bill), `test_4_24` / `test_4_25` (selling settles first), `test_4_40` (a delinquent seat is foreclosed before it is priced) |
+| **Rank vs id** | `test_4_16` (the allocator follows rank), `test_4_35` / `test_4_36` (the funding pull-back compares ranks, per direction), `test_4_37` (the degenerate fill), `test_4_38` (`_settleAhead` survives a demotion mid-loop) |
+| **τ as a dial** | `test_4_15` runs the mechanism at 1% / 5% / 10% / 50% and asserts exact linearity |
+| **Edges and costs** | `test_4_41` (the roster bound and the order word are the same fact), `test_4_42` (a roster of one), `test_4_43` (a currency1-only tail is not paid — disclosed, not fixed), `test_4_44` (worst-case deposit gas, measured) |
 
 ---
 
@@ -1719,26 +1755,43 @@ forge test --match-path "test/queue/Rank.t.sol" -vv
 The `transferFrom` control is not paranoia. Overriding `transfer` and forgetting `transferFrom` is
 *the* canonical way this bug ships, because the happy-path test only ever calls `transfer`.
 
-## D.6 GATE 4 — Harberger
+## D.6 GATE 4 — Harberger ✅ **PASS 2026-08-27**
 
 **Commands**
 ```bash
-forge test --match-path "test/queue/Harberger.t.sol" -vv
+forge test --match-path "test/queue/Harberger.t.sol" -vv   # 26 passed
+python3 script/mutate.py                                   # 53 mutations, 0 survivors
 ```
 
-| Test | Assertion |
-|---|---|
-| `test_rentAccruesLinearlyInTime` | exact vs. hand-computed, at three elapsed times |
-| `test_rentSumsExactlyToWhatWasCharged` | `Σ credited + unallocated == charged`, **to the wei** (remainder rule again) |
-| `test_rentWithNoRecipientIsNotLost` | lands in `unallocatedRent0`, distributed at the next eligible settlement |
-| `test_buyoutTransfersRankOnly` | seller's capital fully recoverable; buyer's seat empty |
-| `test_underpricedSeatIsBoughtOut` / `test_overpricedSeatPaysForIt` | both numerically demonstrated |
-| `test_foreclosureMovesSeatToTailAndFixesCursors` | INVARIANT C still holds after |
-| **`test_rankThenRunClosedUnderHarbergerOpenUnderPlainRank`** | **runs BOTH variants side by side; plain rank lets the holder abandon, Harberger does not.** This is the phase's headline result. |
-| `test_noOracleNoCollateralNoLiquidation` | a review assertion, plus a grep in CI |
-| `test_negativeControl_settleWithoutCharging` | **red** |
-| `test_negativeControl_rentPaidToSeatsAhead` | **red** — this is an economics inversion, exactly the class of bug that killed `HardcapHook` |
-| `test_reentrantCurrencyDuringBuyout` | no double-spend |
+| Test | Assertion | |
+|---|---|---|
+| `test_4_1_rentAccruesLinearlyInTime` | exact vs. hand-computed, at three elapsed times | ✅ |
+| `test_4_2_rentSumsExactlyToWhatWasCharged` | `Σ credited + unallocated == charged`, **to the wei**, plus a proof the remainder line is not vacuous here | ✅ |
+| `testFuzz_4_2_distributionSumsExactly` | the same identity as pure arithmetic, no pool | ✅ |
+| `test_4_3_rentWithNoRecipientIsNotLost` / `test_4_30` | held in `unallocatedRent0`, ACCUMULATES, released at the next eligible settlement | ✅ |
+| `test_4_4_buyoutTransfersRankOnly` | seller's capital fully recoverable; buyer's seat empty | ✅ |
+| `test_4_5a` / `test_4_5b` | under-priced is bought out; over-priced pays, both numerically | ✅ |
+| `test_4_6` / `test_4_29` / `test_4_32` / `test_4_33` / `test_4_34` | foreclosure demotes to the tail and leaves INVARIANT C holding — at the exact-cover boundary, at a NON-ZERO seat id and rank, at a full roster, and for cursor1's copy of the rule | ✅ |
+| **`test_4_7_rankThenRunClosedUnderHarbergerOpenUnderPlainRank`** | **both variants side by side; unpriced rank lets the holder abandon for nothing, Harberger charges rent or takes the seat.** The phase's headline | ✅ |
+| `test_4_8_noOracleNoCollateralNoLiquidation` | reads `src/`, strips comments, greps the code, with a positive control | ✅ |
+| `test_4_9a_negativeControl_settleWithoutCharging` | **red** — and it is the aggregate-against-the-sum line that catches it, not the balance identity | ✅ |
+| `test_4_9b_negativeControl_rentPaidToSeatsAhead` | **red** — an economics inversion that CONSERVES EVERY WEI, which is exactly why the assertion names the direction | ✅ |
+| `test_4_10_reentrantCurrencyDuringBuyout` | no double-spend, no double-sale, seller paid once | ✅ |
+
+**Added at this gate, each because building the spec faithfully or mutating the result found the need.
+See §C.4's completion block for the full list:** the §B.10 payment-source correction (`test_4_13`),
+the firm quote (`test_4_11`, `4_12`, `4_26`, `4_27`), the flash-loan rent grab (`test_4_14`),
+authorisation on `withdrawRent` and `setSelfPrice` (`test_4_19`, `4_20`), settlement ordering
+(`test_4_22`–`4_25`, `4_40`), rank-vs-id (`test_4_16`, `4_35`–`4_38`), τ as a dial (`test_4_15`), and
+the edges and costs (`test_4_41`–`4_44`).
+
+> **A NOTE ON HOW THIS GATE WAS ACTUALLY PASSED.** The first run of `script/mutate.py` left **21 of
+> 53 mutations alive**, against a suite that was already 99/99 green — including two that let anyone
+> drain anyone's rent meter and reprice anyone's seat. Every foreclosure test in that suite demoted
+> **seat 0 from rank 0**, and `0 << anything` is `0`, so a demotion that wrote the id back at the
+> wrong offset was invisible to all of them. Nothing in the review lenses found either. This is the
+> seventh consecutive time on this project that mutation testing has found a real defect, and the
+> first time it found an unguarded external entry point.
 
 ## D.7 GATE 5 — gas and scale
 

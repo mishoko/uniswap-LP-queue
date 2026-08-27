@@ -422,9 +422,7 @@ contract DepositTest is QueueFixture {
     ///      binding is permanent and there is no admin to undo it.
     function test_2_20_cannotBindTheHookToAForeignPool() public {
         address a = address(FLAGS ^ (uint160(0x4099) << 144));
-        deployCodeTo(
-            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING, _roster(ALICE, BOB, CARL)), a
-        );
+        deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgs(_roster(ALICE, BOB, CARL)), a);
         QueueHarness fresh = QueueHarness(a);
 
         // An attacker tries to bind it to the same pair on a different fee tier.

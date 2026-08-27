@@ -21,9 +21,17 @@ contract QueueHarness is QueueHook {
     error SeatCountMismatch();
     error AlreadySeeded();
 
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster)
-        QueueHook(pm, c0_, c1_, f, sp, roster)
-    {}
+    constructor(
+        IPoolManager pm,
+        Currency c0_,
+        Currency c1_,
+        uint24 f,
+        int24 sp,
+        address[] memory roster,
+        uint256 rb,
+        uint256 rp,
+        uint256 fw
+    ) QueueHook(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
 
     function seed(PoolKey calldata k, int24 tl, int24 tu, uint128 liq, uint256[] calldata bps)
         external

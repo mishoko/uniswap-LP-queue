@@ -29,12 +29,25 @@ contract MutantQueueHook is QueueHarness {
 
     uint8 public immutable mode;
 
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster, uint8 m)
-        QueueHarness(pm, c0_, c1_, f, sp, roster)
-    {
+    constructor(
+        IPoolManager pm,
+        Currency c0_,
+        Currency c1_,
+        uint24 f,
+        int24 sp,
+        address[] memory roster,
+        uint256 rb,
+        uint256 rp,
+        uint256 fw,
+        uint8 m
+    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {
         mode = m;
     }
 
+    /// @dev The loops below walk RANKS and resolve each one to a seat exactly as production does.
+    ///      These controls never foreclose, so rank and seat id are the same number throughout — but
+    ///      a control is only worth anything if it differs from production in ONE place, and leaving
+    ///      the indirection out would be a second difference waiting to matter.
     function _allocate(bool outIsOne, uint256 amtIn, uint256 amtOut) internal override {
         uint256 n = q.length;
         uint256 start = outIsOne ? cursor1 : cursor0;
@@ -46,19 +59,19 @@ contract MutantQueueHook is QueueHarness {
         if (mode == PRO_RATA) {
             uint256 total;
             for (uint256 i; i < n; i++) {
-                total += outIsOne ? q[i].a1 : q[i].a0;
+                total += outIsOne ? q[idAtRank(i)].a1 : q[idAtRank(i)].a0;
             }
             uint256 rem = amtOut;
             uint256 asg;
             for (uint256 i; i < n; i++) {
-                uint256 bal = outIsOne ? q[i].a1 : q[i].a0;
+                uint256 bal = outIsOne ? q[idAtRank(i)].a1 : q[idAtRank(i)].a0;
                 if (bal == 0) continue;
                 bool last = i == n - 1;
                 uint256 take = last ? rem : FullMath.mulDiv(amtOut, bal, total);
                 uint256 give = last ? amtIn - asg : FullMath.mulDiv(amtIn, bal, total);
                 rem -= take;
                 asg += give;
-                _apply(i, outIsOne, take, give);
+                _apply(idAtRank(i), outIsOne, take, give);
             }
             return;
         }
@@ -68,7 +81,7 @@ contract MutantQueueHook is QueueHarness {
         uint256 lastIdx;
         bool any;
         for (uint256 i = start; i < n && remaining > 0; i++) {
-            uint256 bal = outIsOne ? q[i].a1 : q[i].a0;
+            uint256 bal = outIsOne ? q[idAtRank(i)].a1 : q[idAtRank(i)].a0;
             if (bal == 0) continue;
             uint256 take = bal < remaining ? bal : remaining;
             remaining -= take;
@@ -76,14 +89,15 @@ contract MutantQueueHook is QueueHarness {
             uint256 give =
                 (remaining == 0 && mode != FLOOR_ONLY) ? amtIn - assigned : FullMath.mulDiv(amtIn, take, amtOut);
             assigned += give;
-            _apply(i, outIsOne, take, give);
+            _apply(idAtRank(i), outIsOne, take, give);
             lastIdx = i;
             any = true;
         }
         if (remaining != 0) revert Allocation.QueueUnderflow(remaining);
 
         if (any) {
-            uint256 adv = (outIsOne ? q[lastIdx].a1 : q[lastIdx].a0) == 0 ? lastIdx + 1 : lastIdx;
+            uint256 lastId = idAtRank(lastIdx);
+            uint256 adv = (outIsOne ? q[lastId].a1 : q[lastId].a0) == 0 ? lastIdx + 1 : lastIdx;
             if (outIsOne) {
                 cursor1 = adv;
                 // N4 — the pull-back, deleted. cursorY leads and skips a funded seat.
@@ -108,9 +122,17 @@ contract MutantQueueHook is QueueHarness {
 
 /// @dev N5 — the sole-LP guard, removed.
 contract UnguardedQueueHook is QueueHarness {
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster)
-        QueueHarness(pm, c0_, c1_, f, sp, roster)
-    {}
+    constructor(
+        IPoolManager pm,
+        Currency c0_,
+        Currency c1_,
+        uint24 f,
+        int24 sp,
+        address[] memory roster,
+        uint256 rb,
+        uint256 rp,
+        uint256 fw
+    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
 
     function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         internal
@@ -188,7 +210,9 @@ contract ControlsTest is QueueFixture {
         address a = address(FLAGS ^ (nonce << 144));
         deployCodeTo(
             "Controls.t.sol:MutantQueueHook",
-            abi.encode(poolManager, c0, c1, FEE, SPACING, _syntheticRoster(3), mode),
+            abi.encode(
+                poolManager, c0, c1, FEE, SPACING, _syntheticRoster(3), RENT_BPS, RENT_PERIOD, FIRM_WINDOW, mode
+            ),
             a
         );
         hook = QueueHarness(a);
@@ -307,9 +331,7 @@ contract ControlsTest is QueueFixture {
     ///      corollary again — ledger conservation and position redeemability are different claims.
     function test_N5_externalLpBreaksSolvency() public {
         address a = address(FLAGS ^ (uint160(0x3005) << 144));
-        deployCodeTo(
-            "Controls.t.sol:UnguardedQueueHook", abi.encode(poolManager, c0, c1, FEE, SPACING, _syntheticRoster(3)), a
-        );
+        deployCodeTo("Controls.t.sol:UnguardedQueueHook", _ctorArgs(_syntheticRoster(3)), a);
         hook = QueueHarness(a);
         _fundHook(a);
         _open(_bps());
@@ -335,9 +357,7 @@ contract ControlsTest is QueueFixture {
     /// @dev The positive half of N5: with the guard IN PLACE the same call must revert, by name.
     function test_N5_positive_guardRefusesTheExternalLp() public {
         address a = address(FLAGS ^ (uint160(0x3006) << 144));
-        deployCodeTo(
-            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING, _syntheticRoster(3)), a
-        );
+        deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgs(_syntheticRoster(3)), a);
         hook = QueueHarness(a);
         _fundHook(a);
         _open(_bps());
@@ -360,9 +380,7 @@ contract ControlsTest is QueueFixture {
     ///      controls above prove nothing at all.
     function test_positiveControl_unmutatedPassesTheSameHarness() public {
         address a = address(FLAGS ^ (uint160(0x3007) << 144));
-        deployCodeTo(
-            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING, _syntheticRoster(3)), a
-        );
+        deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgs(_syntheticRoster(3)), a);
         hook = QueueHarness(a);
         _fundHook(a);
         _open(_bps());

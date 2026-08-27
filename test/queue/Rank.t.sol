@@ -18,9 +18,17 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 ///      Production makes this hard by funnelling both through one private `_moveSeat`; the control
 ///      exists to prove the SUITE can see the defect, which structural safety does not establish.
 contract ForgetfulTransferFromHook is QueueHarness {
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster)
-        QueueHarness(pm, c0_, c1_, f, sp, roster)
-    {}
+    constructor(
+        IPoolManager pm,
+        Currency c0_,
+        Currency c1_,
+        uint24 f,
+        int24 sp,
+        address[] memory roster,
+        uint256 rb,
+        uint256 rp,
+        uint256 fw
+    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
 
     function transferFrom(address sender, address receiver, uint256 seatId, uint256) public override returns (bool) {
         if (seatHolder[seatId] != sender) revert NotSeatOwner(seatId, sender);
@@ -35,13 +43,25 @@ contract ForgetfulTransferFromHook is QueueHarness {
 /// @dev CONTROL 3.9 — rank granted by depositing, which is exactly what Phase 2 shipped and Phase 3
 ///      deleted. One wei of each token buys a brand new seat.
 contract MintingDepositHook is QueueHarness {
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster)
-        QueueHarness(pm, c0_, c1_, f, sp, roster)
-    {}
+    constructor(
+        IPoolManager pm,
+        Currency c0_,
+        Currency c1_,
+        uint24 f,
+        int24 sp,
+        address[] memory roster,
+        uint256 rb,
+        uint256 rp,
+        uint256 fw
+    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
 
     function deposit(uint256 amount0, uint256 amount1) external returns (uint256 seatId) {
         seatId = q.length;
         q.push(Seat({a0: 0, a1: 0}));
+        // The new seat joins the order at the TAIL. Phase 4 made rank an explicit permutation, so a
+        // variant that grows the roster has to say where the new rank goes — this control is about
+        // rank being MINTABLE, not about the order word being maintainable, so it maintains it.
+        order |= seatId << (8 * seatId);
         _mintSeat(msg.sender, seatId);
         _fundSeat(seatId, amount0, amount1);
     }
@@ -51,9 +71,17 @@ contract MintingDepositHook is QueueHarness {
 ///      `pendingWithdraw` and the position is left untouched. Exactly one thing differs from
 ///      production: the capital is not actually paid out.
 contract LedgerOnlyEvacuationHook is QueueHarness {
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster)
-        QueueHarness(pm, c0_, c1_, f, sp, roster)
-    {}
+    constructor(
+        IPoolManager pm,
+        Currency c0_,
+        Currency c1_,
+        uint24 f,
+        int24 sp,
+        address[] memory roster,
+        uint256 rb,
+        uint256 rp,
+        uint256 fw
+    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
 
     function _onSeatTransfer(uint256 seatId, address from) internal override {
         Seat storage s = q[seatId];
@@ -68,9 +96,17 @@ contract LedgerOnlyEvacuationHook is QueueHarness {
 
 /// @dev CONTROL 3.12 — the reentrancy guard removed from `transfer`, and nothing else.
 contract UnguardedTransferHook is QueueHarness {
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster)
-        QueueHarness(pm, c0_, c1_, f, sp, roster)
-    {}
+    constructor(
+        IPoolManager pm,
+        Currency c0_,
+        Currency c1_,
+        uint24 f,
+        int24 sp,
+        address[] memory roster,
+        uint256 rb,
+        uint256 rp,
+        uint256 fw
+    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
 
     function transfer(address receiver, uint256 seatId, uint256 amount) public override returns (bool) {
         if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
@@ -455,9 +491,7 @@ contract RankTest is QueueFixture {
 
         // Exactly MAX_SEATS deploys.
         address a = address(FLAGS ^ (uint160(0x9101) << 144));
-        deployCodeTo(
-            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING, _syntheticRoster(max)), a
-        );
+        deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgs(_syntheticRoster(max)), a);
         assertEq(QueueHarness(a).seatCount(), max, "a full roster did not deploy");
 
         // One more does not, and it says so by name. (`new QueueHarness(...)` cannot be used here:
@@ -494,12 +528,7 @@ contract RankTest is QueueFixture {
         internal
     {
         address at = address(FLAGS ^ (nonce << 144));
-        vm.etch(
-            at,
-            abi.encodePacked(
-                vm.getCode("QueueHarness.sol:QueueHarness"), abi.encode(poolManager, c0, c1, FEE, SPACING, roster)
-            )
-        );
+        vm.etch(at, abi.encodePacked(vm.getCode("QueueHarness.sol:QueueHarness"), _ctorArgs(roster)));
         (bool ok, bytes memory err) = at.call("");
         assertFalse(ok, what);
         assertEq(err, wantErr, string.concat(what, ": reverted for the WRONG reason"));
@@ -591,11 +620,7 @@ contract RankTest is QueueFixture {
     /// @dev External so the control can capture the revert and assert its exact reason (LAW 2).
     function forgetfulScenario() external {
         address a = address(FLAGS ^ (uint160(0x9201) << 144));
-        deployCodeTo(
-            "Rank.t.sol:ForgetfulTransferFromHook",
-            abi.encode(poolManager, c0, c1, FEE, SPACING, _roster(ALICE, BOB, CARL)),
-            a
-        );
+        deployCodeTo("Rank.t.sol:ForgetfulTransferFromHook", _ctorArgs(_roster(ALICE, BOB, CARL)), a);
         hook = QueueHarness(a);
         _initPool();
         _three();
@@ -613,9 +638,7 @@ contract RankTest is QueueFixture {
 
     function test_3_9_negativeControl_depositMintsASeat() public {
         address a = address(FLAGS ^ (uint160(0x9301) << 144));
-        deployCodeTo(
-            "Rank.t.sol:MintingDepositHook", abi.encode(poolManager, c0, c1, FEE, SPACING, _roster(ALICE, BOB, CARL)), a
-        );
+        deployCodeTo("Rank.t.sol:MintingDepositHook", _ctorArgs(_roster(ALICE, BOB, CARL)), a);
         hook = QueueHarness(a);
         _initPool();
         _three();
@@ -652,11 +675,7 @@ contract RankTest is QueueFixture {
 
         // The variant: identical sequence, ledger-only evacuation.
         address a = address(FLAGS ^ (uint160(0x9401) << 144));
-        deployCodeTo(
-            "Rank.t.sol:LedgerOnlyEvacuationHook",
-            abi.encode(poolManager, c0, c1, FEE, SPACING, _roster(ALICE, BOB, CARL)),
-            a
-        );
+        deployCodeTo("Rank.t.sol:LedgerOnlyEvacuationHook", _ctorArgs(_roster(ALICE, BOB, CARL)), a);
         hook = QueueHarness(a);
         _initPool();
         _three();
@@ -766,7 +785,7 @@ contract RankTest is QueueFixture {
         address[] memory roster = new address[](2);
         roster[0] = atkAddr;
         roster[1] = BOB;
-        deployCodeTo(artifact, abi.encode(poolManager, c0, c1, FEE, SPACING, roster), hookAddr);
+        deployCodeTo(artifact, _ctorArgs(roster), hookAddr);
         hook = QueueHarness(hookAddr);
         atk = new SeatReentrancyAttacker(hook, 0);
         require(address(atk) == atkAddr, "attacker address prediction failed");
@@ -967,10 +986,13 @@ contract RankTest is QueueFixture {
         (uint256 g0, uint256 g1) = hook.floats();
         assertEq(g0, f0, "a pure-rank transfer moved float0");
         assertEq(g1, f1, "a pure-rank transfer moved float1");
-        // MEASURED 2026-08-27: 17,939 with the early return, 23,905 without it (the removed line
-        // makes the transfer call `getSlot0` and run the whole dust-policy path for nothing). The
-        // bound sits between the two with ~17% headroom over the real number — derived from the
-        // measurement, not widened until the test went green.
-        assertLt(cost, 21_000, "a pure-rank transfer is walking the withdrawal path");
+        // RE-MEASURED 2026-08-27 against Phase 4: 24,969 with the early return, 31,010 without it
+        // (the removed line makes the transfer call `getSlot0` and run the whole dust-policy path
+        // for nothing). Both numbers moved up ~7k from Phase 3's 17,939 / 23,905 because a transfer
+        // now also reads the lease — that is Harberger's real cost on this path, not a regression,
+        // and the DETECTION GAP is unchanged at ~6k. The bound sits between the two: 12% above the
+        // real number, 10% below the mutant. Re-derived from the measurement, not widened until the
+        // test went green.
+        assertLt(cost, 28_000, "a pure-rank transfer is walking the withdrawal path");
     }
 }

@@ -18,6 +18,7 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
 import {Allocation} from "./libraries/Allocation.sol";
+import {Rent} from "./libraries/Rent.sol";
 import {QueueSeats} from "./QueueSeats.sol";
 
 /// @title QUEUE — price-time priority for a Uniswap v4 pool
@@ -40,8 +41,25 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         uint256 a1; // token1 this seat holds
     }
 
-    /// @dev index == rank. q[0] is the head. THE ORDER IS THE PRODUCT.
+    /// @dev **INDEX IS SEAT ID, NOT RANK.** It was both up to Phase 3, because nothing could
+    ///      permute the queue; Phase 4's foreclosure demotes a seat to the tail, so the two numbers
+    ///      come apart and `order` below is what separates them. Everything keyed to a SEAT —
+    ///      capital, holder, lease — is keyed by id and never moves. Only the ORDER moves.
     Seat[] internal q;
+
+    /// @dev **RANK. THE ORDER IS THE PRODUCT, AND THIS ONE WORD IS THE WHOLE OF IT.**
+    ///
+    ///      Byte `r` (counting from the low end) holds the id of the seat at rank `r`; rank 0 is
+    ///      the head. `MAX_SEATS == 32` is exactly why the entire order fits in one slot, which is
+    ///      not a trick but the reason the bound is 32 — a demotion rewrites the queue's order in
+    ///      ONE `SSTORE`, and the allocator reads the whole order in ONE `SLOAD` no matter how deep
+    ///      it walks.
+    ///
+    ///      There is deliberately NO `rankOfId` mapping. A second copy of the order would be a
+    ///      writer/reader pair that can disagree, and on this project a rule that lives in two
+    ///      places has now been wrong FOUR times (PITFALLS 5.37, 5.50, 5.52 twice). `rankOfId`
+    ///      scans this word instead: one `SLOAD` and at most 32 comparisons in memory.
+    uint256 internal order;
 
     PoolKey internal key;
     int24 internal tickLower;
@@ -76,6 +94,58 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     uint256 internal pendingTotal1;
 
     bool internal bound;
+
+    // ================================================================ HARBERGER (Phase 4, §B.10)
+
+    /// @notice The always-for-sale lease on one seat.
+    ///
+    /// @dev Four numbers, and every one of them is set by the seat's own holder. There is no mark,
+    ///      no oracle, no collateral and no liquidation anywhere in this struct or anything that
+    ///      touches it — see `_settleSeat` for why foreclosure is a DEMOTION and not a seizure.
+    struct Lease {
+        /// @dev The holder's own assessment, in `currency0`. Rent is charged on it and the seat is
+        ///      always for sale at it. Zero is a legal assessment and means "free to take".
+        uint256 selfPrice;
+        /// @dev **THE FIRM QUOTE.** The lowest price this seat has been ASKED at, or PAID for,
+        ///      inside the last `FIRM_WINDOW`. See `buyPrice`.
+        uint256 firmPrice;
+        /// @dev Prepaid rent, in `currency0`, held OUTSIDE the position and outside the queue's
+        ///      own `a0` ledger. See `fundRent`.
+        uint256 escrow;
+        uint64 firmUntil;
+        uint64 lastSettled;
+    }
+
+    mapping(uint256 seatId => Lease) internal lease;
+
+    /// @dev `Σ lease[id].escrow`. Kept so the currency0 balance identity is a three-read assertion
+    ///      rather than a sum over the roster.
+    uint256 internal escrowTotal;
+
+    /// @dev Rent charged from a payer that had NO eligible recipient behind it — every seat behind
+    ///      held `a0 == 0`. It is held, not lost, and is folded into the pot at the next settlement
+    ///      that does have one (§B.10, criterion 4.3). PLAN §E.6 forbids `poolManager.donate()`.
+    uint256 internal unallocatedRent0;
+
+    /// @dev τ, in basis points per `RENT_PERIOD`. Immutable: a rent rate somebody can change is a
+    ///      privileged role over everyone's money.
+    uint256 public immutable RENT_BPS;
+    uint256 public immutable RENT_PERIOD;
+
+    /// @dev How long an ask stays FIRM. See `buyPrice` — this is what stops a holder from
+    ///      reactively repricing out of a buyout they can see coming, which would defeat the only
+    ///      property Harberger has.
+    uint256 public immutable FIRM_WINDOW;
+
+    /// @dev What the buyer just paid, handed to `_onSeatTransfer` so the firm quote can be armed at
+    ///      it. TRANSIENT, so a plain `transfer` reads zero without anyone having to remember to
+    ///      clear it, and so it cannot survive the transaction.
+    ///
+    ///      It is a side channel because the alternative is worse: `_moveSeat` is THE ONE FUNNEL
+    ///      through which a seat changes hands (QueueSeats), and giving the buyout its own copy of
+    ///      the evacuation is precisely the paired-path asymmetry that let anyone steal a seat in
+    ///      Phase 3 (PITFALLS 5.52). One funnel, one transient word.
+    uint256 internal transient paidForSeat;
 
     /// @dev The pool this hook was deployed to serve, fixed at construction. See the constructor.
     Currency internal immutable expected0;
@@ -117,6 +187,25 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      sizing one unit of liquidity BELOW the amounts on hand; loud rather than silent because
     ///      the alternative is quietly spending float that belongs to other seats.
     error DepositOversized(uint256 used, uint256 supplied);
+    error NoSuchSeat(uint256 seatId);
+    /// @dev The seat's price moved between the buyer signing and the buyer landing. Without this,
+    ///      a holder watching the mempool reprices out of every buyout and the seat is never
+    ///      actually for sale. `FIRM_WINDOW` is the structural half of the same defence.
+    error PriceAboveMax(uint256 price, uint256 maxPrice);
+    error CannotBuyOwnSeat(uint256 seatId);
+    /// @dev See `Rent.MAX_SELF_PRICE` — a price that overflows the rent product is a settlement
+    ///      that reverts, which is a seat that can never be foreclosed.
+    error SelfPriceTooLarge(uint256 price, uint256 max);
+    error BadRentParameters();
+
+    event SelfPriceSet(uint256 indexed seatId, uint256 price, uint256 firmPrice, uint64 firmUntil);
+    event RentSettled(uint256 indexed seatId, uint256 charged, uint256 distributed, uint256 unallocated);
+    /// @dev A DEMOTION, not a seizure: the seat keeps its holder and every wei of its capital, and
+    ///      loses only its place in the order.
+    event Foreclosed(uint256 indexed seatId, uint256 due, uint256 paid, uint256 newRank);
+    event SeatBought(uint256 indexed seatId, address indexed from, address indexed to, uint256 price);
+    event RentFunded(uint256 indexed seatId, address indexed payer, uint256 amount);
+    event RentWithdrawn(uint256 indexed seatId, address indexed to, uint256 amount);
 
     /// @dev The pool this hook will serve is fixed AT DEPLOYMENT, not by whoever initializes
     ///      first. Without this, anyone could front-run the intended `poolManager.initialize` and
@@ -145,22 +234,48 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      Harberger lease, and it is what turns "who got a seat" from a deployment decision into
     ///      a market outcome. Until then, the honest claim is the narrow one: rank cannot be
     ///      obtained by dusting, by being early, or at any price the incumbent has not accepted.
+    ///
+    ///      **τ, `RENT_PERIOD` and `FIRM_WINDOW` are fixed here too, and they are GOVERNANCE
+    ///      PARAMETERS, not discovered constants.** They are immutable because a rent rate somebody
+    ///      can change afterwards is a privileged role over everyone's money, and this contract has
+    ///      no privileged role at all. §B.10 is blunt about the risk: τ is load-bearing, and on this
+    ///      project a load-bearing parameter is where a pitch dies. Do not defend a value — the
+    ///      suite runs the mechanism at several and makes the SIGN of the seat price the finding.
     constructor(
         IPoolManager pm,
         Currency currency0,
         Currency currency1,
         uint24 fee,
         int24 tickSpacing,
-        address[] memory foundingRoster
+        address[] memory foundingRoster,
+        uint256 rentBps,
+        uint256 rentPeriod,
+        uint256 firmWindow
     ) BaseHook(pm) {
         expected0 = currency0;
         expected1 = currency1;
         expectedFee = fee;
         expectedSpacing = tickSpacing;
 
+        // τ above one whole period is expressed by SHORTENING the period, not by inflating τ; the
+        // cap is what keeps `Rent.owed` exact in plain arithmetic. A zero period divides by zero and
+        // a zero firm window turns the always-for-sale guarantee off entirely.
+        // The upper bounds are what make every `uint64` timestamp cast below provably safe, and
+        // what keeps `MAX_BPS * rentPeriod` small enough that `Rent.owed` stays exact in plain
+        // arithmetic. They are not taste: an unbounded `firmWindow` makes a seat unbuyable forever
+        // at a stale price, and an unbounded `rentPeriod` makes rent unpayably slow.
+        if (
+            rentBps > Rent.MAX_BPS || rentPeriod == 0 || rentPeriod > 3650 days || firmWindow == 0
+                || firmWindow > 365 days
+        ) revert BadRentParameters();
+        RENT_BPS = rentBps;
+        RENT_PERIOD = rentPeriod;
+        FIRM_WINDOW = firmWindow;
+
         uint256 n = foundingRoster.length;
         if (n == 0) revert EmptyRoster();
         if (n > MAX_SEATS) revert RosterTooLarge(n, MAX_SEATS);
+        uint256 ord;
         for (uint256 i; i < n; i++) {
             address holder = foundingRoster[i];
             // A seat minted to `address(0)` would be a rank slot nobody can ever hold or sell, in a
@@ -168,17 +283,74 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             if (holder == address(0)) revert ZeroHolder(i);
             q.push(Seat({a0: 0, a1: 0}));
             _mintSeat(holder, i);
+            // The founding order is the identity permutation: seat i starts at rank i. Every seat
+            // starts UNPRICED, which under Harberger means free to take — see `buyPrice`.
+            ord |= i << (8 * i);
         }
+        order = ord;
     }
 
-    /// @dev Seat id IS rank index, in Phase 3. The two are the same number because nothing in this
-    ///      phase permutes the queue, and carrying an `idAtRank`/`rankOfId` indirection that no
-    ///      operation can disturb would be carrying state no test could distinguish from a bug
-    ///      (PITFALLS 5.49). Phase 4's foreclosure — which demotes a seat to the tail — is what
-    ///      forces the indirection, and it is confined to the ownership lookups: the allocator
-    ///      walks `q` by RANK and does not read seat ids at all.
     function seatCount() public view returns (uint256) {
         return q.length;
+    }
+
+    // ------------------------------------------------------------------------- rank ⇄ seat id
+
+    /// @notice Which seat currently sits at `rank`. Rank 0 is the head.
+    function idAtRank(uint256 rank) public view returns (uint256) {
+        if (rank >= q.length) revert NoSuchSeat(rank);
+        return _idAt(order, rank);
+    }
+
+    /// @dev Byte `rank` of the packed order word. The mask is what makes this a read rather than a
+    ///      narrowing cast, so there is nothing for the linter or a reviewer to have to trust.
+    function _idAt(uint256 ord, uint256 rank) internal pure returns (uint256) {
+        return (ord >> (8 * rank)) & 0xff;
+    }
+
+    /// @notice Where seat `seatId` currently sits. Reverts for an id that does not exist.
+    /// @dev A SCAN, not a stored mapping, on purpose — see `order`. One `SLOAD`, ≤ 32 memory
+    ///      comparisons, and structurally incapable of disagreeing with the order it reads.
+    function rankOfId(uint256 seatId) public view returns (uint256) {
+        uint256 n = q.length;
+        if (seatId >= n) revert NoSuchSeat(seatId);
+        uint256 ord = order;
+        for (uint256 r; r < n; r++) {
+            if (_idAt(ord, r) == seatId) return r;
+        }
+        // Unreachable: `order` is a permutation of `0..n-1` and every write below preserves that.
+        revert NoSuchSeat(seatId);
+    }
+
+    /// @notice Move a seat to the back of the queue, preserving the order of everything else.
+    ///
+    /// @dev **THIS IS THE WHOLE OF FORECLOSURE'S ENFORCEMENT**, and it is one `SSTORE`: the bytes
+    ///      above `r` slide down one place and the demoted id is written at the tail.
+    ///
+    ///      The cursor adjustment is EXACT, not merely conservative. Ranks `r+1..n-1` each move
+    ///      down one, so a cursor standing at `c > r` is describing the same seats at `c-1`; a
+    ///      cursor at `c <= r` describes seats that did not move. INVARIANT C survives either way,
+    ///      and the demoted seat lands at the LAST rank, which no cursor can lead.
+    ///      There is deliberately NO "already at the tail" early return. It was there, and mutation
+    ///      testing showed nothing could detect its removal — because the general path is EXACTLY
+    ///      equivalent when `r == n-1`: `shifted` is empty, `low` is everything below, and the id is
+    ///      written back where it already was. An unnecessary line is indistinguishable from an
+    ///      untested one (PITFALLS 5.49), so it is gone. The only residue is that a cursor standing
+    ///      at `n` is decremented to `n-1`, which is a LAG, and a lagging cursor costs gas rather
+    ///      than money.
+    function _demoteToTail(uint256 seatId) internal returns (uint256 newRank) {
+        uint256 n = q.length;
+        uint256 r = rankOfId(seatId);
+        uint256 ord = order;
+        uint256 low = ord & ((uint256(1) << (8 * r)) - 1);
+        // Bytes `r+1..n-1` come down to `r..n-2`; byte `n-1` is left clear for the demoted id,
+        // because `order` never holds anything at or above byte `n`.
+        uint256 shifted = (ord >> (8 * (r + 1))) << (8 * r);
+        order = low | shifted | (seatId << (8 * (n - 1)));
+
+        if (cursor0 > r) cursor0 -= 1;
+        if (cursor1 > r) cursor1 -= 1;
+        newRank = n - 1;
     }
 
     // -------------------------------------------------------------------------- permissions (§B.2)
@@ -314,7 +486,8 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         if (amtOut == 0) {
             if (amtIn != 0 && q.length != 0) {
                 uint256 start = outIsOne ? cursor1 : cursor0;
-                uint256 idx = start < q.length ? start : 0;
+                uint256 rank = start < q.length ? start : 0;
+                uint256 idx = _idAt(order, rank);
                 if (outIsOne) q[idx].a0 += amtIn;
                 else q[idx].a1 += amtIn;
             }
@@ -336,13 +509,19 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         Allocation.State memory st = Allocation.init(amtIn, amtOut);
         uint256 next = start;
 
+        // THE CURSORS ARE RANKS AND THE LOOP WALKS RANKS. `order` is read ONCE, into memory, so a
+        // queue that has been permuted by foreclosure costs the allocator one `SLOAD` and a shift
+        // per seat — not a storage read per seat, and not a re-read if the order changes under it,
+        // which it cannot: nothing inside this loop can demote anything.
+        uint256 ord = order;
+
         // Drive the arithmetic DIRECTLY OVER STORAGE, from the cursor, stopping the moment the swap
         // is sourced. This is the point of having cursors at all: a head-only swap must touch one
         // seat, not the whole roster. (An earlier draft of this function loaded every seat into a
         // memory array first, which read the entire queue on every swap and silently threw the
         // cursor optimisation away.)
         for (uint256 i = start; i < n && st.remaining > 0; i++) {
-            Seat storage seat_ = q[i];
+            Seat storage seat_ = q[_idAt(ord, i)];
             uint256 bal = outIsOne ? seat_.a1 : seat_.a0;
             if (bal == 0) continue;
 
@@ -380,8 +559,32 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
     /// @notice Fund a seat you hold. **This is the only way capital enters the queue, and it
     ///         creates nothing** — the roster was fixed at deployment.
+    ///
+    /// @dev **IT SETTLES EVERY SEAT AHEAD FIRST, AND THAT IS A SECURITY MEASURE, NOT TIDINESS.**
+    ///
+    ///      Rent is handed to the seats BEHIND the payer, pro-rata by their `currency0` balance
+    ///      READ AT SETTLEMENT. Funding a seat is the only way a holder can raise that balance at
+    ///      will, so without this line the sequence
+    ///
+    ///          addToSeat(myTailSeat, huge, 0) → settleRent(everyoneAhead) → withdraw(myTailSeat)
+    ///
+    ///      captures rent that accrued over a period the depositor was not there for, in ONE
+    ///      transaction, and `huge` can be a flash loan — so the share goes to ~100% and the cost is
+    ///      gas. Settling the payers first drains the pot BEFORE the new balance can weigh on it,
+    ///      which leaves only rent that accrues afterwards, i.e. exactly the rent the depositor is
+    ///      there for.
+    ///
+    ///      A per-block cooldown would also close it and is the wrong instrument: PLAN §B.12 counts
+    ///      "waiting one block boundary" as a PROVEN evasion — 200 ms on Unichain — and QUEUE passes
+    ///      that table precisely because it has no per-block reference anywhere. Do not add one.
+    ///
+    ///      Cost is bounded by the number of PRICED seats ahead (an unpriced one costs a single
+    ///      `SLOAD`), and every settle it performs also drains the payer's own escrow, so the
+    ///      expensive configuration cannot be maintained for free by an attacker: they would be
+    ///      paying rent to the very depositor they are trying to grief.
     function addToSeat(uint256 seatId, uint256 amount0, uint256 amount1) external nonReentrant {
         if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
+        _settleAhead(rankOfId(seatId));
         _fundSeat(seatId, amount0, amount1);
     }
 
@@ -420,8 +623,14 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // TOPPING UP A SEAT BELOW A CURSOR WOULD MAKE THAT CURSOR LEAD. Opening a seat at the tail
         // cannot, but `addToSeat` on an exhausted seat re-funds it in place, and a cursor that has
         // already advanced past it would then skip a funded seat — silent theft of rank.
-        if (seatId < cursor0) cursor0 = seatId;
-        if (seatId < cursor1) cursor1 = seatId;
+        //
+        // THE COMPARISON IS AGAINST THE SEAT'S RANK, NOT ITS ID. They were the same number until
+        // foreclosure existed; comparing a cursor to an id after a demotion pulls the wrong cursor
+        // back, or fails to pull one back at all. Read after `_settleAhead`, which may have moved
+        // this seat's rank by demoting something in front of it.
+        uint256 rank = rankOfId(seatId);
+        if (rank < cursor0) cursor0 = rank;
+        if (rank < cursor1) cursor1 = rank;
     }
 
     /// @notice Withdraw from a seat you own, paying from the shared float and topping the float up
@@ -548,13 +757,65 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      PoolManager and `transfer` on the pool's own currencies. A plain ERC-20 hands the
     ///      recipient no control, so a departing holder cannot refuse payment to stop a buyout, and
     ///      the dust policy clamps rather than reverting when the position is short.
+    ///
+    ///      **PHASE 4 ADDS THE LEASE, AND IT IS RESET HERE — IN THE ONE FUNNEL, NOT PER CALLER.**
+    ///      Three rules, each with exactly one reason:
+    ///
+    ///        * **Rent settles first.** The departing holder pays for the time they held it, at the
+    ///          price they themselves set, and not one second more.
+    ///        * **The escrow is REFUNDED, never inherited.** It is a prepaid meter, not part of the
+    ///          asset. Letting it travel with the seat would mean a holder who prepaid a year of
+    ///          rent and priced the seat at its bare value has silently under-priced by the whole
+    ///          escrow, and Harberger punishes under-pricing by taking the thing.
+    ///        * **The self-price is cleared and the seat is FIRM at what was just paid for it.**
+    ///          A new holder has made no assessment, so they owe no rent until they make one; and
+    ///          arming the firm quote here is what stops the dodge in `buyPrice`'s note — handing
+    ///          the seat to your own second address to get a clean slate leaves it firm at zero,
+    ///          i.e. free for anyone to take.
     function _onSeatTransfer(uint256 seatId, address from) internal virtual override {
+        Lease storage l = lease[seatId];
+        uint256 paid = paidForSeat;
+
+        // An unpriced, unfunded seat with no live firm quote is ALREADY in the state a transfer
+        // would leave it in, and was already free to take — writing the same values back would put
+        // three cold `SSTORE`s on the pure-rank path, which is the cheapest and most-used path there
+        // is. `buyPrice` reads zero on both sides of the branch, so skipping changes nothing a buyer
+        // can see.
+        //
+        // **THE PREDICATE IS READ BEFORE THE SETTLEMENT, AND THAT ORDER IS LOAD-BEARING.** Settling
+        // can FORECLOSE this very seat, and foreclosure zeroes `selfPrice` — so a guard evaluated
+        // afterwards looks at a lease that has just been wiped, skips the arming, and hands back the
+        // dodge the arming exists to stop: hold a priced seat with an empty meter, transfer it to
+        // your own second address (which forecloses it on the way through), and reprice with no firm
+        // quote against you. Found by executing that sequence, not by reading the code.
+        //
+        // Reading early is safe because `_settleSeat` on an UNPRICED seat is a no-op, so in the only
+        // case the predicate is false, before and after are the same state.
+        bool live = l.selfPrice != 0 || l.escrow != 0 || paid != 0 || l.firmUntil > block.timestamp;
+
+        _settleSeat(seatId);
+
+        uint256 esc = l.escrow;
+        if (live) {
+            if (esc != 0) {
+                l.escrow = 0;
+                escrowTotal -= esc;
+            }
+            l.selfPrice = 0;
+            l.firmPrice = paid;
+            // casting to 'uint64' is safe: a uint64 holds unix seconds for ~5.8e11 years, and
+            // FIRM_WINDOW is bounded at 365 days by the constructor.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            l.firmUntil = uint64(block.timestamp + FIRM_WINDOW);
+            l.lastSettled = uint64(block.timestamp);
+        }
+
         Seat storage s = q[seatId];
         uint256 a0 = s.a0;
         uint256 a1 = s.a1;
-        // The common case, and the one Phase 4 leans on: pure rank, nothing to move, no external
-        // call, no liquidity touched.
-        if (a0 == 0 && a1 == 0) return;
+        // Pure rank and no prepaid rent: nothing to move, no external call, no liquidity touched.
+        // This is the common case and the one the buyout leans on.
+        if (a0 == 0 && a1 == 0 && esc == 0) return;
 
         (uint256 p0, uint256 p1) = _payOut(a0, a1);
 
@@ -577,7 +838,10 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // money. INVARIANT C ("every seat below cursorX holds zero of X") survives trivially — the
         // seat now holds zero of both.
 
-        _send(from, p0, p1);
+        // The escrow rides out on the same transfer. It is currency0 the hook already holds
+        // OUTSIDE the position and outside `float0`, so unlike `p0` it needs nothing released and
+        // is never clamped.
+        _send(from, p0 + esc, p1);
     }
 
     /// @dev DUST POLICY F1, isolated behind a seam so the mandatory negative control can replace it
@@ -609,6 +873,307 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         if (u1 > float1) revert DepositOversized(u1, float1);
         float0 -= u0;
         float1 -= u1;
+    }
+
+    // ================================================== HARBERGER — the always-for-sale lease
+
+    /// @notice What it costs to take seat `seatId` from its holder, right now.
+    ///
+    /// @dev **THE FIRM QUOTE, AND IT IS THE DIFFERENCE BETWEEN A MECHANISM AND A SLOGAN.**
+    ///
+    ///      "Always for sale at your own price" is worth nothing if the holder can raise the price
+    ///      the instant they see a buyer. They can see one: a buyout is an ordinary transaction in
+    ///      an ordinary mempool, and repricing costs only rent for the seconds the raise is in
+    ///      effect — with τ = 10%/yr that is 4 parts in 10⁷ of the price per block. Effectively
+    ///      free. Left alone, EVERY buyout is vetoable and Harberger delivers nothing but a tax.
+    ///
+    ///      So an ask is FIRM: the seat stays available at the lowest price it has been asked at,
+    ///      or paid for, within `FIRM_WINDOW`. A raise takes effect immediately for RENT and only
+    ///      after the window for the SALE, which makes the reactive raise useless — the buyer still
+    ///      gets it at the old number — while a raise made in the ordinary course costs nothing.
+    ///
+    ///      The three dodges this survives, each self-destructive rather than merely refused:
+    ///        * raise to block a pending buyout → the old price is still firm, the buyer lands;
+    ///        * drop to zero and re-raise in one transaction → the window minimum is now ZERO and
+    ///          the seat is free to anyone for `FIRM_WINDOW`;
+    ///        * hand the seat to your own second address for a clean slate → `_onSeatTransfer`
+    ///          arms the window at what was paid, which for a plain transfer is zero.
+    ///
+    ///      A seat that has never been priced quotes zero and is free to take. That is not a hole,
+    ///      it is the bootstrap: the founding roster starts unpriced, so the deployer's endowment is
+    ///      worth a head start of one transaction and nothing else.
+    function buyPrice(uint256 seatId) public view virtual returns (uint256) {
+        Lease storage l = lease[seatId];
+        uint256 p = l.selfPrice;
+        if (block.timestamp < l.firmUntil) {
+            uint256 f = l.firmPrice;
+            if (f < p) return f;
+        }
+        return p;
+    }
+
+    /// @notice Set your own assessment of your seat. Rent is charged on it; the seat is for sale at
+    ///         it. Zero is legal and means "free to take".
+    function setSelfPrice(uint256 seatId, uint256 price) external nonReentrant {
+        if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
+        _setPrice(seatId, price);
+    }
+
+    /// @dev The one place a self-price is written. `buySeat` reaches it too, so the firm-quote rule
+    ///      cannot exist in one path and be forgotten in the other.
+    function _setPrice(uint256 seatId, uint256 newPrice) internal {
+        if (newPrice > Rent.MAX_SELF_PRICE) revert SelfPriceTooLarge(newPrice, Rent.MAX_SELF_PRICE);
+
+        // Charge what is owed at the OLD price before the new one applies. Without this the raise
+        // is retroactive and the drop is amnesty — the two errors do not cancel, they are both
+        // theft, in opposite directions.
+        _settleSeat(seatId);
+
+        Lease storage l = lease[seatId];
+        uint256 old = l.selfPrice;
+
+        if (block.timestamp < l.firmUntil) {
+            // Already inside a window: the quote is the RUNNING MINIMUM over it. This is the line
+            // that makes "drop to zero, then raise" self-destructive rather than clever.
+            if (newPrice < l.firmPrice) l.firmPrice = newPrice;
+            // casting to 'uint64' is safe: a uint64 holds unix seconds for ~5.8e11 years, and
+            // FIRM_WINDOW is bounded at 365 days by the constructor.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            l.firmUntil = uint64(block.timestamp + FIRM_WINDOW);
+        } else if (old != 0) {
+            // A price was in effect and is now changing: it stays honoured for the window.
+            l.firmPrice = old < newPrice ? old : newPrice;
+            // casting to 'uint64' is safe: a uint64 holds unix seconds for ~5.8e11 years, and
+            // FIRM_WINDOW is bounded at 365 days by the constructor.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            l.firmUntil = uint64(block.timestamp + FIRM_WINDOW);
+        }
+        // else: no window is open and there was no price to honour — the seat was free to take up
+        // to this instant, so there is nothing a firm quote could protect a buyer against.
+
+        l.selfPrice = newPrice;
+        l.lastSettled = uint64(block.timestamp);
+        emit SelfPriceSet(seatId, newPrice, l.firmPrice, l.firmUntil);
+    }
+
+    /// @notice Prepay rent on a seat, in `currency0`.
+    ///
+    /// @dev **THIS IS A METER, NOT COLLATERAL, AND THE DISTINCTION IS THE WHOLE OF §B.10's WARNING.**
+    ///      Nothing marks it, nothing values it against anything, no third party is paid to seize
+    ///      it, and running it dry costs a place in the queue rather than the seat or its capital.
+    ///      A prior candidate in this repo (`TENANT`) died for needing the other thing.
+    ///
+    ///      **It also corrects PLAN §B.10, which said rent is "deducted from the seat's own `a0`".
+    ///      Built literally, that is broken, and not at the margin.** Front-first allocation
+    ///      deliberately drives a seat to single-token composition, and INVARIANT C states the
+    ///      consequence outright: every seat below `cursor0` holds `a0 == 0`. So under any sustained
+    ///      run of one-for-zero flow the FRONT seats hold exactly zero of the rent currency — and
+    ///      would be foreclosed, one after another, for no reason but the direction the market
+    ///      happened to trade. Rank would be set by flow instead of by price, which is the one thing
+    ///      QUEUE claims it is not. The second argument is shorter: an EMPTY seat is pure rank,
+    ///      Phase 3 exists to make that holdable and sellable, and an `a0`-funded rent makes it
+    ///      unholdable at any price above zero.
+    ///
+    ///      Anyone may fund any seat. Restricting it to the holder would add a way to fail and buy
+    ///      nothing: a gift of rent is a gift.
+    function fundRent(uint256 seatId, uint256 amount) external nonReentrant {
+        if (!bound) revert PoolNotBound();
+        if (seatId >= q.length) revert NoSuchSeat(seatId);
+        if (amount == 0) revert NothingDeposited();
+
+        IERC20(Currency.unwrap(key.currency0)).safeTransferFrom(msg.sender, address(this), amount);
+        lease[seatId].escrow += amount;
+        escrowTotal += amount;
+        emit RentFunded(seatId, msg.sender, amount);
+    }
+
+    /// @notice Take back prepaid rent you have not spent. Settles first, so it cannot outrun a bill
+    ///         that has already accrued.
+    function withdrawRent(uint256 seatId, uint256 amount) external nonReentrant {
+        if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
+        _settleSeat(seatId);
+
+        Lease storage l = lease[seatId];
+        if (amount > l.escrow) revert OverEntitlement(amount, l.escrow);
+        l.escrow -= amount;
+        escrowTotal -= amount;
+
+        // Escrow is currency0 the hook holds outright — outside the position, outside `float0`, and
+        // therefore never clamped by the dust policy and never able to spend another seat's money.
+        _send(msg.sender, amount, 0);
+        emit RentWithdrawn(seatId, msg.sender, amount);
+    }
+
+    /// @notice Charge a seat the rent it owes and hand it to the seats behind. Permissionless.
+    ///
+    /// @dev **PERMISSIONLESS, AND IT IS NOT A KEEPER.** It takes no argument but a seat id, pays the
+    ///      caller nothing, and moves money only where the lease already says it goes — the same
+    ///      shape as `sweepFloatIntoPosition`. Two parties want to call it without being asked: the
+    ///      seats behind, who are paid by it, and anyone who wants the seat, because settling a
+    ///      delinquent holder is what demotes them out of the way. No off-chain component is
+    ///      required for the mechanism to bind, because settlement is also FORCED at every point
+    ///      the lease is touched — repricing, funding, withdrawing, selling, or being bought.
+    function settleRent(uint256 seatId) external nonReentrant {
+        if (seatId >= q.length) revert NoSuchSeat(seatId);
+        _settleSeat(seatId);
+    }
+
+    /// @notice Take a seat from its holder at the price they set. Rank only — the seat arrives EMPTY.
+    ///
+    /// @param maxPrice  the most the buyer will pay. **Not optional slippage.** See `buyPrice`.
+    /// @param newSelfPrice the buyer's own assessment, applied in the same transaction so the seat
+    ///        is never left unpriced — and therefore free — for even one block.
+    function buySeat(uint256 seatId, uint256 maxPrice, uint256 newSelfPrice) external nonReentrant {
+        if (!bound) revert PoolNotBound();
+        if (seatId >= q.length) revert NoSuchSeat(seatId);
+
+        // Settle BEFORE reading the price: a holder who cannot pay is demoted first, and the buyer
+        // then pays whatever the seat is actually worth after that, not before it.
+        _settleSeat(seatId);
+
+        address holder = seatHolder[seatId];
+        // Buying your own seat would evacuate your own capital and pay yourself your own price — a
+        // no-op with side effects. Refused so the buyout means one thing.
+        if (holder == msg.sender) revert CannotBuyOwnSeat(seatId);
+
+        uint256 price = buyPrice(seatId);
+        if (price > maxPrice) revert PriceAboveMax(price, maxPrice);
+
+        if (price != 0) {
+            IERC20(Currency.unwrap(key.currency0)).safeTransferFrom(msg.sender, address(this), price);
+            // Credited, not transferred on. A direct `transfer` to the seller lets a seller who is a
+            // contract refuse payment — and refusing payment would BLOCK THEIR OWN BUYOUT, which
+            // hands every incumbent the permanent veto Phase 3 went out of its way to remove.
+            // `pending0` is already the claim path for exactly this, and the identity holds:
+            // `Σa0 + pendingTotal0` and `redeemable0 + float0` both rise by `price`.
+            pending0[holder] += price;
+            pendingTotal0 += price;
+            float0 += price;
+        }
+
+        // Hand the price to `_onSeatTransfer` so the seat leaves FIRM at what was paid for it, then
+        // move it through the same single funnel every other change of holder uses.
+        paidForSeat = price;
+        _moveSeat(msg.sender, holder, msg.sender, seatId, 1);
+        paidForSeat = 0;
+
+        _setPrice(seatId, newSelfPrice);
+        emit SeatBought(seatId, holder, msg.sender, price);
+    }
+
+    // ------------------------------------------------------------------------- rent settlement
+
+    /// @notice Charge one seat the rent accrued since it was last settled, and demote it if it
+    ///         cannot pay.
+    ///
+    /// @dev **FORECLOSURE IS A DEMOTION.** The seat keeps its holder and every wei of its capital;
+    ///      it loses its place in the order and its price. There is nothing to liquidate, nobody is
+    ///      paid a bounty to trigger it, and the loss is bounded by the escrow that was prepaid for
+    ///      exactly this.
+    ///
+    ///      An unpriced seat is skipped WITHOUT writing `lastSettled`, which is safe because
+    ///      `_setPrice` refreshes it whenever a price comes into existence — so the stale timestamp
+    ///      can never be charged against.
+    function _settleSeat(uint256 seatId) internal virtual {
+        Lease storage l = lease[seatId];
+        uint256 price = l.selfPrice;
+        if (price == 0) return;
+
+        uint256 elapsed = block.timestamp - l.lastSettled;
+        if (elapsed == 0) return;
+
+        uint256 due = Rent.owed(price, elapsed, RENT_BPS, RENT_PERIOD);
+        uint256 esc = l.escrow;
+        bool short_ = due > esc;
+        uint256 charged = short_ ? esc : due;
+
+        l.escrow = esc - charged;
+        l.lastSettled = uint64(block.timestamp);
+
+        // Distribute at the rank the rent was OWED from, which is why this runs before the demotion.
+        _distributeRent(seatId, charged);
+
+        if (short_) {
+            l.selfPrice = 0;
+            emit Foreclosed(seatId, due, charged, _demoteToTail(seatId));
+        }
+    }
+
+    /// @notice Hand `amount` to the seats BEHIND `payerId`, pro-rata by their `currency0` balance.
+    ///
+    /// @dev BEHIND, not ahead. Rent is what the front pays the back for standing aside, so paying it
+    ///      forward inverts the mechanism's entire economics while conserving every wei — the exact
+    ///      shape of the bug that killed `HardcapHook`, and the reason §D.6 demands a negative
+    ///      control for it specifically.
+    ///
+    ///      Same-token pro-rata only. Weighting by anything that mixes `a0` and `a1` into one
+    ///      "value" needs a price, and QUEUE is not allowed to have one (§E.11).
+    ///
+    ///      **The sum is EXACT**, because the last funded recipient absorbs `amount - assigned`
+    ///      through the same `Allocation.step` remainder line the allocator uses. What no recipient
+    ///      can absorb — because every seat behind is empty of `currency0` — is HELD in
+    ///      `unallocatedRent0` and folded into the next pot, so the identity that holds over any
+    ///      settlement is
+    ///
+    ///          Σ credited + unallocatedAfter == charged + unallocatedBefore
+    ///
+    ///      to the wei. Asserting a BOUND on the leftover instead would be blind to every defect
+    ///      that moves it the same way the fix does (PITFALLS 5.53).
+    function _distributeRent(uint256 payerId, uint256 amount) internal virtual {
+        uint256 held = unallocatedRent0;
+        uint256 pot = amount + held;
+        if (pot == 0) return;
+
+        uint256 n = q.length;
+        uint256 ord = order;
+        uint256 r = rankOfId(payerId);
+
+        uint256 w;
+        for (uint256 i = r + 1; i < n; i++) {
+            w += q[_idAt(ord, i)].a0;
+        }
+
+        if (w == 0) {
+            // Nobody behind holds any currency0. The money has LEFT the payer's escrow, so it must
+            // be accounted somewhere or the balance identity breaks and a wei is stranded.
+            escrowTotal -= amount;
+            unallocatedRent0 = pot;
+            emit RentSettled(payerId, amount, 0, pot);
+            return;
+        }
+
+        Allocation.State memory st = Allocation.init(pot, w);
+        for (uint256 i = r + 1; i < n && st.remaining > 0; i++) {
+            uint256 id = _idAt(ord, i);
+            uint256 bal = q[id].a0;
+            if (bal == 0) continue;
+            (, uint256 give) = Allocation.step(st, bal);
+            lease[id].escrow += give;
+        }
+
+        // Rent lands in the recipients' ESCROW, not their `a0`. It is currency0 the hook already
+        // holds outside the position, so this is a move inside one pot: `float0`, the position and
+        // INVARIANT F are all untouched by a settlement, and the tail's rent income is exactly the
+        // thing that pays the tail's own rent bill.
+        escrowTotal = escrowTotal - amount + pot;
+        unallocatedRent0 = 0;
+        emit RentSettled(payerId, amount, pot, 0);
+    }
+
+    /// @dev Settle every seat in front of `rank`. See `addToSeat` for why this exists.
+    ///
+    ///      It re-reads `order` each step because a settlement can DEMOTE the seat it just charged,
+    ///      which slides everything behind it — including the target — down one place. The loop
+    ///      terminates because each pass either advances `i` or decreases `rank`, and it stops when
+    ///      they meet.
+    function _settleAhead(uint256 rank) internal {
+        uint256 i;
+        while (i < rank) {
+            uint256 before = order;
+            _settleSeat(_idAt(before, i));
+            if (order == before) i++;
+            else rank--;
+        }
     }
 
     // ---------------------------------------------------------------------------- liquidity sizing
@@ -772,5 +1337,40 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
     function pendingTotals() external view returns (uint256, uint256) {
         return (pendingTotal0, pendingTotal1);
+    }
+
+    function leaseOf(uint256 seatId)
+        external
+        view
+        returns (uint256 selfPrice, uint256 escrow, uint256 firmPrice, uint64 firmUntil, uint64 lastSettled)
+    {
+        Lease storage l = lease[seatId];
+        return (l.selfPrice, l.escrow, l.firmPrice, l.firmUntil, l.lastSettled);
+    }
+
+    /// @notice Rent this seat has accrued but not yet paid. Uncapped by the escrow on purpose: the
+    ///         difference between this and `escrow` is what foreclosure is about.
+    function rentDue(uint256 seatId) external view returns (uint256) {
+        Lease storage l = lease[seatId];
+        if (l.selfPrice == 0) return 0;
+        return Rent.owed(l.selfPrice, block.timestamp - l.lastSettled, RENT_BPS, RENT_PERIOD);
+    }
+
+    function rentTotals() external view returns (uint256 escrowed, uint256 unallocated) {
+        return (escrowTotal, unallocatedRent0);
+    }
+
+    /// @notice The queue's order, head first. `orderWord()` is the raw slot behind it.
+    function ranking() external view returns (uint256[] memory ids) {
+        uint256 n = q.length;
+        uint256 ord = order;
+        ids = new uint256[](n);
+        for (uint256 r; r < n; r++) {
+            ids[r] = _idAt(ord, r);
+        }
+    }
+
+    function orderWord() external view returns (uint256) {
+        return order;
     }
 }

@@ -11,9 +11,17 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 /// @dev THE MANDATORY DUST CONTROL (PLAN §D.4). Dust policy F1 replaced by face-value payment.
 contract FaceValueQueueHook is QueueHarness {
-    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, address[] memory roster)
-        QueueHarness(pm, c0_, c1_, f, sp, roster)
-    {}
+    constructor(
+        IPoolManager pm,
+        Currency c0_,
+        Currency c1_,
+        uint24 f,
+        int24 sp,
+        address[] memory roster,
+        uint256 rb,
+        uint256 rp,
+        uint256 fw
+    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
 
     error FloatShort(uint256 want, uint256 have);
 
@@ -95,11 +103,7 @@ contract ResidualTest is QueueFixture {
     ///      anything at all — the bug is a few hundred wei and is invisible unless hunted.
     function test_2_14_negativeControl_faceValueWithdrawLeavesTheLastWithdrawerShort() public {
         address a = address(FLAGS ^ (uint160(0x6002) << 144));
-        deployCodeTo(
-            "Residual.t.sol:FaceValueQueueHook",
-            abi.encode(poolManager, c0, c1, FEE, SPACING, _roster(ALICE, BOB, CARL)),
-            a
-        );
+        deployCodeTo("Residual.t.sol:FaceValueQueueHook", _ctorArgs(_roster(ALICE, BOB, CARL)), a);
         hook = QueueHarness(a);
         _initPool();
         (uint256 i0, uint256 i1, uint256 i2) = _seedThree();

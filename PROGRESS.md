@@ -15,7 +15,7 @@ Newest entry first. Never delete an entry — supersede it.
 | 1 | Allocator core | **COMPLETE 2026-08-27** | **YES** — 27 tests, all 12 exit criteria met, 9 production mutations red |
 | 2 | Deposit / withdraw + redemption-dust fix | **COMPLETE 2026-08-27** | **YES** — 59 tests, all §D.4 criteria, 11 Phase 2 mutations red, 0 survivors |
 | 3 | ERC-6909 rank token + transfer | **COMPLETE 2026-08-27** | **YES** — 77 tests, all 10 §D.5 criteria plus 2 added, 29 Phase 3 mutations red, 0 survivors |
-| 4 | Harberger rent variant | NOT STARTED | — |
+| 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale (O(1) prefix-sum redesign) | NOT STARTED | — |
 | 6 | Adversarial + invariant campaign | NOT STARTED | — |
 | 7 | Testnet deploy + demo + video | NOT STARTED | — |
@@ -28,10 +28,14 @@ individual exit criteria inside those sections are ticked one by one. This board
 two ever disagree, PLAN's dashboard and the ticked criteria win, because they sit next to the
 criteria they describe.
 
-**Verified 2026-08-27 (end of the Phase 3 session):** Phases 0-3 are done. `src/queue/QueueHook.sol`,
+**Verified 2026-08-27 (end of the Phase 4 session):** Phases 0-4 are done. `src/queue/QueueHook.sol`,
+`src/queue/QueueSeats.sol`, `src/queue/libraries/Allocation.sol` and `src/queue/libraries/Rent.sol`
+are the mechanism. `forge test` is **125/125 green** and `forge lint src/` is CLEAN with zero notes.
+`python3 script/mutate.py` runs 53 mutations against the Phase 4 code and **none survive**.
+
+*(Superseded — earlier the same day:* Phases 0-3 are done. `src/queue/QueueHook.sol`,
 `src/queue/QueueSeats.sol` and `src/queue/libraries/Allocation.sol` are the mechanism. `forge test`
-is **77/77 green** and `forge lint src/` is CLEAN with zero notes. Every row from Phase 4 down is
-still accurate.
+is **77/77 green** and `forge lint src/` is CLEAN with zero notes.*)*
 
 *(Superseded — earlier the same day:* Phases 0, 1 and 2 are done, 59/59 green.*)*
 
@@ -40,6 +44,122 @@ at the repo root** and no mechanism code has been written.*)* The two 2026-08-26
 research and documents only. `PITFALLS.md` §5 is the standing list of what is open.
 
 ---
+
+## 2026-08-27 — Phase 4: rank gets a price, and §B.10's payment source turned out to be broken
+
+**Status: COMPLETE. 125/125 green, `forge lint src/` clean, 53 mutations run against the new code
+with ZERO survivors.**
+
+### What Phase 4 was for
+
+Three things the Phase 3 state would have had to disclose on camera, all of which close in one
+mechanism: the founding roster was an endowment nobody had bid for; the tail had no compensation
+channel at all, so the honest answer to *"why would anyone hold seat 5?"* was "they wouldn't"; and
+rank-then-run was free. Harberger is the only thing that gives rank a continuous on-chain price
+without needing the secondary market PITFALLS 5.11 says does not exist.
+
+### The plan's specified payment source is broken, and not at the margin
+
+§B.10 said rent is *"deducted from the seat's own `a0`"*. Built literally, that is unshippable, and
+it took two independent arguments to be sure rather than one:
+
+1. **Front-first allocation drives seats to single-token composition ON PURPOSE**, and INVARIANT C —
+   asserted in every test since Phase 1 — states the consequence outright: *every seat below
+   `cursor0` holds `a0 == 0`.* So after any sustained run of one-for-zero flow the FRONT seats hold
+   exactly zero of the rent currency and get foreclosed, one after another, **because of the
+   direction the market happened to trade.** Rank would be set by flow instead of by price, which is
+   the one thing QUEUE claims it is not.
+2. **An EMPTY seat is pure rank**, which Phase 3 exists to make holdable and sellable. Under `a0`
+   rent it cannot be held at any price above zero at all. The spec's payment source is incompatible
+   with the object it prices.
+
+Owner decision, taken before any of it was built: rent is drawn from a **per-seat prepaid meter** in
+`currency0`, held outside the position, outside `float0` and outside the allocator — so Phase 4 adds
+nothing to the proven Phase 1–3 arithmetic. It is a meter, not collateral: nothing marks it, nothing
+values it against anything, nobody is paid to seize it, and running it dry costs a place in the queue
+rather than the seat or its capital. Both arguments are executed side by side against the spec's own
+implementation in `test_4_13` and `test_4_13b`.
+
+### The firm quote, which is not in the plan and without which Harberger delivers nothing
+
+"Always for sale at your own price" is worth nothing if the holder can raise the price the instant
+they see a buyer — and they can see one, because a buyout is an ordinary transaction in an ordinary
+mempool. Repricing costs only rent for the seconds the raise is in effect: at τ = 10%/yr that is
+**four parts in ten million of the price per block.** Effectively free. Left alone, EVERY buyout is
+vetoable and Phase 4 would have shipped a rent tax with an always-for-sale slogan on it.
+
+So an ask is FIRM: **the seat stays available at the lowest price it has been asked at, or paid for,
+within `FIRM_WINDOW`.** A raise takes effect immediately for RENT and only after the window for the
+SALE. The three ways out are each self-destructive rather than merely refused, and all three are
+executed: raising blocks nothing because the old price is still firm; dropping to zero and re-raising
+atomically makes the window minimum ZERO; handing the seat to your own second address arms the
+window at what was paid for it, which for a plain transfer is zero.
+
+### Four more things that were found rather than designed
+
+- **The flash-loan rent grab.** Rent is split by the recipients' `currency0` balance read at
+  settlement, and funding a seat is the only way a holder can raise that number at will. So
+  `addToSeat(tail, huge) → settleRent(everyoneAhead) → withdraw(tail)` captures rent accrued over a
+  period the depositor was not there for, in one transaction, with borrowed money — **measured at
+  16× the honest share.** Closed by settling every seat ahead first. A per-block cooldown would also
+  close it and is the wrong instrument: §B.12 counts "waiting one block boundary" as a proven
+  evasion and QUEUE passes that table precisely because it has no per-block reference.
+- **A buyout paying the seller directly would hand every incumbent a veto over their own buyout** —
+  a seller that is a contract refuses payment and the sale reverts. The price is credited as a
+  `pendingWithdraw` claim instead, which is the same unblockability argument Phase 3 made for the
+  evacuation path.
+- **`selfPrice` had to be bounded.** An unbounded assessment overflows the rent product, and a
+  settlement that reverts is a seat that can never be foreclosed OR bought — and `_settleAhead`
+  would carry that revert into every deposit behind it. Bounded at `type(uint128).max`, above
+  anything v4 itself can represent.
+- **Seat id stopped being rank index**, because foreclosure permutes the queue. The order lives in
+  ONE `uint256`, one seat id per byte, which is why `MAX_SEATS` is 32: the roster bound and the 32
+  bytes of a word are the same fact. There is deliberately no `rankOfId` mapping — a second copy of
+  the order is a writer/reader pair that can disagree, and on this project that has been wrong four
+  times. `rankOfId` scans the word.
+
+### The mutation campaign, which is the part worth reading
+
+The suite was **99/99 green** and every review lens had been walked before `script/mutate.py` ran for
+the first time. It left **21 of 53 mutations alive.** Among them:
+
+- **anyone could drain anyone's rent meter** (`withdrawRent` had no ownership check under test), and
+- **anyone could reprice anyone's seat** — which is not griefing but theft: set a rival's price to
+  zero and buy their seat. Both entry points were new, both were completely untested, and neither
+  was caught by reading the code.
+- **Every foreclosure test demoted SEAT 0 FROM RANK 0.** `0 << anything` is `0`, so a demotion that
+  wrote the seat id back at the WRONG byte offset was invisible to all of them, as was cursor1's
+  copy of the pull-back rule, as was the funding pull-back comparing an id where it should compare a
+  rank. Four separate defects hiding behind one convenient fixture.
+- **A gas optimisation I had added myself re-opened the dodge it was meant to stop.** The lease reset
+  in `_onSeatTransfer` is skipped when the seat is already in the post-transfer state — but the
+  predicate was evaluated AFTER settlement, and settlement can FORECLOSE the seat, which zeroes
+  `selfPrice`. So a holder could arm nothing at all by letting their own unfunded seat foreclose on
+  the way through a self-transfer, then reprice with no firm quote against them. Fixed by reading
+  the predicate before settling; `test_4_12` executes the sequence.
+
+One mutation could not be killed and the line was **deleted** instead (PITFALLS 5.49 again): the
+"already at the tail" early return in `_demoteToTail` is exactly equivalent to the general path.
+
+Seventh consecutive time mutation testing has found a real defect on this project. First time it
+found an unguarded external entry point.
+
+### What is honestly still open
+
+- **Harberger cannot express a negative seat value** (5.10). Under toxic flow everyone declares near
+  zero, no rent flows, and the front is free to take. Correct behaviour, and the point at which the
+  signal is censored. Unsolved, and not solvable inside this design.
+- **Rent is `currency0` and weighted by `currency0`**, because weighting a two-token basket needs a
+  price and §E.11 forbids one. A tail holding only `currency1` is not an eligible recipient and the
+  rent waits in `unallocatedRent0`. `test_4_43` asserts exactly this rather than hiding it.
+- **Enforcement needs somebody to call `settleRent`.** No keeper ships and none is required — the
+  seats behind are paid by it, and a would-be buyer must call it to clear a delinquent incumbent out
+  of the way — but a seat nobody wants and nobody pokes accrues a debt nothing collects.
+- **Worst-case `addToSeat` is 2,337,576 gas** at a full 32-seat roster with every seat ahead priced
+  and funded. It fits a 30M block thirteen times over, and the configuration costs the attacker rent
+  paid to the very seat they are trying to price out — but it is a real cost of closing the grab and
+  it is measured rather than assumed (`test_4_44`).
+- **Full-range depth** (5.17) is untouched and remains the sharpest attack on the premise.
 
 ## Carried forward from the design phase — what is ALREADY PROVEN
 

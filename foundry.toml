@@ -2,7 +2,9 @@
 bytecode_hash = "none"
 evm_version = "cancun"
 ffi = true
-fs_permissions = [{access = "read-write", path = ".forge-snapshots/"}]
+# `src/` is READ-ONLY, and the test that needs it is the §D.6 review assertion: the shipping
+# source must contain no oracle, collateral or liquidation machinery, checked by reading it.
+fs_permissions = [{access = "read-write", path = ".forge-snapshots/"}, {access = "read", path = "src/"}]
 libs = ["lib"]
 out = "out"
 solc_version = "0.8.30"

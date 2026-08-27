@@ -39,6 +39,37 @@ abstract contract QueueFixture is BaseTest {
     uint128 constant LIQ = 1_000e18;
     address constant PM_OWNER = address(0x4444);
 
+    /// @dev Phase 4 governance parameters. τ = 10% per year is the conventional Harberger figure —
+    ///      a citation rather than a number somebody picked — and `Harberger.t.sol` runs the
+    ///      mechanism at several values rather than defending this one (PLAN §B.10).
+    ///      `FIRM_WINDOW` is a SECURITY parameter, not an economic one: it only has to exceed the
+    ///      time a holder needs to see a buyout and react to it.
+    uint256 constant RENT_BPS = 1_000; // 10%
+    uint256 constant RENT_PERIOD = 365 days;
+    uint256 constant FIRM_WINDOW = 1 hours;
+
+    /// @dev One place the constructor argument list is written. Every suite deploys through it, so
+    ///      adding a parameter cannot leave one call site silently on an old shape.
+    function _ctorArgs(address[] memory roster) internal view returns (bytes memory) {
+        return _ctorArgs(roster, FEE);
+    }
+
+    /// @dev The fee-tier overload: a hook fixes its pool at construction, so a suite that needs a
+    ///      pool on a different tier needs a hook built for that tier.
+    function _ctorArgs(address[] memory roster, uint24 fee) internal view returns (bytes memory) {
+        return abi.encode(poolManager, c0, c1, fee, SPACING, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW);
+    }
+
+    /// @dev The governance-parameter overload, for the τ sweep. §B.10 is explicit that τ must not be
+    ///      defended as a discovered constant, so the suite has to be able to vary it.
+    function _ctorArgs(address[] memory roster, uint256 bps, uint256 period, uint256 window)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return abi.encode(poolManager, c0, c1, FEE, SPACING, roster, bps, period, window);
+    }
+
     Currency c0;
     Currency c1;
     QueueHarness hook;
@@ -49,8 +80,12 @@ abstract contract QueueFixture is BaseTest {
     uint160 startPrice;
 
     // ---- the INDEPENDENT witness. Written from PLAN §B.5, deliberately not shaped like src/.
+    ///     `ref0`/`ref1` are indexed by SEAT ID; `refOrder` is the witness's own copy of the rank
+    ///     permutation, kept as a plain array precisely because the contract keeps it as a packed
+    ///     word. Two differently-shaped representations of the order cannot be wrong in the same way.
     uint256[] ref0;
     uint256[] ref1;
+    uint256[] refOrder;
     uint256 refC0;
     uint256 refC1;
 
@@ -88,9 +123,7 @@ abstract contract QueueFixture is BaseTest {
     ///      many seats exist. `_syntheticRoster` names them; nothing can create one afterwards.
     function _deployHook(uint160 nonce, uint256 nSeats) internal {
         address a = address(FLAGS ^ (nonce << 144));
-        deployCodeTo(
-            "QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING, _syntheticRoster(nSeats)), a
-        );
+        deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgs(_syntheticRoster(nSeats)), a);
         hook = QueueHarness(a);
         _fundHook(a);
     }
@@ -118,6 +151,7 @@ abstract contract QueueFixture is BaseTest {
 
         delete ref0;
         delete ref1;
+        delete refOrder;
         refC0 = 0;
         refC1 = 0;
         uint256 sum0;
@@ -126,6 +160,7 @@ abstract contract QueueFixture is BaseTest {
             (uint256 a0, uint256 a1) = hook.seat(i);
             ref0.push(a0);
             ref1.push(a1);
+            refOrder.push(i); // the founding order is the identity permutation
             sum0 += a0;
             sum1 += a1;
         }
@@ -193,8 +228,8 @@ abstract contract QueueFixture is BaseTest {
         // THE DEGENERATE FILL: the pool took input and paid nothing out. No seat gives anything
         // up, so the whole input is credited to the seat the fill would have begun at.
         if (amtOut == 0) {
-            if (amtIn != 0 && ref0.length != 0) {
-                uint256 at = begin < ref0.length ? begin : 0;
+            if (amtIn != 0 && refOrder.length != 0) {
+                uint256 at = refOrder[begin < refOrder.length ? begin : 0];
                 if (outIsOne) ref0[at] += amtIn;
                 else ref1[at] += amtIn;
             }
@@ -206,9 +241,12 @@ abstract contract QueueFixture is BaseTest {
         uint256 lastIdx;
         bool touchedAny;
 
-        for (uint256 i = begin; i < ref0.length; i++) {
+        // RANKS, not ids. The witness resolves rank -> seat through its own `refOrder` array; the
+        // contract resolves it through a packed word. Both must agree seat by seat.
+        for (uint256 i = begin; i < refOrder.length; i++) {
             if (owed == 0) break;
-            uint256 have = outIsOne ? ref1[i] : ref0[i];
+            uint256 id = refOrder[i];
+            uint256 have = outIsOne ? ref1[id] : ref0[id];
             if (have == 0) continue;
 
             uint256 t = have >= owed ? owed : have;
@@ -217,11 +255,11 @@ abstract contract QueueFixture is BaseTest {
             handed += g;
 
             if (outIsOne) {
-                ref1[i] = have - t;
-                ref0[i] += g;
+                ref1[id] = have - t;
+                ref0[id] += g;
             } else {
-                ref0[i] = have - t;
-                ref1[i] += g;
+                ref0[id] = have - t;
+                ref1[id] += g;
             }
             lastIdx = i;
             touchedAny = true;
@@ -229,7 +267,8 @@ abstract contract QueueFixture is BaseTest {
         require(owed == 0, "reference underflow");
 
         if (touchedAny) {
-            uint256 adv = (outIsOne ? ref1[lastIdx] : ref0[lastIdx]) == 0 ? lastIdx + 1 : lastIdx;
+            uint256 lastId = refOrder[lastIdx];
+            uint256 adv = (outIsOne ? ref1[lastId] : ref0[lastId]) == 0 ? lastIdx + 1 : lastIdx;
             if (outIsOne) {
                 refC1 = adv;
                 if (begin < refC0) refC0 = begin;
@@ -262,13 +301,73 @@ abstract contract QueueFixture is BaseTest {
     ///      funded seat, which is silent theft of rank.
     function _checkInvariantC(string memory tag) internal view {
         (uint256 k0, uint256 k1) = hook.cursors();
+        // The cursors are RANKS. Reading `seat(i)` here would have been right only while seat id
+        // and rank were the same number; after a foreclosure it checks unrelated seats and passes
+        // for the wrong reason.
         for (uint256 i; i < k0; i++) {
-            (uint256 a0,) = hook.seat(i);
+            (uint256 a0,) = hook.seat(hook.idAtRank(i));
             assertEq(a0, 0, string.concat(tag, ": INVARIANT C cursor0 leads"));
         }
         for (uint256 i; i < k1; i++) {
-            (, uint256 a1) = hook.seat(i);
+            (, uint256 a1) = hook.seat(hook.idAtRank(i));
             assertEq(a1, 0, string.concat(tag, ": INVARIANT C cursor1 leads"));
+        }
+        _checkOrder(tag);
+    }
+
+    /// @dev The contract's packed order word against the witness's plain array, rank by rank.
+    function _checkOrder(string memory tag) internal view {
+        uint256[] memory got = hook.ranking();
+        assertEq(got.length, refOrder.length, string.concat(tag, ": roster size"));
+        for (uint256 r; r < refOrder.length; r++) {
+            assertEq(got[r], refOrder[r], string.concat(tag, ": rank ", vm.toString(r), " holds the wrong seat"));
+        }
+    }
+
+    /// @dev The witness's copy of a demotion: the seat leaves its rank and rejoins at the tail.
+    function _refDemote(uint256 seatId) internal {
+        uint256 n = refOrder.length;
+        uint256 r = type(uint256).max;
+        for (uint256 i; i < n; i++) {
+            if (refOrder[i] == seatId) r = i;
+        }
+        require(r != type(uint256).max, "witness: no such seat");
+        if (r == n - 1) return;
+        for (uint256 i = r; i + 1 < n; i++) {
+            refOrder[i] = refOrder[i + 1];
+        }
+        refOrder[n - 1] = seatId;
+        if (refC0 > r) refC0 -= 1;
+        if (refC1 > r) refC1 -= 1;
+    }
+
+    /// @notice INVARIANT R (Phase 4): every wei of currency0 the hook holds is spoken for, and the
+    ///         three pots do not overlap.
+    ///
+    /// @dev `float0` is the queue's own capital outside the position; `escrowTotal` is prepaid rent;
+    ///      `unallocatedRent0` is rent charged that had no recipient. If rent accounting ever leaked
+    ///      into the float — or the other way — a seat would be paid out of another seat's rent and
+    ///      no other assertion in this fixture would notice. Only meaningful on the UNFUNDED
+    ///      deployment path, where the hook holds nothing it was not given.
+    function _checkInvariantR(string memory tag) internal view {
+        (uint256 f0, uint256 f1) = hook.floats();
+        (uint256 esc, uint256 unalloc) = hook.rentTotals();
+        assertEq(_hookBal(c0), f0 + esc + unalloc, string.concat(tag, ": INVARIANT R currency0"));
+        assertEq(_hookBal(c1), f1, string.concat(tag, ": INVARIANT R currency1"));
+
+        // ...AND the aggregate against the sum it claims to be. `escrowTotal` is a SECOND WRITER of
+        // the same fact as the per-seat escrows, and on this project a rule kept in two places has
+        // been wrong four times (PITFALLS 5.37, 5.50, 5.52 twice). Without this line a settlement
+        // that credits the recipients without debiting the payer passes every other assertion here:
+        // the aggregate stays right while the seats collectively own more than the hook holds.
+        assertEq(_sumEscrows(), esc, string.concat(tag, ": escrowTotal disagrees with the seats"));
+    }
+
+    function _sumEscrows() internal view returns (uint256 s) {
+        uint256 n = hook.seatCount();
+        for (uint256 i; i < n; i++) {
+            (, uint256 e,,,) = hook.leaseOf(i);
+            s += e;
         }
     }
 
@@ -282,7 +381,7 @@ abstract contract QueueFixture is BaseTest {
     ///      owning exactly what the queue put in.
     function _deployHookUnfunded(uint160 nonce, address[] memory roster) internal {
         address a = address(FLAGS ^ (nonce << 144));
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING, roster), a);
+        deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgs(roster), a);
         hook = QueueHarness(a);
     }
 
@@ -301,6 +400,11 @@ abstract contract QueueFixture is BaseTest {
         (r[0], r[1], r[2]) = (a, b, c_);
     }
 
+    function _roster(address a, address b, address c_, address d) internal pure returns (address[] memory r) {
+        r = new address[](4);
+        (r[0], r[1], r[2], r[3]) = (a, b, c_, d);
+    }
+
     /// @dev Initialize the pool only. `afterInitialize` binds the key inside the hook.
     function _initPool() internal {
         k = PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(hook))});
@@ -310,10 +414,12 @@ abstract contract QueueFixture is BaseTest {
         // Every seat exists from deployment, empty. The witness must have the same shape as the
         // queue from the first block, or a seat that is skipped for being empty in one and absent
         // in the other would agree by accident.
+        delete refOrder;
         uint256 n = hook.seatCount();
         for (uint256 i; i < n; i++) {
             ref0.push(0);
             ref1.push(0);
+            refOrder.push(i);
         }
         refC0 = 0;
         refC1 = 0;
@@ -342,6 +448,17 @@ abstract contract QueueFixture is BaseTest {
         ref1[seatId] += a1;
         expT0 += a0;
         expT1 += a1;
+
+        // ...and the witness pulls its own cursors back, by RANK, exactly as the contract does.
+        // Without this the two disagree about where the next fill starts the moment a seat below a
+        // cursor is re-funded — which is invisible while rank and seat id are the same number, and
+        // is not invisible at all once foreclosure can permute the queue.
+        uint256 rank;
+        for (uint256 i; i < refOrder.length; i++) {
+            if (refOrder[i] == seatId) rank = i;
+        }
+        if (rank < refC0) refC0 = rank;
+        if (rank < refC1) refC1 = rank;
     }
 
     /// @dev Re-base the witness after a seat evacuation. A transfer empties the seat OUTRIGHT —
