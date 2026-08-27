@@ -12,6 +12,12 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
 import {Allocation} from "./libraries/Allocation.sol";
 
@@ -25,6 +31,8 @@ import {Allocation} from "./libraries/Allocation.sol";
 ///         Uniswap has never had a queue, so it has never had a price for one.
 contract QueueHook is BaseHook, IUnlockCallback {
     using CurrencySettler for Currency;
+    using StateLibrary for IPoolManager;
+    using SafeERC20 for IERC20;
 
     // --------------------------------------------------------------------------------- state (§B.3)
 
@@ -56,6 +64,20 @@ contract QueueHook is BaseHook, IUnlockCallback {
     uint256 internal float0;
     uint256 internal float1;
 
+    /// @dev PHASE 2, PROVISIONAL. Seats are granted by arrival order, which PLAN §B.8 and PITFALLS
+    ///      5.8 both record as NOT SHIPPABLE: rank must be BOUGHT or Harberger-held, never granted,
+    ///      or the head is dust-griefable. Phase 3 replaces this mapping with the ERC-6909 rank
+    ///      token. It carries a named test (`test_KNOWN_HOLE_rankIsGrantedByArrivalOrder`).
+    mapping(uint256 seatId => address) internal seatOwner;
+
+    bool internal bound;
+
+    /// @dev The pool this hook was deployed to serve, fixed at construction. See the constructor.
+    Currency internal immutable expected0;
+    Currency internal immutable expected1;
+    uint24 internal immutable expectedFee;
+    int24 internal immutable expectedSpacing;
+
     // ------------------------------------------------------------- protocol-fee snapshot (§E.5, P2)
 
     /// @dev Snapshot of `poolManager.protocolFeesAccrued(inputCurrency)` taken in `beforeSwap`,
@@ -76,18 +98,59 @@ contract QueueHook is BaseHook, IUnlockCallback {
     ///      would silently under-credit the queue and strand value owed to nobody.
     error ProtocolFeeExceedsInput(uint256 pfDelta, uint256 amtIn);
     error DirectionMismatch();
+    error NotSeatOwner(uint256 seatId, address caller);
+    error OverEntitlement(uint256 want, uint256 have);
+    error NothingDeposited();
+    error PoolNotBound();
+    error AlreadyBound();
+    error WrongPool();
+    /// @dev `modifyLiquidity` charged more than the caller supplied. Structurally prevented by
+    ///      sizing one unit of liquidity BELOW the amounts on hand; loud rather than silent because
+    ///      the alternative is quietly spending float that belongs to other seats.
+    error DepositOversized(uint256 used, uint256 supplied);
 
-    constructor(IPoolManager pm) BaseHook(pm) {}
+    /// @dev The pool this hook will serve is fixed AT DEPLOYMENT, not by whoever initializes
+    ///      first. Without this, anyone could front-run the intended `poolManager.initialize` and
+    ///      bind a freshly deployed hook to a junk pool — permanently, since there is no admin to
+    ///      unbind it. A free, unrecoverable DoS. Committing the parameters here costs nothing: the
+    ///      hook serves exactly one pool by design.
+    constructor(IPoolManager pm, Currency currency0, Currency currency1, uint24 fee, int24 tickSpacing) BaseHook(pm) {
+        expected0 = currency0;
+        expected1 = currency1;
+        expectedFee = fee;
+        expectedSpacing = tickSpacing;
+    }
 
     // -------------------------------------------------------------------------- permissions (§B.2)
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory p) {
+        p.afterInitialize = true; // bind the one pool this hook serves
         p.beforeAddLiquidity = true; // refuse every external LP — the hook is the sole LP
         p.beforeSwap = true; // open the protocol-fee measurement window
         p.afterSwap = true; // allocate the fill
     }
 
     // ------------------------------------------------------------------------------------ callbacks
+
+    /// @notice Bind the single pool this hook serves.
+    /// @dev Capturing the key here rather than through a setter is deliberate. A permissionless
+    ///      `initialize(PoolKey)` would let anyone point the hook at a pool of their choosing; a
+    ///      guarded one would be a privileged role, which is forbidden. `afterInitialize` can only
+    ///      ever be called by PoolManager, and only for a pool whose key already names THIS hook,
+    ///      so the binding is authenticated by construction. The second pool is refused.
+    function _afterInitialize(address, PoolKey calldata k, uint160, int24) internal override returns (bytes4) {
+        if (bound) revert AlreadyBound();
+        if (
+            Currency.unwrap(k.currency0) != Currency.unwrap(expected0)
+                || Currency.unwrap(k.currency1) != Currency.unwrap(expected1) || k.fee != expectedFee
+                || k.tickSpacing != expectedSpacing
+        ) revert WrongPool();
+        bound = true;
+        key = k;
+        tickLower = TickMath.minUsableTick(k.tickSpacing);
+        tickUpper = TickMath.maxUsableTick(k.tickSpacing);
+        return BaseHook.afterInitialize.selector;
+    }
 
     /// @dev The premise of every other number in this project: nobody but the hook may add
     ///      liquidity. Without it an external LP dilutes the position the queue is accounted
@@ -253,6 +316,189 @@ contract QueueHook is BaseHook, IUnlockCallback {
         }
     }
 
+    // ============================================================== DEPOSIT / WITHDRAW (Phase 2)
+
+    /// @notice Open a new seat at the TAIL of the queue and fund it.
+    /// @dev Seats append at the tail and change no cursor, so opening one can never disturb
+    ///      INVARIANT C for the seats already in front.
+    function deposit(uint256 amount0, uint256 amount1) external returns (uint256 seatId) {
+        seatId = q.length;
+        q.push(Seat({a0: 0, a1: 0}));
+        seatOwner[seatId] = msg.sender;
+        _fundSeat(seatId, amount0, amount1);
+    }
+
+    /// @notice Add capital to a seat you already own.
+    function addToSeat(uint256 seatId, uint256 amount0, uint256 amount1) external {
+        if (seatOwner[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
+        _fundSeat(seatId, amount0, amount1);
+    }
+
+    function _fundSeat(uint256 seatId, uint256 amount0, uint256 amount1) internal {
+        if (!bound) revert PoolNotBound();
+        if (amount0 == 0 && amount1 == 0) revert NothingDeposited();
+
+        if (amount0 != 0) IERC20(Currency.unwrap(key.currency0)).safeTransferFrom(msg.sender, address(this), amount0);
+        if (amount1 != 0) IERC20(Currency.unwrap(key.currency1)).safeTransferFrom(msg.sender, address(this), amount1);
+
+        uint256 used0;
+        uint256 used1;
+        uint128 dl = _liquidityForAmounts(amount0, amount1);
+        if (dl != 0) {
+            (used0, used1) = _modifyPosition(int256(uint256(dl)));
+            liquidity += dl;
+            // Cannot happen: `_liquidityForAmounts` sizes one unit BELOW what is on hand. If it
+            // ever does, the excess would be silently taken from float owed to OTHER seats.
+            if (used0 > amount0) revert DepositOversized(used0, amount0);
+            if (used1 > amount1) revert DepositOversized(used1, amount1);
+        }
+
+        // OWNER DECISION 2026-08-27 — ABSORB, do not refund. PLAN §B.7 originally said "refund any
+        // unconsumed remainder to msg.sender". Under a float that is the worse answer: absorbing it
+        // costs no transfer and it SHRINKS the float that `sweepFloatIntoPosition` has to work
+        // against. The depositor keeps the full value either way — as ledger credit rather than
+        // returned tokens — so INVARIANT F still holds exactly:
+        //     consumed goes into the position, remainder goes into floatX, seat is credited both.
+        float0 += amount0 - used0;
+        float1 += amount1 - used1;
+
+        Seat storage s = q[seatId];
+        s.a0 += amount0;
+        s.a1 += amount1;
+
+        // TOPPING UP A SEAT BELOW A CURSOR WOULD MAKE THAT CURSOR LEAD. Opening a seat at the tail
+        // cannot, but `addToSeat` on an exhausted seat re-funds it in place, and a cursor that has
+        // already advanced past it would then skip a funded seat — silent theft of rank.
+        if (seatId < cursor0) cursor0 = seatId;
+        if (seatId < cursor1) cursor1 = seatId;
+    }
+
+    /// @notice Withdraw from a seat you own, paying from the shared float and topping the float up
+    ///         from the position only when it cannot cover the request.
+    ///
+    /// @dev THE MECHANISM, and why it needs a float at all. A v4 position releases the two tokens in
+    ///      a ratio fixed by price and range. Front-first allocation deliberately drives seats to
+    ///      single-token composition, so a seat's LEDGER composition is generally NOT payable by any
+    ///      proportional removal. Measured: a 100%-converted seat could withdraw NOTHING via
+    ///      `modifyLiquidity(-D)`.
+    ///
+    ///      The resolution is to size the removal on the leg that BINDS, pay the seat its exact
+    ///      ledger amounts, and retain the surplus as float shared by the whole queue. INVARIANT F
+    ///      is what makes paying first-come-first-served out of a shared pot safe.
+    ///
+    ///      **`withdraw` MUST NEVER CALL `poolManager.swap`.** Rebalancing by swapping would put the
+    ///      allocator inside its own withdrawal and skim an unaccounted protocol fee. `_burnPosition`
+    ///      only ever calls `modifyLiquidity`.
+    function withdraw(uint256 seatId, uint256 w0, uint256 w1) external returns (uint256 p0, uint256 p1) {
+        if (seatOwner[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
+        Seat storage s = q[seatId];
+        if (w0 > s.a0) revert OverEntitlement(w0, s.a0);
+        if (w1 > s.a1) revert OverEntitlement(w1, s.a1);
+
+        uint256 d0 = w0 > float0 ? w0 - float0 : 0;
+        uint256 d1 = w1 > float1 ? w1 - float1 : 0;
+        if (d0 != 0 || d1 != 0) {
+            uint128 dl = _liquidityToCover(d0, d1);
+            if (dl != 0) {
+                (uint256 g0, uint256 g1) = _burnPosition(dl); // decrements `liquidity` (PITFALLS 5.23)
+                float0 += g0;
+                float1 += g1;
+            }
+        }
+
+        // DUST POLICY F1 (PLAN §B.7): pay `min(face, available)`. Face value is an UPPER BOUND, not
+        // a promise. v4 computes a swap's amounts and a position's redeemable value with two
+        // differently-rounded formulas, so the queue's face value redeems for a few wei LESS —
+        // ~0.26 wei per swap, unfarmable but real. Paying face exactly makes the LAST withdrawer's
+        // call revert; F1 spreads the residual over whoever withdraws instead of dumping it on them.
+        (w0, w1) = _applyDustPolicy(w0, w1);
+
+        s.a0 -= w0;
+        s.a1 -= w1;
+        float0 -= w0;
+        float1 -= w1;
+
+        // Cursors are deliberately NOT touched. A withdrawal only ever REDUCES a seat, so it cannot
+        // make a cursor lead; leaving them costs a little gas and can never lose money.
+        // Withdrawing to zero does NOT destroy the seat: an empty seat is pure rank with no capital,
+        // and being able to hold, price and sell one is what gives rank a price of its own.
+
+        if (w0 != 0) IERC20(Currency.unwrap(key.currency0)).safeTransfer(msg.sender, w0);
+        if (w1 != 0) IERC20(Currency.unwrap(key.currency1)).safeTransfer(msg.sender, w1);
+        (p0, p1) = (w0, w1);
+    }
+
+    /// @dev DUST POLICY F1, isolated behind a seam so the mandatory negative control can replace it
+    ///      with face-value payment and prove the policy is doing something. Without a control, a
+    ///      few hundred wei of shortfall after a few hundred swaps is invisible.
+    function _applyDustPolicy(uint256 w0, uint256 w1) internal view virtual returns (uint256, uint256) {
+        if (w0 > float0) w0 = float0;
+        if (w1 > float1) w1 = float1;
+        return (w0, w1);
+    }
+
+    /// @notice Push idle float back into the position. Permissionless, credits nobody.
+    ///
+    /// @dev REQUIRED, not an optimisation. Seats withdraw imbalanced legs, so every withdrawal
+    ///      leaves surplus of the other token sitting outside the position. Without this,
+    ///      **pool depth degrades monotonically** as the queue is used.
+    ///
+    ///      It credits NOBODY on purpose: the float is already credited to seats through
+    ///      INVARIANT F, so moving it from `floatX` into the position changes no seat's ledger. That
+    ///      is exactly why it is safe to let anyone call it — there is nothing to direct anywhere.
+    function sweepFloatIntoPosition() external returns (uint128 added) {
+        if (!bound) revert PoolNotBound();
+        added = _liquidityForAmounts(float0, float1);
+        if (added == 0) return 0;
+
+        (uint256 u0, uint256 u1) = _modifyPosition(int256(uint256(added)));
+        liquidity += added;
+        if (u0 > float0) revert DepositOversized(u0, float0);
+        if (u1 > float1) revert DepositOversized(u1, float1);
+        float0 -= u0;
+        float1 -= u1;
+    }
+
+    // ---------------------------------------------------------------------------- liquidity sizing
+
+    /// @dev How much liquidity `(amount0, amount1)` can buy — the MIN leg, because we must not need
+    ///      more of either token than we hold.
+    ///
+    ///      An earlier version shaved one unit off the result as insurance against the round trip
+    ///      asking for more than went in. IT IS NOT NEEDED and it is gone: `getLiquidityFor*` floors
+    ///      and `modifyLiquidity`'s charge ceils, so the round trip is `ceil(floor(x*k)/k) <= x` for
+    ///      integer x. 5,000 fuzz runs with the shave removed found no counterexample
+    ///      (`testFuzz_2_19_depositNeverChargesMoreThanSupplied`), and `DepositOversized` is the loud
+    ///      backstop if that reasoning is ever wrong. Mutation testing flagged the shave as a line
+    ///      nothing could detect the removal of — which is what an unnecessary line looks like.
+    function _liquidityForAmounts(uint256 amount0, uint256 amount1) internal view returns (uint128) {
+        if (amount0 == 0 && amount1 == 0) return 0;
+        (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());
+        uint128 l = LiquidityAmounts.getLiquidityForAmounts(
+            sqrtP, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), amount0, amount1
+        );
+        return l;
+    }
+
+    /// @dev How much liquidity must be REMOVED to release at least `need0`/`need1`.
+    ///      THE LOAD-BEARING LINE is the MAX: size on the leg that BINDS. Sizing on the min leg
+    ///      under-delivers and the withdrawal comes up short.
+    function _liquidityToCover(uint256 need0, uint256 need1) internal view returns (uint128) {
+        (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());
+        uint160 lo = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 hi = TickMath.getSqrtPriceAtTick(tickUpper);
+        uint128 l0 = need0 == 0 ? 0 : LiquidityAmounts.getLiquidityForAmount0(sqrtP, hi, need0);
+        uint128 l1 = need1 == 0 ? 0 : LiquidityAmounts.getLiquidityForAmount1(lo, sqrtP, need1);
+        uint256 d = l0 > l1 ? l0 : l1;
+        // Both the sizing and the release round DOWN. One extra unit covers both truncations; the
+        // surplus becomes float rather than a shortfall.
+        if (d != 0) d += 1;
+        if (d > liquidity) d = liquidity;
+        // casting to 'uint128' is safe because d is clamped to `liquidity`, itself a uint128
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint128(d);
+    }
+
     // ------------------------------------------------------------------- position mint / burn
 
     // NOTE: Phase 1 deliberately exposes NO external way to move liquidity.
@@ -266,6 +512,20 @@ contract QueueHook is BaseHook, IUnlockCallback {
     // They now live in `test/queue/QueueHarness.sol`, which is test-only code. Phase 2 adds the
     // real `deposit()` / `withdraw()` in their place, per-seat and paying the caller.
 
+    /// @dev The single path to `modifyLiquidity`. Returns the ACTUAL token magnitudes moved, read
+    ///      from the hook's own balance change — never the caller's requested amounts.
+    function _modifyPosition(int256 delta) internal returns (uint256 m0, uint256 m1) {
+        bytes memory res = poolManager.unlock(abi.encode(delta));
+        (m0, m1) = abi.decode(res, (uint256, uint256));
+    }
+
+    function _burnPosition(uint128 liq) internal returns (uint256 g0, uint256 g1) {
+        liquidity -= liq;
+        return _modifyPosition(-int256(uint256(liq)));
+    }
+
+    /// @dev TEST-HARNESS SEAM ONLY (`test/queue/QueueHarness.sol`). Production binds the pool in
+    ///      `_afterInitialize` and moves liquidity through `deposit`/`withdraw`.
     function _mintPosition(PoolKey memory k, int24 tl, int24 tu, uint128 liq)
         internal
         returns (uint256 m0, uint256 m1)
@@ -274,14 +534,7 @@ contract QueueHook is BaseHook, IUnlockCallback {
         tickLower = tl;
         tickUpper = tu;
         liquidity = liq;
-        bytes memory res = poolManager.unlock(abi.encode(int256(uint256(liq))));
-        (m0, m1) = abi.decode(res, (uint256, uint256));
-    }
-
-    function _burnPosition(uint128 liq) internal returns (uint256 g0, uint256 g1) {
-        liquidity -= liq;
-        bytes memory res = poolManager.unlock(abi.encode(-int256(uint256(liq))));
-        (g0, g1) = abi.decode(res, (uint256, uint256));
+        return _modifyPosition(int256(uint256(liq)));
     }
 
     function _pushSeat(uint256 a0, uint256 a1) internal {
@@ -351,6 +604,14 @@ contract QueueHook is BaseHook, IUnlockCallback {
 
     function cursors() external view returns (uint256, uint256) {
         return (cursor0, cursor1);
+    }
+
+    function positionLiquidity() external view returns (uint128) {
+        return liquidity;
+    }
+
+    function ownerOf(uint256 seatId) external view returns (address) {
+        return seatOwner[seatId];
     }
 
     function floats() external view returns (uint256, uint256) {

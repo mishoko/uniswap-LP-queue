@@ -372,13 +372,14 @@ Flag bits (from `@uniswap/v4-core/src/libraries/Hooks.sol`, verified):
 
 | Flag | Value | Used? |
 |---|---|---|
+| `AFTER_INITIALIZE_FLAG` | `1 << 12` = `0x1000` | **yes** (added 2026-08-27, §B.7 pool binding) |
 | `BEFORE_ADD_LIQUIDITY_FLAG` | `1 << 11` = `0x800` | **yes** |
 | `BEFORE_SWAP_FLAG` | `1 << 7` = `0x80` | **yes** (added 2026-08-27, §E.5) |
 | `AFTER_SWAP_FLAG` | `1 << 6` = `0x40` | **yes** |
 | `AFTER_SWAP_RETURNS_DELTA_FLAG` | `1 << 2` | **no** — `afterSwap` returns `0` |
 | everything else | | no |
 
-⇒ **the hook address must have its low 14 bits equal to `0x08C0`** (`0x800 | 0x80 | 0x40`). `PoolManager` enforces this;
+⇒ **the hook address must have its low 14 bits equal to `0x18C0`** (`0x1000 | 0x800 | 0x80 | 0x40`). `PoolManager` enforces this;
 `Hooks.validateHookPermissions` reverts on a mismatch, so a wrong address is a loud failure, not a
 silent one.
 
@@ -1075,6 +1076,23 @@ the ledger says a seat holds is something the hook can actually pay.
 | 2.10 | `test_knownHole_phase2SeatsAreGrantedByArrivalOrder` exists and documents the provisional seat allocation (§B.8) |
 
 **Gate:** §D.4.
+
+> ### ✅ PHASE 2 COMPLETE — 2026-08-27. 59/59 tests, 11 mutations red, 0 survivors.
+>
+> **§B.7 is superseded on one point by an OWNER DECISION:** the unconsumed deposit remainder is
+> **ABSORBED into `floatX` and credited to the seat**, not refunded to `msg.sender`. Cheaper, it
+> shrinks the float, and the depositor keeps full value as ledger credit.
+>
+> Two limitations are now MEASURED and must not be over-claimed (PITFALLS 5.43, 5.44):
+> `sweepFloatIntoPosition` is **bounded by the smaller leg** — a lopsided float is reinjected only
+> in proportion to its minority token — and an **off-ratio deposit becomes float, not depth**.
+>
+> The §E.4 residual re-measured cleanly at **~0.15 wei per swap per token, LINEAR and converging**.
+> The asserted safety property is linearity, not zero.
+>
+> A **free, unrecoverable DoS** was found and closed: `afterInitialize` bound the hook to whichever
+> pool initialized first, so a front-runner could permanently bind a fresh hook to a junk pool. The
+> pool is now fixed at construction (§B.2 gains `afterInitialize`; address bits `0x18C0`).
 
 ---
 
@@ -1826,7 +1844,7 @@ construction rather than by convention.
 
 ### What this required changing elsewhere
 
-- **§B.2 permissions gain `beforeSwap`.** The hook address low bits move from `0x0840` to `0x08C0`.
+- **§B.2 permissions gain `beforeSwap`.** With Phase 2's `afterInitialize` binding the address low bits are now `0x18C0` (they were `0x0840` before either change).
 - **`AFTER_SWAP_RETURNS_DELTA` is still OFF** and `beforeSwap` returns a ZERO delta. QUEUE still
   takes nothing from the swap.
 

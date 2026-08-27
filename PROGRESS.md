@@ -13,7 +13,7 @@ Newest entry first. Never delete an entry — supersede it.
 |---|---|---|---|
 | 0 | Harness + reproduce the reference spike | **COMPLETE 2026-08-27** | **YES** — 9/9, every §D.2 number exact, +2 fresh mutations red |
 | 1 | Allocator core | **COMPLETE 2026-08-27** | **YES** — 27 tests, all 12 exit criteria met, 9 production mutations red |
-| 2 | Deposit / withdraw + redemption-dust fix | NOT STARTED | — |
+| 2 | Deposit / withdraw + redemption-dust fix | **COMPLETE 2026-08-27** | **YES** — 59 tests, all §D.4 criteria, 11 Phase 2 mutations red, 0 survivors |
 | 3 | ERC-6909 rank token + transfer | NOT STARTED | — |
 | 4 | Harberger rent variant | NOT STARTED | — |
 | 5 | Gas + scale (O(1) prefix-sum redesign) | NOT STARTED | — |
@@ -22,9 +22,9 @@ Newest entry first. Never delete an entry — supersede it.
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
 
-**Verified 2026-08-27 (end of session):** Phases 0 and 1 are done. `src/queue/QueueHook.sol` (359
-lines) and `src/queue/libraries/Allocation.sol` (89 lines) are the mechanism. `forge test` is
-36/36 green and `forge lint src/` is CLEAN. Every row from Phase 2 down is still accurate.
+**Verified 2026-08-27 (end of session):** Phases 0, 1 and 2 are done. `src/queue/QueueHook.sol` and
+`src/queue/libraries/Allocation.sol` are the mechanism. `forge test` is **59/59 green** and
+`forge lint src/` is CLEAN. Every row from Phase 3 down is still accurate.
 
 *(Superseded — 2026-08-26 doc-audit:* every row above is still accurate — **no `src/` directory exists
 at the repo root** and no mechanism code has been written.*)* The two 2026-08-26 sessions below produced
@@ -74,6 +74,95 @@ each row carries its evidence grade. The rows below are the headline items and p
 ---
 
 ## Session log
+
+### 2026-08-27 (third) — PHASE 2 COMPLETE. Float withdrawal, the sweep, and a DoS closed
+
+**All §D.4 gate criteria met. 59/59 tests, `forge lint src/` clean, 11 Phase 2 mutations run with
+ZERO survivors** (20 production mutations across Phases 1–2 in total).
+
+Built on `QueueHook`: `deposit`, `addToSeat`, `withdraw`, `sweepFloatIntoPosition`, the two-slot
+float, and pool binding via `afterInitialize`. Tests: `Deposit.t.sol` (16), `Residual.t.sol` (5).
+
+#### Owner decisions taken this session
+1. **Deposit remainder: ABSORB into float and credit the seat**, not refund to `msg.sender` as
+   PLAN §B.7 said. Cheaper, shrinks the float, and the depositor keeps full value as ledger credit.
+   INVARIANT F holds exactly: consumed → position, remainder → floatX, seat credited both.
+2. **Full-range depth: answer it, don't fix it, until the sweep is proven.** Unchanged this session.
+
+#### What the float actually buys, and what it does NOT
+
+`withdraw` sizes the removal on the leg that **binds** (the MAX of the two liquidity requirements),
+pays the seat its exact ledger composition, and retains the surplus as float shared by the queue.
+**All six withdrawal orderings pay everyone**, at 1:4 with 18/6 decimals. `withdraw` never calls
+`poolManager.swap` — it reaches `modifyLiquidity` only through `_burnPosition`, which decrements
+`liquidity` (PITFALLS 5.23, confirmed by mutation P1).
+
+**Two honest limitations, now asserted rather than written down:**
+- **The sweep is BOUNDED BY THE SMALLER LEG** (5.43). Adding to a range straddling the price needs
+  both tokens, so a lopsided float is reinjected only in proportion to its minority token. A
+  1000e18/1e6 float reclaimed <0.1% of the majority leg. **Do not claim the sweep "restores depth"**
+  — it restores as much as the float is balanced enough to pair up.
+- **An off-ratio deposit becomes float, not depth** (5.44). A token0 deposit the size of the whole
+  pool moved liquidity <1%. The depositor loses nothing under ABSORB, but the pool gains nothing
+  either until the other leg arrives. A real consequence of the ABSORB decision.
+
+#### THE BIG MEASUREMENT ERROR — my instrument, not the ledger
+
+INVARIANT F appeared to be violated by **9.6e15 wei per swap** — about 80% of the LP fee, growing
+linearly. It looked exactly like catastrophic ledger corruption. **It was the instrument.** v4
+accrues LP fees into `feeGrowthInside` and only realises them on `modifyLiquidity`, so a
+principal-only position valuation understates the position by every fee it has ever earned. Adding
+`L * (feeGrowthInside - feeGrowthInsideLast) / 2^128` collapsed it to a handful of wei.
+
+**This is the third instance of PITFALLS 5.27 in one day** (after the tautological fee assertion and
+the late foreign swap). Recorded as 5.46.
+
+A second unit error compounded it: I supplied token1 in HUMAN units (1e6) against token0 in RAW
+units at a 4:1 raw price, so **98% of every deposit went to float** and churned. LAW 1 says use
+unequal decimals — but v4 works entirely in RAW units, so fixture amounts must be in the pool's raw
+ratio regardless of decimals (5.48).
+
+**The §E.4 residual, re-measured cleanly: ~0.15 wei per swap per token** (17 wei after 120 swaps),
+LINEAR and converging. The safety property asserted is linearity, not zero — a compounding residual
+would eventually be real money; at 0.15 wei/swap a single token of shortfall needs ~10^18 swaps. The
+mandatory dust control is in: with F1 replaced by face-value payment, a withdrawer's call reverts
+`FloatShort`; with F1 in place the identical scenario drains everyone.
+
+#### A FREE, UNRECOVERABLE DoS — found and closed
+
+`afterInitialize` bound the hook to whichever pool initialized **first**. Anyone could front-run the
+intended `poolManager.initialize` and bind a freshly deployed hook to a junk pool — **permanently**,
+because there is no admin to unbind it. Closed by committing `(currency0, currency1, fee,
+tickSpacing)` at CONSTRUCTION and rejecting anything else with `WrongPool`. Costs nothing: the hook
+serves exactly one pool by design. Two tests (5.45).
+
+#### THE PAIRED-BRANCH ASYMMETRY RECURRED
+
+The top-up cursor pull-back exists once per direction. The `cursor1` copy was covered; the `cursor0`
+copy was covered by **NOTHING**. That is PITFALLS 5.37 repeating one phase later, in a different
+function. **It is now a confirmed repeating failure mode on this project, not a one-off** (5.50).
+Two other mutations also survived the first battery and are now covered: the `+1` truncation guard
+in `_liquidityToCover`, and the deposit sizing shave.
+
+**The shave was DELETED rather than tested** (5.49). Mutation testing said nothing could detect its
+removal; 5,000 fuzz runs found no counterexample, and the round trip is provably
+`ceil(floor(x*k)/k) <= x`. `DepositOversized` remains as the loud backstop. When mutation testing
+says a line is undetectable, the honest question is whether it should exist.
+
+#### Still true, still open
+
+- **Rank is granted by arrival order** — PITFALLS 5.8, not shippable. Carried deliberately with a
+  named test (`test_KNOWN_HOLE_rankIsGrantedByArrivalOrder`) that must be DELETED in Phase 3. One
+  wei of each token currently buys the head seat.
+- **Full-range depth** (5.17) — unaddressed by decision; a pitch question, not a correctness one.
+- **"The queue's face value is redeemable" is still FORBIDDEN.** The defensible replacement claim is
+  now precise: *each seat redeems its entitlement to within a bound that grows linearly at ~0.15 wei
+  per swap and never compounds.*
+
+**NEXT ACTION — Phase 3 (§C.3): the ERC-6909 rank token.** It replaces `seatOwner`, closes 5.8, and
+is the SUBMITTABLE state. Delete the known-hole test when it lands.
+
+---
 
 ### 2026-08-27 (second) — PHASE 1 COMPLETE. Protocol fee SOLVED; four real defects found and fixed
 

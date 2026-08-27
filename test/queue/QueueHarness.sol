@@ -5,6 +5,7 @@ import {QueueHook} from "../../src/queue/QueueHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 /// @notice TEST-ONLY. Phase 1 stand-ins for the Phase 2 deposit/withdraw path.
 ///
@@ -20,7 +21,7 @@ contract QueueHarness is QueueHook {
     error SeatCountMismatch();
     error AlreadySeeded();
 
-    constructor(IPoolManager pm) QueueHook(pm) {}
+    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp) QueueHook(pm, c0_, c1_, f, sp) {}
 
     function seed(PoolKey calldata k, int24 tl, int24 tu, uint128 liq, uint256[] calldata bps)
         external

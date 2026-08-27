@@ -44,7 +44,9 @@ contract ProtocolFeeTest is QueueFixture {
     ///      same global `protocolFeesAccrued[currency]` slots that QUEUE reads.
     function _deployForeignPool(uint24 poolFee) internal {
         address a = address(FLAGS ^ (uint160(0x9009) << 144));
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager), a);
+        // Deployed for ITS OWN pool: the hook now fixes its pool at construction, so a foreign pool
+        // on a different fee tier needs a hook constructed for that fee tier.
+        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, poolFee, SPACING), a);
         foreignHook = QueueHarness(a);
         _fundHook(a);
 
@@ -202,6 +204,11 @@ contract ProtocolFeeTest is QueueFixture {
     ///      different formula (`Pool.sol:391-392`). An ARITHMETIC derivation of the fee has to
     ///      special-case this. Reading the accrued number does not — which is the point.
     function test_5_3_lpFeeZeroUnderProtocolFee() public {
+        // A zero-lpFee pool needs a hook constructed for a zero-lpFee pool.
+        address z = address(FLAGS ^ (uint160(0x2009) << 144));
+        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, uint24(0), SPACING), z);
+        hook = QueueHarness(z);
+        _fundHook(z);
         k = PoolKey({currency0: c0, currency1: c1, fee: 0, tickSpacing: SPACING, hooks: IHooks(address(hook))});
         poolManager.initialize(k, startPrice);
         (uint256 s0, uint256 s1) =

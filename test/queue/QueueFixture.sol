@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {BaseTest} from "../utils/BaseTest.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {QueueHook} from "../../src/queue/QueueHook.sol";
 import {QueueHarness} from "./QueueHarness.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -9,6 +10,8 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
@@ -24,10 +27,15 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 /// until they are collected. The raw-balance form passes at 0 wei error while the position is
 /// short. Solvency is asserted SEPARATELY, by really redeeming (`redeemAll`).
 abstract contract QueueFixture is BaseTest {
+    using StateLibrary for IPoolManager;
     uint24 constant FEE = 3000;
     int24 constant SPACING = 60;
     /// @dev beforeAddLiquidity (1<<11) | beforeSwap (1<<7) | afterSwap (1<<6) == 0x8C0.
-    uint160 constant FLAGS = uint160(Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
+    /// @dev afterInitialize (1<<12) | beforeAddLiquidity (1<<11) | beforeSwap (1<<7)
+    ///      | afterSwap (1<<6) == 0x18C0.
+    uint160 constant FLAGS = uint160(
+        Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG
+    );
     uint128 constant LIQ = 1_000e18;
     address constant PM_OWNER = address(0x4444);
 
@@ -78,7 +86,7 @@ abstract contract QueueFixture is BaseTest {
 
     function _deployHook(uint160 nonce) internal {
         address a = address(FLAGS ^ (nonce << 144));
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager), a);
+        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING), a);
         hook = QueueHarness(a);
         _fundHook(a);
     }
@@ -253,6 +261,91 @@ abstract contract QueueFixture is BaseTest {
 
     // ------------------------------------------------------------------------------------ helpers
 
+    // ------------------------------------------------------ Phase 2: the PRODUCTION deposit path
+
+    /// @dev Deploys the hook with NO pre-funding. This is deliberate and load-bearing: if the hook
+    ///      holds tokens it did not receive through `deposit`, a float-accounting bug simply pays
+    ///      out of the surplus and stays invisible. Every Phase 2 assertion depends on the hook
+    ///      owning exactly what the queue put in.
+    function _deployHookUnfunded(uint160 nonce) internal {
+        address a = address(FLAGS ^ (nonce << 144));
+        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING), a);
+        hook = QueueHarness(a);
+    }
+
+    /// @dev Initialize the pool only. `afterInitialize` binds the key inside the hook.
+    function _initPool() internal {
+        k = PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(hook))});
+        poolManager.initialize(k, startPrice);
+        delete ref0;
+        delete ref1;
+        refC0 = 0;
+        refC1 = 0;
+        expT0 = 0;
+        expT1 = 0;
+    }
+
+    function _fund(address who, uint256 a0, uint256 a1) internal {
+        MockERC20(Currency.unwrap(c0)).mint(who, a0);
+        MockERC20(Currency.unwrap(c1)).mint(who, a1);
+        vm.startPrank(who);
+        MockERC20(Currency.unwrap(c0)).approve(address(hook), type(uint256).max);
+        MockERC20(Currency.unwrap(c1)).approve(address(hook), type(uint256).max);
+        vm.stopPrank();
+    }
+
+    function _deposit(address who, uint256 a0, uint256 a1) internal returns (uint256 seatId) {
+        _fund(who, a0, a1);
+        vm.prank(who);
+        seatId = hook.deposit(a0, a1);
+        // The seat is credited the FULL amount: what the position consumed plus what became float.
+        ref0.push(a0);
+        ref1.push(a1);
+        expT0 += a0;
+        expT1 += a1;
+    }
+
+    /// @dev INVARIANT F: sum(q[i].aX) == what the position would release in X, PLUS floatX.
+    ///      This is the aggregate identity that makes paying seats first-come-first-served out of a
+    ///      SHARED float safe. Asserted non-destructively from the live position.
+    function _checkInvariantF(string memory tag, uint256 tol) internal view {
+        (uint256 t0, uint256 t1) = hook.totals();
+        (uint256 f0, uint256 f1) = hook.floats();
+        (uint256 p0, uint256 p1) = _positionValue();
+        assertApproxEqAbs(t0, p0 + f0, tol, string.concat(tag, ": INVARIANT F token0"));
+        assertApproxEqAbs(t1, p1 + f1, tol, string.concat(tag, ": INVARIANT F token1"));
+    }
+
+    /// @dev What the position would actually hand back: PRINCIPAL **plus UNCOLLECTED LP FEES**.
+    ///
+    ///      The fee half is not optional and omitting it is not a small error. v4 accrues LP fees
+    ///      into `feeGrowthInside` and only realises them on `modifyLiquidity`, so a principal-only
+    ///      valuation understates the position by every fee it has ever earned. Measured on this
+    ///      fixture: the "residual" grew ~9.6e15 wei PER SWAP — about 80% of the LP fee — and looked
+    ///      exactly like a catastrophic ledger bug. It was the instrument.
+    ///
+    ///      (`withdraw` collects the whole fee balance into the float on the first `modifyLiquidity`
+    ///      of any size, which is why the float can pay seats their fee share at all.)
+    function _positionValue() internal view returns (uint256 a0, uint256 a1) {
+        uint128 L = hook.positionLiquidity();
+        if (L == 0) return (0, 0);
+        (uint160 sqrtP,,,) = poolManager.getSlot0(k.toId());
+        int24 lower = TickMath.minUsableTick(SPACING);
+        int24 upper = TickMath.maxUsableTick(SPACING);
+
+        // Release rounds DOWN, matching what `modifyLiquidity(-L)` would actually hand back.
+        a0 = SqrtPriceMath.getAmount0Delta(sqrtP, TickMath.getSqrtPriceAtTick(upper), L, false);
+        a1 = SqrtPriceMath.getAmount1Delta(TickMath.getSqrtPriceAtTick(lower), sqrtP, L, false);
+
+        (, uint256 insideLast0, uint256 insideLast1) =
+            poolManager.getPositionInfo(k.toId(), address(hook), lower, upper, bytes32(0));
+        (uint256 inside0, uint256 inside1) = poolManager.getFeeGrowthInside(k.toId(), lower, upper);
+        unchecked {
+            a0 += FullMath.mulDiv(inside0 - insideLast0, L, 1 << 128);
+            a1 += FullMath.mulDiv(inside1 - insideLast1, L, 1 << 128);
+        }
+    }
+
     /// @dev External so a negative control can capture the revert and assert its SPECIFIC reason.
     function doSwap(bool zeroForOne, uint256 amountIn) external {
         swapRouter.swapExactTokensForTokens({
@@ -289,6 +382,10 @@ abstract contract QueueFixture is BaseTest {
             err = inner;
         }
         return err;
+    }
+
+    function _hookBal(Currency c) internal view returns (uint256) {
+        return MockERC20(Currency.unwrap(c)).balanceOf(address(hook));
     }
 
     function _pmBal(Currency c) internal view returns (uint256) {

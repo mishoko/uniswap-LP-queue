@@ -29,7 +29,9 @@ contract MutantQueueHook is QueueHarness {
 
     uint8 public immutable mode;
 
-    constructor(IPoolManager pm, uint8 m) QueueHarness(pm) {
+    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp, uint8 m)
+        QueueHarness(pm, c0_, c1_, f, sp)
+    {
         mode = m;
     }
 
@@ -106,7 +108,7 @@ contract MutantQueueHook is QueueHarness {
 
 /// @dev N5 — the sole-LP guard, removed.
 contract UnguardedQueueHook is QueueHarness {
-    constructor(IPoolManager pm) QueueHarness(pm) {}
+    constructor(IPoolManager pm, Currency c0_, Currency c1_, uint24 f, int24 sp) QueueHarness(pm, c0_, c1_, f, sp) {}
 
     function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         internal
@@ -182,7 +184,7 @@ contract ControlsTest is QueueFixture {
 
     function _deployMutant(uint8 mode, uint160 nonce) internal {
         address a = address(FLAGS ^ (nonce << 144));
-        deployCodeTo("Controls.t.sol:MutantQueueHook", abi.encode(poolManager, mode), a);
+        deployCodeTo("Controls.t.sol:MutantQueueHook", abi.encode(poolManager, c0, c1, FEE, SPACING, mode), a);
         hook = QueueHarness(a);
         _fundHook(a);
     }
@@ -299,7 +301,7 @@ contract ControlsTest is QueueFixture {
     ///      corollary again — ledger conservation and position redeemability are different claims.
     function test_N5_externalLpBreaksSolvency() public {
         address a = address(FLAGS ^ (uint160(0x3005) << 144));
-        deployCodeTo("Controls.t.sol:UnguardedQueueHook", abi.encode(poolManager), a);
+        deployCodeTo("Controls.t.sol:UnguardedQueueHook", abi.encode(poolManager, c0, c1, FEE, SPACING), a);
         hook = QueueHarness(a);
         _fundHook(a);
         _open(_bps());
@@ -325,7 +327,7 @@ contract ControlsTest is QueueFixture {
     /// @dev The positive half of N5: with the guard IN PLACE the same call must revert, by name.
     function test_N5_positive_guardRefusesTheExternalLp() public {
         address a = address(FLAGS ^ (uint160(0x3006) << 144));
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager), a);
+        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING), a);
         hook = QueueHarness(a);
         _fundHook(a);
         _open(_bps());
@@ -348,7 +350,7 @@ contract ControlsTest is QueueFixture {
     ///      controls above prove nothing at all.
     function test_positiveControl_unmutatedPassesTheSameHarness() public {
         address a = address(FLAGS ^ (uint160(0x3007) << 144));
-        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager), a);
+        deployCodeTo("QueueHarness.sol:QueueHarness", abi.encode(poolManager, c0, c1, FEE, SPACING), a);
         hook = QueueHarness(a);
         _fundHook(a);
         _open(_bps());
