@@ -13,7 +13,9 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/type
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
+import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
@@ -158,6 +160,13 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      Phase 3 (PITFALLS 5.52). One funnel, one transient word.
     uint256 internal transient paidForSeat;
 
+    /// @dev What ONE tick of this pool can hold, from v4's own `tickSpacingToMaxLiquidityPerTick`
+    ///      rather than a reimplementation of it. The hook is the pool's sole LP and its position
+    ///      spans every usable tick, so the pool's per-tick ceiling is the hook's ceiling, and
+    ///      `_liquidityForAmounts` clamps to it instead of handing `modifyLiquidity` a number it
+    ///      will reject.
+    uint128 internal immutable MAX_LIQUIDITY_PER_TICK;
+
     /// @dev The pool this hook was deployed to serve, fixed at construction. See the constructor.
     Currency internal immutable expected0;
     Currency internal immutable expected1;
@@ -213,6 +222,14 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      rather than silent because the alternative to reverting is WRAPPING, which would erase
     ///      a seat's balance and hand the difference to nobody.
     error SeatBalanceOverflow(uint256 amount);
+    /// @dev A liquidity REMOVAL debited the hook. Structurally impossible — a removal is owed both
+    ///      the principal it releases and the fees it realises, and both legs of `callerDelta` are
+    ///      therefore non-negative. Loud rather than silent: the alternative is treating a payment
+    ///      as a receipt and crediting the float with money that left.
+    error UnexpectedPositionDebit(int256 d0, int256 d1);
+    /// @dev The seeding mint was CREDITED. Only reachable if the position already held accrued
+    ///      fees, which a virgin position cannot.
+    error UnexpectedPositionCredit(int256 d0, int256 d1);
 
     event SelfPriceSet(uint256 indexed seatId, uint256 price, uint256 firmPrice, uint64 firmUntil);
     event RentSettled(uint256 indexed seatId, uint256 charged, uint256 distributed, uint256 unallocated);
@@ -272,6 +289,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         expected1 = currency1;
         expectedFee = fee;
         expectedSpacing = tickSpacing;
+        MAX_LIQUIDITY_PER_TICK = Pool.tickSpacingToMaxLiquidityPerTick(tickSpacing);
 
         // τ above one whole period is expressed by SHORTENING the period, not by inflating τ; the
         // cap is what keeps `Rent.owed` exact in plain arithmetic. A zero period divides by zero and
@@ -519,14 +537,26 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // there is only one claimant. Spamming it is not an attack: the gas costs orders of
         // magnitude more than the wei moved, and it favours the head, which is already the
         // mechanism's stated preference.
+        //
+        // **AND IT MUST PULL THE INCOMING TOKEN'S CURSOR BACK, FOR THE SAME REASON `_allocate`
+        // DOES.** This path CREDITS token X to a seat at `rank`, and if `cursorX` already stands
+        // beyond `rank` it now LEADS a funded seat — which the next X-outgoing swap silently skips.
+        // The line was here in `_allocate` and missing here: the fifth instance on this project of
+        // one rule living in two places and being right in only one of them (PITFALLS 5.73). Found
+        // by the Phase 6 invariant campaign, reproduced by `test_6_1`.
         if (amtOut == 0) {
             if (amtIn != 0 && q.length != 0) {
                 uint256 start = outIsOne ? cursor1 : cursor0;
                 uint256 rank = start < q.length ? start : 0;
                 uint256 idx = _idAt(order, rank);
                 Seat storage sd = q[idx];
-                if (outIsOne) sd.a0 = _u128(uint256(sd.a0) + amtIn);
-                else sd.a1 = _u128(uint256(sd.a1) + amtIn);
+                if (outIsOne) {
+                    sd.a0 = _u128(uint256(sd.a0) + amtIn);
+                    if (rank < cursor0) cursor0 = rank;
+                } else {
+                    sd.a1 = _u128(uint256(sd.a1) + amtIn);
+                    if (rank < cursor1) cursor1 = rank;
+                }
             }
             return (BaseHook.afterSwap.selector, 0);
         }
@@ -632,16 +662,19 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         if (amount0 != 0) IERC20(Currency.unwrap(key.currency0)).safeTransferFrom(msg.sender, address(this), amount0);
         if (amount1 != 0) IERC20(Currency.unwrap(key.currency1)).safeTransferFrom(msg.sender, address(this), amount1);
 
-        uint256 used0;
-        uint256 used1;
+        int256 d0;
+        int256 d1;
         uint128 dl = _liquidityForAmounts(amount0, amount1);
         if (dl != 0) {
-            (used0, used1) = _modifyPosition(int256(uint256(dl)));
+            (d0, d1) = _modifyPosition(int256(uint256(dl)));
             liquidity += dl;
-            // Cannot happen: `_liquidityForAmounts` sizes one unit BELOW what is on hand. If it
-            // ever does, the excess would be silently taken from float owed to OTHER seats.
-            if (used0 > amount0) revert DepositOversized(used0, amount0);
-            if (used1 > amount1) revert DepositOversized(used1, amount1);
+            // Cannot happen: `_liquidityForAmounts` sizes on the leg it can afford. If it ever
+            // does, the excess would be silently taken from float owed to OTHER seats.
+            // Only a DEBIT can overspend; a credit is the position handing back realised fees.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            if (d0 < 0 && uint256(-d0) > amount0) revert DepositOversized(uint256(-d0), amount0);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            if (d1 < 0 && uint256(-d1) > amount1) revert DepositOversized(uint256(-d1), amount1);
         }
 
         // OWNER DECISION 2026-08-27 — ABSORB, do not refund. PLAN §B.7 originally said "refund any
@@ -650,8 +683,16 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // against. The depositor keeps the full value either way — as ledger credit rather than
         // returned tokens — so INVARIANT F still holds exactly:
         //     consumed goes into the position, remainder goes into floatX, seat is credited both.
-        float0 += amount0 - used0;
-        float1 += amount1 - used1;
+        //
+        // `dX` is what the POSITION did to the hook's balance, and it is signed: normally negative
+        // (the position was paid), positive when the fees it realised on the way in exceeded the
+        // principal. Both belong in the float — realised fees are the queue's own money, already
+        // on the right-hand side of INVARIANT F before they were realised.
+        // casting to 'uint256' is safe because the guards above prove `-dX <= amountX`
+        // forge-lint: disable-next-line(unsafe-typecast)
+        float0 = uint256(int256(float0 + amount0) + d0);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        float1 = uint256(int256(float1 + amount1) + d1);
 
         Seat storage s = q[seatId];
         s.a0 = _u128(uint256(s.a0) + amount0);
@@ -904,12 +945,18 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         added = _liquidityForAmounts(float0, float1);
         if (added == 0) return 0;
 
-        (uint256 u0, uint256 u1) = _modifyPosition(int256(uint256(added)));
+        (int256 d0, int256 d1) = _modifyPosition(int256(uint256(added)));
         liquidity += added;
-        if (u0 > float0) revert DepositOversized(u0, float0);
-        if (u1 > float1) revert DepositOversized(u1, float1);
-        float0 -= u0;
-        float1 -= u1;
+        // Same signed measurement as `_fundSeat`: a sweep can be net CREDITED when the position's
+        // realised fees exceed the principal it takes in, and the credit belongs to the float.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (d0 < 0 && uint256(-d0) > float0) revert DepositOversized(uint256(-d0), float0);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (d1 < 0 && uint256(-d1) > float1) revert DepositOversized(uint256(-d1), float1);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        float0 = uint256(int256(float0) + d0);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        float1 = uint256(int256(float1) + d1);
     }
 
     // ================================================== HARBERGER — the always-for-sale lease
@@ -1225,13 +1272,57 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      (`testFuzz_2_19_depositNeverChargesMoreThanSupplied`), and `DepositOversized` is the loud
     ///      backstop if that reasoning is ever wrong. Mutation testing flagged the shave as a line
     ///      nothing could detect the removal of — which is what an unnecessary line looks like.
+    /// @dev **THIS DOES NOT CALL `LiquidityAmounts.getLiquidityForAmounts`, AND THE REASON IS A
+    ///      DENIAL OF SERVICE IN THAT HELPER RATHER THAN A PREFERENCE.**
+    ///
+    ///      In range, the helper computes BOTH legs and casts EACH to `uint128` before taking the
+    ///      minimum. The token1 leg is `amount1 · 2⁹⁶ / (sqrtP − sqrtLower)`, so as the price
+    ///      approaches the position's lower tick that leg diverges — and its `toUint128` reverts
+    ///      `SafeCastOverflow` even when the MINIMUM, the only value the caller wanted, is tiny.
+    ///      A leg that is not binding decides the outcome. The same holds mirrored at the upper
+    ///      tick. Reached by the Phase 6 campaign: at `sqrtP` a factor of six above `sqrtLower`,
+    ///      depositing 393e18 of token1 reverted while the binding leg was 1,033 (PITFALLS 5.76).
+    ///
+    ///      Consequence if left alone: `addToSeat` and `sweepFloatIntoPosition` — the only paths
+    ///      capital has INTO the queue and back into the position — revert for every depositor at
+    ///      once, for as long as the price sits near a boundary. So the minimum is taken in 256
+    ///      bits, before any narrowing, and the result is CLAMPED to what the pool can actually
+    ///      accept instead of being handed over to revert.
+    ///
+    ///      Clamping is safe precisely because of the deposit policy already in force: whatever the
+    ///      position does not take becomes `float`, the depositor is credited the full amount
+    ///      either way, and `sweepFloatIntoPosition` puts the rest to work when the price moves
+    ///      back. A deposit that cannot be fully deployed is not a deposit that should fail.
     function _liquidityForAmounts(uint256 amount0, uint256 amount1) internal view returns (uint128) {
         if (amount0 == 0 && amount1 == 0) return 0;
         (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());
-        uint128 l = LiquidityAmounts.getLiquidityForAmounts(
-            sqrtP, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), amount0, amount1
-        );
-        return l;
+        uint160 lo = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 hi = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        uint256 l;
+        if (sqrtP <= lo) {
+            l = _liq0(lo, hi, amount0); // wholly below the range: the position is all token0
+        } else if (sqrtP < hi) {
+            uint256 a = _liq0(sqrtP, hi, amount0);
+            uint256 b = _liq1(lo, sqrtP, amount1);
+            l = a < b ? a : b;
+        } else {
+            l = _liq1(lo, hi, amount1); // wholly above the range: the position is all token1
+        }
+
+        uint256 cap = MAX_LIQUIDITY_PER_TICK - liquidity;
+        return uint128(l < cap ? l : cap);
+    }
+
+    /// @dev `amount0 · (sqrtA·sqrtB / 2⁹⁶) / (sqrtB − sqrtA)`, in 256 bits. Identical arithmetic to
+    ///      `LiquidityAmounts.getLiquidityForAmount0` with the narrowing cast removed; see above.
+    function _liq0(uint160 a, uint160 b, uint256 amount0) internal pure returns (uint256) {
+        return FullMath.mulDiv(amount0, FullMath.mulDiv(a, b, FixedPoint96.Q96), b - a);
+    }
+
+    /// @dev `amount1 · 2⁹⁶ / (sqrtB − sqrtA)`, in 256 bits. See `_liq0`.
+    function _liq1(uint160 a, uint160 b, uint256 amount1) internal pure returns (uint256) {
+        return FullMath.mulDiv(amount1, FixedPoint96.Q96, b - a);
     }
 
     /// @dev How much liquidity must be REMOVED to release at least `need0`/`need1`.
@@ -1241,8 +1332,31 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());
         uint160 lo = TickMath.getSqrtPriceAtTick(tickLower);
         uint160 hi = TickMath.getSqrtPriceAtTick(tickUpper);
-        uint128 l0 = need0 == 0 ? 0 : LiquidityAmounts.getLiquidityForAmount0(sqrtP, hi, need0);
-        uint128 l1 = need1 == 0 ? 0 : LiquidityAmounts.getLiquidityForAmount1(lo, sqrtP, need1);
+        // **THE PRICE IS CLAMPED INTO THE RANGE, AND "FULL RANGE" DOES NOT MAKE THAT UNNECESSARY.**
+        // `minUsableTick(60)` is -887220 while `MIN_TICK` is -887272, so the pool's price can leave
+        // this position's range at either end, and a Phase 6 campaign drove it to `MIN_SQRT_PRICE`.
+        // Outside the range the two single-sided formulas below are being asked for a price the
+        // position does not span: `getLiquidityForAmount1(lo, sqrtP < lo, ...)` divides by a
+        // near-zero span and returns a liquidity so large the clamp burns the WHOLE position, while
+        // `getLiquidityForAmount0` sizes on a span the position does not have and under-delivers,
+        // which the dust policy then absorbs as a short payout. Neither loses a wei — both are the
+        // wrong amount of work. `LiquidityAmounts.getLiquidityForAmounts` handles the same case by
+        // branching; the single-sided helpers do not, so the clamp belongs here.
+        uint160 p = sqrtP < lo ? lo : (sqrtP > hi ? hi : sqrtP);
+        // 256 bits, then clamped — never `toUint128` on an intermediate. See `_liquidityForAmounts`:
+        // near a tick boundary one leg diverges, and here it is the MAXIMUM that is wanted, so the
+        // helper's cast would turn a withdrawal that should burn the whole position into a revert.
+        //
+        // **A ZERO SPAN IS NOT AN ERROR, IT IS THE ANSWER "NONE".** At `p == lo` the position holds
+        // no token1 at all, and asking how much liquidity releases `need1` of it divides by zero —
+        // `FullMath.mulDiv` fails a bare `require`, so the call reverts with EMPTY revert data and
+        // `withdraw` and the SEAT EVACUATION both die. That is a veto on the evacuation path, which
+        // §B.8 removed on purpose: a holder standing at the tick boundary could not be bought out.
+        // Reached by the Phase 6 campaign at `sqrtP == getSqrtPriceAtTick(tickLower)` exactly
+        // (PITFALLS 5.77). The honest answer is that this leg cannot be sourced from the position,
+        // so it contributes NOTHING to the maximum and the dust policy pays what the float holds.
+        uint256 l0 = (need0 == 0 || p == hi) ? 0 : _liq0(p, hi, need0);
+        uint256 l1 = (need1 == 0 || p == lo) ? 0 : _liq1(lo, p, need1);
         uint256 d = l0 > l1 ? l0 : l1;
         // Both the sizing and the release round DOWN. One extra unit covers both truncations; the
         // surplus becomes float rather than a shortfall.
@@ -1276,14 +1390,24 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      there; a reentrant withdrawal on a float-covered leg needs no second `unlock` and would
     ///      execute in full. The `nonReentrant` guard on every external ledger path is what makes
     ///      the precondition hold. See `QueueSeats.nonReentrant`.
-    function _modifyPosition(int256 delta) internal returns (uint256 m0, uint256 m1) {
+    /// @return d0 the hook's own `currency0` balance change: NEGATIVE when it paid, POSITIVE when
+    ///         the position's realised fees exceeded what it owed. See `_moved`.
+    /// @return d1 the same for `currency1`.
+    function _modifyPosition(int256 delta) internal returns (int256 d0, int256 d1) {
         bytes memory res = poolManager.unlock(abi.encode(delta));
-        (m0, m1) = abi.decode(res, (uint256, uint256));
+        (d0, d1) = abi.decode(res, (int256, int256));
     }
 
     function _burnPosition(uint128 liq) internal returns (uint256 g0, uint256 g1) {
         liquidity -= liq;
-        return _modifyPosition(-int256(uint256(liq)));
+        (int256 d0, int256 d1) = _modifyPosition(-int256(uint256(liq)));
+        // A removal is owed both the principal it releases and the fees it realises, so neither leg
+        // can be negative. Asserted rather than assumed — this is the one direction where the sign
+        // IS predictable, and saying so out loud is what keeps `_moved`'s note honest.
+        if (d0 < 0 || d1 < 0) revert UnexpectedPositionDebit(d0, d1);
+        // casting to 'uint256' is safe because the branch above proves both are >= 0
+        // forge-lint: disable-next-line(unsafe-typecast)
+        (g0, g1) = (uint256(d0), uint256(d1));
     }
 
     /// @dev TEST-HARNESS SEAM ONLY (`test/queue/QueueHarness.sol`). Production binds the pool in
@@ -1296,7 +1420,12 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         tickLower = tl;
         tickUpper = tu;
         liquidity = liq;
-        return _modifyPosition(int256(uint256(liq)));
+        (int256 d0, int256 d1) = _modifyPosition(int256(uint256(liq)));
+        // A virgin position has no accrued fees to net against, so seeding is a pure payment.
+        if (d0 > 0 || d1 > 0) revert UnexpectedPositionCredit(d0, d1);
+        // casting to 'uint256' is safe because the branch above proves both are <= 0
+        // forge-lint: disable-next-line(unsafe-typecast)
+        (m0, m1) = (uint256(-d0), uint256(-d1));
     }
 
     function unlockCallback(bytes calldata data) external override returns (bytes memory) {
@@ -1317,9 +1446,26 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         _resolve(key.currency0, callerDelta.amount0());
         _resolve(key.currency1, callerDelta.amount1());
 
-        uint256 m0 = delta > 0 ? b0Before - _balance(key.currency0) : _balance(key.currency0) - b0Before;
-        uint256 m1 = delta > 0 ? b1Before - _balance(key.currency1) : _balance(key.currency1) - b1Before;
-        return abi.encode(m0, m1);
+        return abi.encode(_moved(b0Before, _balance(key.currency0)), _moved(b1Before, _balance(key.currency1)));
+    }
+
+    /// @dev **THE MEASUREMENT IS SIGNED, AND THE SIGN IS NOT PREDICTED BY THE SIGN OF `delta`.**
+    ///
+    ///      An earlier version chose the subtraction direction from `delta > 0`, on the reasoning
+    ///      that adding liquidity pays and removing it receives. That is false, and not at the
+    ///      margin: `modifyLiquidity` realises the position's accrued fees on EVERY call and
+    ///      returns `callerDelta = principalDelta + feesAccrued`. Whenever the accrued fees exceed
+    ///      the principal being added — the ordinary state of a busy pool between two deposits —
+    ///      an ADD is net CREDITED and the hook's balance goes UP. The unsigned form underflowed,
+    ///      and `addToSeat` and `sweepFloatIntoPosition` reverted with an arithmetic panic for as
+    ///      long as that held: a free, unrecoverable denial of service on the only path capital has
+    ///      into the queue. Found by the Phase 6 campaign, reproduced by `test_6_2` (PITFALLS 5.74).
+    function _moved(uint256 before, uint256 nowBal) internal pure returns (int256) {
+        // casting to 'int256' is safe: both operands are ERC20 balances, and the difference of two
+        // uint256 balances taken in the larger-minus-smaller direction cannot exceed 2^255-1 for
+        // any token this hook can settle — v4's own deltas are int128.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return nowBal >= before ? int256(nowBal - before) : -int256(before - nowBal);
     }
 
     /// @dev Settlement goes through v4's own `CurrencySettler`, which uses `SafeERC20` and handles

@@ -32,9 +32,11 @@ MUTS = [
     ("M6", HOOK, "the degenerate fill indexes by rank instead of resolving the seat",
      "                uint256 idx = _idAt(order, rank);", "                uint256 idx = rank;"),
     ("M7", HOOK, "the cursor0 pull-back on funding compares against the SEAT ID",
-     "        if (rank < cursor0) cursor0 = rank;", "        if (seatId < cursor0) cursor0 = seatId;"),
+     "        uint256 rank = rankOfId(seatId);\n        if (rank < cursor0) cursor0 = rank;",
+     "        uint256 rank = rankOfId(seatId);\n        if (seatId < cursor0) cursor0 = seatId;"),
     ("M8", HOOK, "the cursor1 pull-back on funding compares against the SEAT ID",
-     "        if (rank < cursor1) cursor1 = rank;", "        if (seatId < cursor1) cursor1 = seatId;"),
+     "        if (rank < cursor1) cursor1 = rank;\n    }",
+     "        if (seatId < cursor1) cursor1 = seatId;\n    }"),
 
     # ---------------------------------------------------------------------------- rent maths
     ("M9", RENT, "rent ignores tau",
@@ -192,11 +194,64 @@ MUTS = [
     # an unnecessary line is indistinguishable from an untested one.
     ("M61", HOOK, "the allocator's cursor advances past a seat that was only partially filled",
      "            next = take == bal ? i + 1 : i;", "            next = i + 1;"),
+
+    # ============================================================ PHASE 6 — the campaign's findings
+    #
+    # Five lines the invariant campaign was what caught. Each is written here so the fix is proven
+    # load-bearing the same way every other line in this contract is, and §D.8 V3 names the
+    # invariant that goes red for each (`--campaign`).
+    ("M62", HOOK, "the degenerate fill credits token0 without pulling cursor0 back (PITFALLS 5.73)",
+     "                    sd.a0 = _u128(uint256(sd.a0) + amtIn);\n                    if (rank < cursor0) cursor0 = rank;",
+     "                    sd.a0 = _u128(uint256(sd.a0) + amtIn);"),
+    ("M63", HOOK, "the degenerate fill credits token1 without pulling cursor1 back (PITFALLS 5.73)",
+     "                    sd.a1 = _u128(uint256(sd.a1) + amtIn);\n                    if (rank < cursor1) cursor1 = rank;",
+     "                    sd.a1 = _u128(uint256(sd.a1) + amtIn);"),
+    ("M64", HOOK, "the position measurement is unsigned again: an ADD net-credited by fees underflows (5.74)",
+     "        return nowBal >= before ? int256(nowBal - before) : -int256(before - nowBal);",
+     "        return int256(before - nowBal);"),
+    ("M65", HOOK, "the deposit sizing narrows each leg before taking the minimum, as the periphery helper does (5.76)",
+     "            uint256 a = _liq0(sqrtP, hi, amount0);\n            uint256 b = _liq1(lo, sqrtP, amount1);\n            l = a < b ? a : b;",
+     "            uint256 a = _liq0(sqrtP, hi, amount0);\n            uint256 b = _liq1(lo, sqrtP, amount1);\n            require(a <= type(uint128).max && b <= type(uint128).max);\n            l = a < b ? a : b;"),
+    ("M66", HOOK, "the removal sizing divides by a zero span at the tick boundary again (5.77)",
+     "        uint256 l1 = (need1 == 0 || p == lo) ? 0 : _liq1(lo, p, need1);",
+     "        uint256 l1 = need1 == 0 ? 0 : _liq1(lo, p, need1);"),
 ]
 
 
-def run(ids):
+CAMPAIGN = ["forge", "test", "--match-path", "test/queue/Invariant.t.sol"]
+
+
+def failing_invariants(out):
+    """The invariant/test names that went red, for §D.8 V3's 'name the failing invariant' column."""
+    names = []
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("invariant_") or line.startswith("test_6_"):
+            name = line.split("(")[0].strip()
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def run(ids, campaign=False):
     src = {HOOK: open(HOOK).read(), RENT: open(RENT).read(), ALLOC: open(ALLOC).read()}
+    try:
+        return _run(src, ids, campaign)
+    finally:
+        # **THIS `finally` IS LOAD-BEARING AND IT WAS PAID FOR.** This harness edits PRODUCTION
+        # SOURCE in place. An earlier version restored the file only on the happy path, so a
+        # Ctrl-C — or any interrupt from the tool driving it — left a MUTANT on disk, and the next
+        # run read that mutant as its baseline. It happened: the `p == lo` guard in
+        # `_liquidityToCover` was silently absent for a whole campaign, which showed up only as a
+        # BAD-PATTERN on the mutation that targets it. A mutation harness that can leave the
+        # repository broken is worse than no mutation harness (PITFALLS 5.79).
+        for path, original in src.items():
+            if open(path).read() != original:
+                open(path, "w").write(original)
+                print(f"restored {os.path.relpath(path, ROOT)}", flush=True)
+
+
+def _run(src, ids, campaign):
     results = []
     todo = [m for m in MUTS if not ids or m[0] in ids]
     for mid, path, desc, find, repl in todo:
@@ -206,7 +261,7 @@ def run(ids):
             print(f"{mid:5} BAD-PATTERN ({original.count(find)} matches)  {desc}", flush=True)
             continue
         open(path, "w").write(original.replace(find, repl))
-        p = subprocess.run(["forge", "test"], cwd=ROOT, capture_output=True, text=True)
+        p = subprocess.run(CAMPAIGN if campaign else ["forge", "test"], cwd=ROOT, capture_output=True, text=True)
         open(path, "w").write(original)
         out = p.stdout + p.stderr
         if "Compiler run failed" in out or "Error (" in out:
@@ -217,7 +272,10 @@ def run(ids):
             verdict = "SURVIVED"
         n_fail = out.count("[FAIL")
         results.append((mid, verdict, desc, n_fail))
-        print(f"{mid:5} {verdict:10} ({n_fail} failing)  {desc}", flush=True)
+        who = ""
+        if campaign and verdict == "RED":
+            who = "  <- " + ", ".join(failing_invariants(out)[:4])
+        print(f"{mid:5} {verdict:10} ({n_fail} failing)  {desc}{who}", flush=True)
 
     print("\n==== SUMMARY ====")
     for v in ("SURVIVED", "NO-COMPILE", "BAD-PATTERN", "RED"):
@@ -230,4 +288,9 @@ def run(ids):
 
 
 if __name__ == "__main__":
-    sys.exit(run(set(sys.argv[1:])))
+    args = sys.argv[1:]
+    # `--campaign` runs each mutation against the Phase 6 INVARIANT SUITE ONLY and names the
+    # invariant that caught it. That is a different claim from "the full suite goes red" — §D.8 V3
+    # requires the CAMPAIGN to be the thing that catches it.
+    camp = "--campaign" in args
+    sys.exit(run({a for a in args if not a.startswith("--")}, campaign=camp))

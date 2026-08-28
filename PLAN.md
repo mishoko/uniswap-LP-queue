@@ -28,11 +28,25 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 | **3** | ERC-6909 rank token | ✅ **COMPLETE** 2026-08-27 | §D.5 PASS | all 10 criteria; 5 negative controls red; **29 mutations red, 0 survivors** |
 | **4** | Harberger rent variant ◀ **SUBMITTABLE** | ✅ **COMPLETE** 2026-08-27 | §D.6 PASS | all 10 criteria; 5 negative controls red; **53 mutations red, 0 survivors** |
 | **5** | Gas + scale | ✅ **COMPLETE** 2026-08-28 | §D.7 PASS | all 6 criteria; the gas table re-measured honestly and §B.9 CORRECTED; 61 mutations red, **0 survivors** |
-| 6 | Adversarial + invariant campaign | ⬜ NOT STARTED | §D.8 | — |
+| **6** | Adversarial + invariant campaign | ✅ **COMPLETE** 2026-08-28 | §D.8 PASS | all 5 criteria; 11 invariants x 256 runs x 64 depth; **3 REAL BUGS FOUND AND FIXED** (PITFALLS 5.73, 5.74, 5.76/5.77); 66 mutations red, **0 survivors** |
 | 7 | Testnet + demo + video | ⬜ NOT STARTED | — | — |
 
-**Whole suite as of 2026-08-28: `forge test` → 135 passed, 0 failed. `forge lint src/` → clean.**
-**61 production mutations, zero survivors (`python3 script/mutate.py`).**
+**Whole suite as of 2026-08-28: `forge test` → 163 passed, 0 failed. `forge lint src/` → clean.**
+**66 production mutations, zero survivors (`python3 script/mutate.py`).**
+
+**⚠ PHASE 6 FOUND THREE REAL BUGS IN CODE THAT HAD PASSED 135 TESTS AND 61 MUTATIONS.** All three
+were reachable through the ordinary public API and none of them was visible to any correctness test:
+a degenerate fill that left a cursor LEADING a funded seat (5.73 — silent theft of rank), an unsigned
+position measurement that bricked BOTH paths capital has into the queue whenever the position held
+accrued fees (5.74), and a liquidity-sizing helper that reverted — once with EMPTY revert data — at a
+tick boundary, blocking withdrawal AND the seat evacuation the buyout depends on (5.76 / 5.77).
+Mutation testing is now **nine for nine** on this project, and the invariant campaign is what caught
+all three.
+
+**Two things §C.6 asked for turned out to rest on false premises, and are corrected in place rather
+than deleted quietly:** `seatIndex`/`indexSeat` (I6) no longer exist — Phase 4 replaced them with one
+packed word — and `QueueUnderflow` is **structurally unreachable through the pool** (PITFALLS 5.78),
+so "a swap one wei larger than the queue" is not a test that can be written.
 
 **Phase 5 found that every gas number the project had recorded was optimistic**, because `vm.cool()`
 restores cold *access* pricing but not cold *write* pricing — see LAW 4 as amended and PITFALLS
@@ -128,11 +142,36 @@ by capital rather than asserted by a formula. Unforgeable, because the bid costs
 
 ## A.3 The single most important sentence
 
-> **Every concentrated AMM is a pro-rata market. Every real electronic market on earth is price–time
-> priority, and queue position is the single most valuable asset in electronic market making.
-> Uniswap has never had a queue, so it has never had a price for one.**
+> **Every concentrated AMM is a pro-rata market. Every real electronic market on earth prices queue
+> position — most of them implicitly, in latency spend burnt on infrastructure rather than paid to
+> anyone in the market. Uniswap has never had a queue, so it has never had a price for one — which
+> does not make the ordering worthless. It makes it unpriceable INSIDE the pool, and therefore
+> captured OUTSIDE it, at the sequencer.**
 
 Say this first, in the README, in the video, and to any judge. Everything else is implementation.
+
+### ⚠ SHARPENED 2026-08-28 (Phase 6) — the old form invited an objection it could not answer
+
+The previous wording was *"every real electronic market on earth is price–time priority."* A reader
+who knows markets objects immediately, and is right: **QUEUE is not price–time priority either.** Its
+roster is closed, you cannot join by arriving, and the "time" is gone entirely. What QUEUE implements
+is closer to *price–price* priority: position goes to willingness to pay rent, not to arrival.
+
+Stated the old way that reads as a defect. It is not, and the honest framing is stronger:
+
+- Real markets already price queue position. They just pay for it in **latency**, which is a
+  deadweight cost burnt on colocation and microwave towers and accrues to infrastructure vendors
+  rather than to the participants you jumped ahead of.
+- QUEUE makes that price **explicit** and routes it to **the LPs standing behind you**, as rent.
+- And the alternative to pricing it is not "fairness" — it is a latency race, or, on-chain, a
+  sequencer that sells the same ordering while the pool's LPs get nothing.
+
+**The follow-up question — why PAID SEATS rather than an open, arrival-ordered queue — is the one the
+design lives or dies on, and it now has a full answer in `README.md` and `BUSINESS.md` §0.** In one
+line: free rank is griefable rank (dust the head, own the book), unbounded rank is worthless rank (a
+non-scarce asset has no price, so no rent flows to the tail), and therefore **scarcity is the
+mechanism, not a gas concession** — with the Harberger lease as the thing that stops a scarce roster
+becoming a cartel. *Scarce, but never capturable.*
 
 ## A.4 What QUEUE is NOT — say these out loud, every time
 
@@ -1469,7 +1508,7 @@ not save it for the end. The invariant handler written early catches things unit
 | I3 | INVARIANT C: `∀ i < cursorX : q[i].aX == 0`, both tokens |
 | I4 | Front-first: if seat `j` was touched, every seat `i < j` with a nonzero outgoing balance was fully exhausted |
 | I5 | Every seat id has ERC-6909 supply exactly 1 |
-| I6 | `seatIndex` and `indexSeat` are mutual inverses over live seats |
+| I6 | ⚠ **CORRECTED 2026-08-28.** `seatIndex`/`indexSeat` do not exist — Phase 4 replaced them with the packed `order` word and a scanning `rankOfId`, deliberately, so there is no second copy of the order to disagree with the first. **The live form: `order` is a PERMUTATION of `0..n-1`, and `rankOfId(idAtRank(r)) == r` at every rank.** |
 | I7 | No seat balance ever underflows; no legal swap sequence bricks the hook |
 | I8 | Total rent charged equals total rent credited plus `unallocatedRent0` (Phase 4) |
 
@@ -1488,7 +1527,7 @@ not save it for the end. The invariant handler written early catches things unit
 | **Zero-amount and one-wei swaps** | No revert, no drift beyond the stated residual | edge cases |
 | **Empty queue / single seat / all seats empty** | Defined behaviour, asserted | edge cases |
 | **A swap that exactly exhausts the whole queue** | Fills exactly, no `QueueUnderflow` | boundary |
-| **A swap one wei larger than the queue** | `QueueUnderflow` | boundary |
+| ~~**A swap one wei larger than the queue** → `QueueUnderflow`~~ | ⚠ **FALSE PREMISE, CORRECTED 2026-08-28. There is no such swap.** A swap can only take out what the POSITION holds; INVARIANT F says the position never exceeds the ledger (surplus measured at **exactly 0 wei** over the whole campaign); INVARIANT C says everything below the cursor is empty. So `amtOut <= Σ_{rank >= cursor} a` **always**. `QueueUnderflow` is not a trader-reachable boundary — it is the loud failure that fires when the ledger and the position have come apart, which is what `Rank.t.sol`'s ledger-only-evacuation control demonstrates. An empty queue does not underflow either: the swap is a complete no-op. `test_6_15` asserts this by executing a swap **fifty times the size of the queue**, repeatedly. | PITFALLS 5.78 |
 
 **Exit criteria — all must be TRUE**
 
@@ -1501,6 +1540,24 @@ not save it for the end. The invariant handler written early catches things unit
 | 6.5 | `forge test` full suite green, and you have personally confirmed it can go red |
 
 **Gate:** §D.8.
+
+### ✅ PHASE 6 COMPLETE — 2026-08-28
+
+| # | Criterion | Result |
+|---|---|---|
+| 6.1 | Every invariant I1–I8 holds under ≥256 runs × ≥64 depth, with `targetContract` set | ✅ 11 invariants, 16,384 calls each. `targetContract` **and** `targetSelector` both set |
+| 6.2 | ≥5 deliberate mutations caught **by the invariant campaign** | ✅ **9**, each with the failing invariant named — see §D.8 |
+| 6.3 | Every named attack has a test and an asserted outcome | ✅ `Adversarial.t.sol`, 15 tests. Two §C.6 cases rested on false premises and are corrected above rather than dropped |
+| 6.4 | Every remaining open weakness is written down in `PROGRESS.md` and the README | ✅ PITFALLS §5 is now 80 rows; 5.73–5.80 are this phase's |
+| 6.5 | Full suite green, and personally confirmed it can go red | ✅ 163/163; it went red on three real bugs before it went green |
+
+**AND IT FOUND THREE REAL BUGS** in code that had already passed 135 tests and 61 mutations, all
+reachable through the ordinary public API: PITFALLS 5.73 (a degenerate fill left a cursor LEADING a
+funded seat — silent theft of rank), 5.74 (an unsigned position measurement bricked **both** paths
+capital has into the queue on any pool with accrued LP fees), 5.76/5.77 (liquidity sizing reverted at
+a tick boundary, blocking deposits on one side and **withdrawal plus the seat evacuation the buyout
+depends on** on the other). It also caught two of our own **instruments** being wrong rather than the
+code (5.75, 5.79), and corrected the residual claim (5.80).
 
 ---
 
@@ -1910,7 +1967,55 @@ forge test --gas-report --match-path "test/queue/*"
 > bounded, and shown non-farmable in writing. §B.11 explains why this specific optimisation is
 > suspect.
 
-## D.8 GATE 6 — adversarial and invariants
+## D.8 GATE 6 — adversarial and invariants ✅ **PASS 2026-08-28**
+
+**RESULT: PASS, and the campaign FOUND THREE REAL BUGS** in code that had already survived 135 tests
+and 61 mutations. All three fixed, each with a directed regression and a mutation of its own:
+PITFALLS 5.73 (a degenerate fill left a cursor LEADING a funded seat — silent theft of rank), 5.74
+(an unsigned position measurement bricked both deposit paths on any pool with accrued LP fees), and
+5.76/5.77 (liquidity sizing reverted at a tick boundary, blocking withdrawal AND the seat evacuation
+the buyout depends on).
+
+| V | Assertion | Result |
+|---|---|---|
+| V1 | `targetContract(address(handler))` is called | ✅ **and `targetSelector` with it**, so the fuzz surface is exactly one contract and exactly twelve actions. `grep targetContract test/queue/Invariant.t.sol` |
+| V2 | I1–I8 all hold | ✅ 11 invariants × 256 runs × 64 depth = **16,384 calls each**, plus a deterministic 500-call scripted campaign asserting every invariant after **every single call**. I6 asserted in its live form (see §C.6). |
+| V3 | ≥5 deliberate mutations each caught **by the campaign**, failing invariant named | ✅ **9**, via `python3 script/mutate.py --campaign` — see the table below |
+| V4 | Every named attack has a test with an asserted outcome | ✅ `test/queue/Adversarial.t.sol`, 15 tests. Two of §C.6's named cases rested on false premises and are **corrected in §C.6 in place**, not quietly dropped. |
+| V5 | `fail_on_revert` justified | ✅ **`false`, and something stronger replaces it** — see below |
+
+**V3 — mutations caught BY THE CAMPAIGN** (`python3 script/mutate.py --campaign M12 M20 M59 M61 M62 M63 M64 M65 M66`):
+
+| Mutation | The defect | Invariant that caught it |
+|---|---|---|
+| M62 | the degenerate fill credits token0 without pulling `cursor0` back | `invariant_I3_cursorsNeverLead`, `invariant_I4_frontFirst` |
+| M63 | the degenerate fill credits token1 without pulling `cursor1` back | `invariant_I3_cursorsNeverLead` |
+| M64 | the position measurement is unsigned again | `invariant_I1_ledgerEqualsTheGhost`, `I3`, `I4`, `I5` |
+| M65 | the deposit sizing narrows each leg before taking the minimum | `invariant_I7_noUnexpectedReverts` |
+| M66 | the removal sizing divides by a zero span at the tick boundary | `invariant_I7_noUnexpectedReverts` |
+| M61 | the allocator's cursor advances past a partially filled seat | `invariant_I3_cursorsNeverLead`, `invariant_I4_frontFirst` |
+| M12 | settlement credits the recipients without debiting the payer | `invariant_I8b`, `invariant_I8c` |
+| M20 | the payer receives its own rent | `invariant_I8b`, `invariant_I8c` |
+| M59 | the remainder line is gone | `invariant_I1_ledgerEqualsTheGhost`, `I8b`, `I8c` |
+
+**V5 — `fail_on_revert = false`, AND WHAT REPLACES IT.** The handler is expected to hit legitimate
+reverts: authorisation on a seat you do not own, over-withdrawal, buying your own seat. `true` would
+abort every sequence at the first of them and nothing deep would ever be reached. What normally makes
+`false` dangerous is that it hides a handler whose calls all revert — so this campaign closes that
+with two things that are **stronger** than the flag:
+
+1. the handler **classifies every revert** against an explicit allow-list of outcomes the mechanism
+   is entitled to produce, and `invariant_I7` asserts the unexpected count is **zero**. That is
+   stricter than `fail_on_revert = true`, which only says *something* reverted;
+2. `test_6_0` is a **deterministic 500-call campaign** that asserts every invariant after every call
+   and then asserts each path was actually entered — including a buyout, a foreclosure and an
+   evacuation carrying capital.
+
+**A note that cost real time:** a coverage floor CANNOT live in `afterInvariant`. The shrinker
+answers any cumulative assertion there by shrinking the sequence to ONE CALL, which trivially has no
+coverage, so the "failure" is an artefact of shrinking. That is why `test_6_0` exists.
+
+### The original gate, for the record
 
 **Commands**
 ```bash

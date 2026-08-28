@@ -81,6 +81,19 @@ contract QueueHarness is QueueHook {
         return _u128(x);
     }
 
+    /// @dev The Phase 6 boundary check, exposed so the ZERO-SPAN case can be asserted directly.
+    ///      At `sqrtP == sqrtPriceAt(tickLower)` the position holds no token1, and asking how much
+    ///      liquidity releases some of it divides by a zero span — `FullMath.mulDiv` answers a bare
+    ///      `require`, so the caller dies with EMPTY revert data and both `withdraw` and the seat
+    ///      EVACUATION are blocked. Reaching that state through the public API needs the ledger and
+    ///      the position to differ by the one-wei §E.4 residual at the same instant, which the
+    ///      invariant campaign produces and a directed test cannot reliably stage. So the fixed
+    ///      line is asserted where it lives. This CALLS the production function, it does not
+    ///      reimplement it.
+    function liquidityToCover(uint256 need0, uint256 need1) external view returns (uint128) {
+        return _liquidityToCover(need0, need1);
+    }
+
     /// @dev The Phase 1 solvency oracle. LAW 3 as amended: a raw PoolManager-balance conservation
     ///      test is BLIND to accrued protocol fees, which sit inside PoolManager's ERC20 balance
     ///      until collected. Redeeming for real is the assertion that cannot be fooled.

@@ -703,14 +703,26 @@ contract RankTest is QueueFixture {
     ///
     ///      PRODUCTION refuses it explicitly and pays the seller exactly the seat.
     ///
-    ///      THE UNGUARDED VARIANT lets it land, and the transfer then dies inside `unlockCallback`:
-    ///      that function measures what the position released by differencing the hook's own token
-    ///      balances across the unlock, and the reentrant payout moved one of them. **The revert is
-    ///      the accident, not the defence** — the difference is simply read against a balance that
-    ///      changed for an unrelated reason, and the direction that underflows is the lucky one.
+    ///      THE UNGUARDED VARIANT lets it land, and the transfer then dies inside `_burnPosition`:
+    ///      `unlockCallback` measures what the position released by differencing the hook's own
+    ///      token balances across the unlock, the reentrant payout moved one of them, and the
+    ///      measurement comes back saying a REMOVAL debited the hook — which cannot happen, since a
+    ///      removal is owed both the principal it releases and the fees it realises.
     ///
-    ///      No value-extracting sequence was found without the guard, and none is claimed here. The
-    ///      name of this test says what it shows: a corrupted measurement, not a theft.
+    ///      **UPDATED IN PHASE 6, AND THE UPDATE IS THE INTERESTING PART.** Until Phase 6 this
+    ///      control asserted an arithmetic PANIC, because the measurement was unsigned and simply
+    ///      underflowed — and the comment here said so: the revert was the accident, not the
+    ///      defence. Phase 6 found that the same unsigned subtraction underflowed on the ORDINARY
+    ///      deposit path too, whenever the position's accrued fees exceeded the principal being
+    ///      added, and replaced it with a signed measurement plus a named guard. So the corruption
+    ///      now trips `UnexpectedPositionDebit` instead of a panic.
+    ///
+    ///      What is still NOT claimed: the guard catches only the direction that makes the measured
+    ///      change negative. A reentrant payout that leaves it positive-but-wrong is still silently
+    ///      absorbed by the float, which is every other seat's money — and the `nonReentrant` guard
+    ///      is the only thing that makes the measurement meaningful at all. No value-extracting
+    ///      sequence was found without it, and none is claimed. The name of this test says what it
+    ///      shows: a corrupted measurement, not a theft.
     function test_3_12_negativeControl_reentrantEvacuationCorruptsTheUnlockMeasurement() public {
         // --- production: the reentry is refused, and the seller is paid exactly the seat
         (SeatReentrancyAttacker atkA, uint256 owedA) = _reentrancyRig("QueueHarness.sol:QueueHarness", 0x9501, true);
@@ -739,8 +751,16 @@ contract RankTest is QueueFixture {
         (SeatReentrancyAttacker atkC,) = _reentrancyRig("Rank.t.sol:UnguardedTransferHook", 0x9602, true);
         (bool ok, bytes memory err) = address(atkC).call(abi.encodeCall(SeatReentrancyAttacker.sellSeat, (DAVE)));
         assertFalse(ok, "the unguarded variant completed a transfer with a reentrant payout inside it");
-        assertEq(bytes4(err), bytes4(0x4e487b71), "the unguarded variant went red for the WRONG reason");
-        assertEq(uint256(_tailWord(err)), 0x11, "expected an arithmetic panic, not another panic kind");
+        assertEq(
+            bytes4(err),
+            QueueHook.UnexpectedPositionDebit.selector,
+            "the unguarded variant went red for the WRONG reason"
+        );
+        // ...and it says WHICH LEG was corrupted, rather than only that arithmetic failed. Here it
+        // is currency1: the reentrant claim was paid on the leg the float already covered, so the
+        // hook's currency1 balance FELL across an unlock that should only ever have raised it.
+        assertGt(_argWord(err, 0), 0, "expected the currency0 leg to be a normal release");
+        assertLt(_argWord(err, 1), 0, "the named guard fired without a negative measurement");
         assertFalse(atkC.reentryRefused(), "the unguarded variant refused the reentry after all");
 
         // Nothing was stolen here — the whole transfer rolled back. Nothing was MEASURED correctly
@@ -748,9 +768,11 @@ contract RankTest is QueueFixture {
         assertEq(hook.ownerOf(0), address(atkC), "the reverted transfer moved the rank anyway");
     }
 
-    function _tailWord(bytes memory err) internal pure returns (bytes32 w) {
+    /// @dev Argument `i` of a custom error's ABI payload, read as a signed word.
+    function _argWord(bytes memory err, uint256 i) internal pure returns (int256 w) {
+        uint256 off = 0x24 + i * 0x20;
         assembly {
-            w := mload(add(err, 0x24))
+            w := mload(add(err, off))
         }
     }
 

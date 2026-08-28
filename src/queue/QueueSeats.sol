@@ -36,10 +36,21 @@ import {IERC6909Claims} from "@uniswap/v4-core/src/interfaces/external/IERC6909C
 abstract contract QueueSeats is IERC6909Claims {
     /// @notice The roster is BOUNDED, on purpose (PLAN §B.9).
     ///
-    /// @dev A sweeping swap is O(seats touched) at ~6,753 gas each, so a 300k hook-callback budget
-    ///      buys ~44 seats and a thousand retail LPs could not be swept at all. 32 is round, sits
-    ///      comfortably inside that budget with headroom for the deposit/withdraw path, and is deep
-    ///      enough that the queue is interesting.
+    /// @dev **THE BOUND IS SET BY `addToSeat`, NOT BY THE SWEEP, AND THE NUMBER THAT USED TO BE
+    ///      WRITTEN HERE WAS MEASURED ON A DIFFERENT CONTRACT.** This comment said "~6,753 gas per
+    ///      seat, so a 300k budget buys ~44" — a figure from the Phase-0 spike, which had no
+    ///      cursors, no owners, no seat tokens and no lease. Re-measured honestly against the
+    ///      shipping hook the sweep costs **8,070 gas per seat**, and `test_5_3b` DERIVES the
+    ///      supportable depth from that measurement so the constant and the document cannot drift
+    ///      apart again (PITFALLS 5.68).
+    ///
+    ///      The sweep is linear and comfortable: 32 seats is 278,110 gas of queue work, inside the
+    ///      300k budget with 7% to spare. What actually binds is `addToSeat`, which is
+    ///      O(priced-ahead x roster) and costs **2,610,805 gas** at 32 seats — 8.7% of a 30M block.
+    ///      Any proposal to raise `MAX_SEATS` must be argued against THAT number (PITFALLS 5.72).
+    ///
+    ///      32 is also exactly the 32 bytes of the packed `order` word, and `test_4_41` asserts the
+    ///      coupling rather than leaving it as a coincidence.
     ///
     ///      Scarcity is not an unfortunate consequence of the gas table — it is the mechanism. An
     ///      unbounded roster makes rank free, and a seat that is free to occupy has no price.
@@ -84,9 +95,12 @@ abstract contract QueueSeats is IERC6909Claims {
     ///      the window, and this modifier is the only thing that makes that true. Without it, the
     ///      reentrant payout above lands, the difference is read against a balance that moved for
     ///      an unrelated reason, and `float0`/`float1` are credited a number that is not what the
-    ///      position released. In the executed control it happens to underflow and revert; that is
-    ///      an accident of direction, not a defence — the same corruption in the other direction is
-    ///      silent, and it is the float, i.e. every other seat's money, that absorbs it.
+    ///      position released. In the executed control the corrupted measurement trips
+    ///      `UnexpectedPositionDebit`, a NAMED guard that Phase 6 added when the same unsigned
+    ///      subtraction was found underflowing on the ordinary deposit path (PITFALLS 5.74) — but
+    ///      that guard only catches the direction that makes the measurement NEGATIVE. A reentrant
+    ///      payout leaving it positive-but-wrong is still absorbed silently by the float, which is
+    ///      every other seat's money, and this modifier is what stops it happening at all.
     ///
     ///      **What is NOT claimed:** no path that EXTRACTS value without this guard was found. The
     ///      demonstrated consequence is a corrupted measurement, not a proven theft. It stays

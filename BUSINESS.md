@@ -16,6 +16,110 @@ is offered.
 
 ---
 
+## 0. THE FRAME — the Uniswap decision this challenges, and why *paid seats* is the answer
+
+*Added 2026-08-28, after Phase 6. This section exists because the pitch above it was true but was
+being read as "an order book bolted onto an AMM", which is not what it is and is not the interesting
+part. **[ANALYSIS]** throughout — this is framing, not measurement.*
+
+### 0.1 The decision
+
+Every Uniswap version — v1 through v4 — fills **pro-rata**. Inside a tick, every LP is filled in
+proportion to their size. It is stateless, needs no ordering, and is trivially permissionless. It is
+the right default and it is a large part of why AMMs work at all.
+
+But it is a **choice**, and in seven years and four major versions it has never been compared against
+anything, because on Uniswap there has never been anything to compare it against.
+
+### 0.2 What the choice costs
+
+Pro-rata makes LP capital **undifferentiated**. Two LPs at the same price with the same capital hold
+*identical* assets. One competitive dimension — size. One way to express a view — move your range.
+
+Three consequences, none priced today:
+
+1. **You cannot buy priority, so priority has no price.** In every other electronic market, being
+   early is the most valuable thing a maker owns; firms spend nine figures of capex on it. On
+   Uniswap it is worth exactly zero, by construction.
+2. **You cannot sell subordination either.** There is no way to say *"fill me last, and pay me for
+   it."* Senior/subordinate tranching exists in every credit, insurance and securitisation market
+   ever built. It has never existed in an AMM.
+3. **Ordering value does not vanish — it relocates.** Ordering inside a block is real and valuable,
+   and on an L2 it is already sold, at the sequencer and builder layer. The pool's own LPs, whose
+   P&L that ordering determines, receive none of it.
+
+The sharpest form:
+
+> **Uniswap did not eliminate the value of queue position. It made it unpriceable *inside* the pool,
+> which means it is captured *outside* the pool.**
+
+### 0.3 Why *paid seats* — the question the design lives or dies on
+
+The obvious alternative is an **open, arrival-ordered queue**: first depositor is first, anyone joins
+the back, nobody pays. That is what "a queue" normally means. It fails immediately, and this repo has
+the corpse:
+
+- **Free rank is griefable rank.** If arrival grants rank, the head costs one wei. Dust the head and
+  you own the front of the book forever for the price of gas. That was the first version of this
+  hook (§B.8, §E.16; PITFALLS 5.8).
+- **Unbounded rank is worthless rank.** If anyone may join the back, ordering slots are not scarce; a
+  non-scarce asset has no price; with no price there is no rent; with no rent there is no payment to
+  the LPs you are standing in front of. The mechanism collapses into *"whoever arrived first holds a
+  permanent free option on everyone else's flow."*
+
+So the roster is **bounded** and the seats are **paid for**. **Scarcity is the mechanism, not a gas
+concession.** It is the only thing that makes rank an asset at all.
+
+And the obvious objection — *a fixed set of 32 tradeable seats is a cartel* — is exactly why a seat
+is **leased, not owned**. Under the Harberger lease you set your own price, pay continuous rent on
+your own number to the seats behind you, and **anyone may take the seat from you at that number, at
+any time**. Under-price and you lose it; over-price and you pay for it.
+
+> **Scarce, but never capturable.** Neither half survives alone: a bounded roster without Harberger
+> is a cartel; Harberger without a bounded roster prices nothing. That pairing IS the answer to
+> "why paid seats".
+
+### 0.4 The real-world situations Uniswap cannot express today
+
+**(a) The maker who wants to be *first*, not *bigger*.** Today the only route to more fill is more
+capital, and more capital means more of *everything* including the toxic tail. A firm with a good
+model and a limited balance sheet cannot say *"give me the first $50k of flow and I will pay for
+it."* On QUEUE it can, and the price is public and continuous.
+
+**(b) The LP who wants to be *last*, and be paid for it.** The mirror is the more interesting half
+and nobody talks about it. The back has lower turnover — reached only when a trade sweeps the front —
+**and is paid rent by the front for standing aside.** That is a *subordinated* liquidity position
+with a coupon, and it has never existed in an AMM. Whether it beats the front risk-adjusted is an
+open empirical question, and that is the point.
+
+**(c) The ordering value the sequencer already sells.** On a chain with an auctioned or centralised
+sequencer, intra-block ordering is already a priced asset the pool does not participate in. QUEUE is
+the pool asserting that the ordering *inside its own liquidity* belongs to its LPs.
+
+### 0.5 What it honestly is: an experiment that produces a number nobody has
+
+> Uniswap has run exactly one fill rule for seven years and hundreds of billions of dollars of
+> volume. Nobody knows what the alternative is worth, because nobody has been able to build it.
+> QUEUE is the first pool where you can ask **"what is being filled first actually worth?"** and get
+> a continuously-updating, on-chain answer: the self-assessed price of the head seat.
+
+Falsifiable in both directions, and **both outcomes are results**: a head seat that prices near zero
+says priority is worth nothing inside an AMM and pro-rata was right all along — which we would then
+*know* rather than assume. A head seat that prices high says Uniswap has been giving away for free
+the asset every other market charges the most for.
+
+### 0.6 The objections, answered
+
+| Objection | Answer |
+|---|---|
+| *"Pro-rata is what makes an AMM permissionless. A queue reintroduces privilege."* | The privileged position exists, and **nobody can hold it except by continuously paying for it, and nobody can be excluded from taking it.** The shipping contract has no admin, no whitelist, no upgrade path and no privileged role of any kind. The status quo also has ordering privilege — unpriced, and decided by whoever sequences the block. |
+| *"32 seats is an oligopoly."* | 32 is roughly the number of serious market makers in any given pair on any venue. The **capital is unbounded** — anyone may deposit any amount into a seat they hold. Only the ordering slots are scarce, and they must be, or they have no price. |
+| *"This is am-AMM."* | am-AMM auctions **management rights over the whole pool** to **one winner per block**. QUEUE sells **an ordering over the existing LPs' own capital**, perpetually, to **many simultaneous holders**, with no auction, no winner, and no per-block reference anywhere in the contract. |
+| *"You cannot detect toxic flow."* | Correct, proven, and QUEUE never attempts it. It does not classify anyone; it sells different slices of the flow and lets capital bid, which is unforgeable precisely because the bid costs real money. |
+| *"+36% gas."* | Measured: 117,989 vs 86,820 on an identical hookless pool. A **constant a trader can price** — flat from 1 to 32 seats, a 21-gas spread — not a slope that grows with book depth. |
+
+---
+
 ## 1. WHAT QUEUE IS
 
 **QUEUE is a transferable claim on where in the fill order your capital sits.**
@@ -652,9 +756,37 @@ formulas, each rounded in the pool's favour:
 | **200 swaps** | **−52** | **−54** |
 | 200 swaps at **zero fee** | −46 | −50 |
 
-It grows at **~0.26 wei per swap**. Note the zero-fee row: **88% of the drift survives with no fee at
-all**, which falsified the first two hypotheses about its cause (add/remove dust; fee-growth
-truncation). Under a naive `withdraw()` paying face value, the last withdrawer eats it.
+It grows at **~0.26 wei per swap** *at the seeded price*. Note the zero-fee row: **88% of the drift
+survives with no fee at all**, which falsified the first two hypotheses about its cause (add/remove
+dust; fee-growth truncation). Under a naive `withdraw()` paying face value, the last withdrawer eats
+it.
+
+> ### ⚠ CORRECTED 2026-08-28 (Phase 6) — the per-swap figure DOES NOT GENERALISE
+>
+> [MEASURED] The table above was taken at the seeded price with the position intact, and the
+> "~0.26 wei per swap" reading was then quoted as if it were a constant of the mechanism. **It is
+> not.** The truncation scales with how far the price has been driven from where the liquidity
+> sits, so a pool whose depth has been withdrawn into the float and whose price is then pushed to
+> the tick floor loses **~1e9 wei on a single swap**.
+>
+> **What DOES generalise is the ratio, and the denominator is lifetime inflow — not the current
+> ledger.** The residual accumulates while the ledger is drained by withdrawals, so the last wei on
+> the books is eventually smaller than the residual it has to absorb. The Phase 6 campaign reached
+> exactly that: `owed = 5,337,018,741`, `backing = 0`, a 100% shortfall of five gwei on a queue that
+> had been emptied down past its own rounding dust.
+>
+> Measured over the campaign, after every action, both directions:
+>
+> | | value |
+> |---|---|
+> | worst **SURPLUS** (position+float above the ledger) | **exactly 0 wei**, both tokens |
+> | worst **SHORTFALL** | **under 1 part per billion** of everything that has ever entered the queue |
+>
+> Nothing is stolen and this is not an attack — reaching the state costs six-figure multiples of the
+> residual in swap input. But **the LAST holders to withdraw bear it**, and the README says so in
+> those words. The dust policy (F1: pay `min(face, available)`) spreads it over withdrawers rather
+> than dumping it on one, which is why "the queue's face value is redeemable" must still never be
+> claimed. See PITFALLS 5.80.
 
 *Is it farmable?* **No, and not close.** The drift accrues to nobody — it stays in PoolManager as
 unclaimable dust. Griefing costs ≥100k gas plus a swap fee per **0.26 wei** of damage; inflicting one

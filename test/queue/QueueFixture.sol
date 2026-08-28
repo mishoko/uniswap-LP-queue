@@ -173,6 +173,16 @@ abstract contract QueueFixture is BaseTest {
     ///      accrued by THIS swap. Nothing here reads the hook's bookkeeping — that is the thing
     ///      under test.
     function _swap(bool zeroForOne, uint256 amountIn) internal returns (uint256 inAmt, uint256 outAmt) {
+        return _swapFrom(address(this), zeroForOne, amountIn);
+    }
+
+    /// @dev The same measurement with a chosen trader. Phase 6 needs it: several adversarial tests
+    ///      put the ATTACKER on both sides of the trade, and a swap the witness does not see makes
+    ///      every later `_check` fail for the wrong reason.
+    function _swapFrom(address who, bool zeroForOne, uint256 amountIn)
+        internal
+        returns (uint256 inAmt, uint256 outAmt)
+    {
         uint256 p0 = _pmBal(c0);
         uint256 p1 = _pmBal(c1);
         uint256 pf0 = poolManager.protocolFeesAccrued(c0);
@@ -181,15 +191,7 @@ abstract contract QueueFixture is BaseTest {
         uint256[] memory before = _snapshot(zeroForOne);
         (uint256 lt0, uint256 lt1) = hook.totals();
 
-        swapRouter.swapExactTokensForTokens({
-            amountIn: amountIn,
-            amountOutMin: 0,
-            zeroForOne: zeroForOne,
-            poolKey: k,
-            hookData: "",
-            receiver: address(this),
-            deadline: block.timestamp
-        });
+        _routeSwap(who, zeroForOne, amountIn);
 
         uint256 n0 = _pmBal(c0);
         uint256 n1 = _pmBal(c1);
@@ -226,12 +228,22 @@ abstract contract QueueFixture is BaseTest {
         uint256 begin = outIsOne ? refC1 : refC0;
 
         // THE DEGENERATE FILL: the pool took input and paid nothing out. No seat gives anything
-        // up, so the whole input is credited to the seat the fill would have begun at.
+        // up, so the whole input is credited to the seat the fill would have begun at — AND the
+        // INCOMING token's cursor is pulled back to that rank, because §B.6's rule is that a cursor
+        // must never LEAD a funded seat and this path has just funded one. (Phase 6 found the hook
+        // crediting without the pull-back; the rule is stated in §B.6, so the witness carries it
+        // too, written from the prose rather than from `src/`.)
         if (amtOut == 0) {
             if (amtIn != 0 && refOrder.length != 0) {
-                uint256 at = refOrder[begin < refOrder.length ? begin : 0];
-                if (outIsOne) ref0[at] += amtIn;
-                else ref1[at] += amtIn;
+                uint256 rank = begin < refOrder.length ? begin : 0;
+                uint256 at = refOrder[rank];
+                if (outIsOne) {
+                    ref0[at] += amtIn;
+                    if (rank < refC0) refC0 = rank;
+                } else {
+                    ref1[at] += amtIn;
+                    if (rank < refC1) refC1 = rank;
+                }
             }
             return;
         }
@@ -461,6 +473,17 @@ abstract contract QueueFixture is BaseTest {
         if (rank < refC1) refC1 = rank;
     }
 
+    /// @dev Withdraw and keep the witness in step. `withdraw` pays `min(face, available)`, so the
+    ///      seat is debited by what was PAID, never by what was asked (dust policy F1).
+    function _withdrawTracked(uint256 seatId, uint256 w0, uint256 w1) internal returns (uint256 p0, uint256 p1) {
+        vm.prank(hook.ownerOf(seatId));
+        (p0, p1) = hook.withdraw(seatId, w0, w1);
+        ref0[seatId] -= p0;
+        ref1[seatId] -= p1;
+        expT0 -= p0;
+        expT1 -= p1;
+    }
+
     /// @dev Re-base the witness after a seat evacuation. A transfer empties the seat OUTRIGHT —
     ///      the dust clamp changes what was PAID, never what the seat is left holding — so the
     ///      adjustment is exact and does not need to read the contract's arithmetic back. Cursors
@@ -504,10 +527,22 @@ abstract contract QueueFixture is BaseTest {
         (uint160 sqrtP,,,) = poolManager.getSlot0(k.toId());
         int24 lower = TickMath.minUsableTick(SPACING);
         int24 upper = TickMath.maxUsableTick(SPACING);
+        uint160 lo = TickMath.getSqrtPriceAtTick(lower);
+        uint160 hi = TickMath.getSqrtPriceAtTick(upper);
+
+        // **CLAMP THE PRICE INTO THE RANGE FIRST, AND "FULL RANGE" DOES NOT MAKE THAT UNNECESSARY.**
+        // `minUsableTick(60)` is -887220 and `MIN_TICK` is -887272, so the pool's price can and does
+        // travel BELOW a "full-range" position's lower tick — a Phase 6 campaign drove it to
+        // `MIN_SQRT_PRICE + 1`. Out of range the position is entirely one token and its value is
+        // `getAmount0Delta(lo, hi, L)`, not `getAmount0Delta(sqrtP, hi, L)`; the unclamped form
+        // OVERSTATED the position by 8.28e18 wei against a real `redeemAll()` and made INVARIANT F
+        // look broken when the ledger was correct to 12 wei. The instrument was wrong, not the hook
+        // (PITFALLS 5.75 — before believing any measurement, ask what the fixture cannot represent).
+        uint160 p = sqrtP < lo ? lo : (sqrtP > hi ? hi : sqrtP);
 
         // Release rounds DOWN, matching what `modifyLiquidity(-L)` would actually hand back.
-        a0 = SqrtPriceMath.getAmount0Delta(sqrtP, TickMath.getSqrtPriceAtTick(upper), L, false);
-        a1 = SqrtPriceMath.getAmount1Delta(TickMath.getSqrtPriceAtTick(lower), sqrtP, L, false);
+        a0 = SqrtPriceMath.getAmount0Delta(p, hi, L, false);
+        a1 = SqrtPriceMath.getAmount1Delta(lo, p, L, false);
 
         (, uint256 insideLast0, uint256 insideLast1) =
             poolManager.getPositionInfo(k.toId(), address(hook), lower, upper, bytes32(0));
@@ -516,6 +551,21 @@ abstract contract QueueFixture is BaseTest {
             a0 += FullMath.mulDiv(inside0 - insideLast0, L, 1 << 128);
             a1 += FullMath.mulDiv(inside1 - insideLast1, L, 1 << 128);
         }
+    }
+
+    /// @dev Split out of `_swapFrom` for one reason: with the router's named-argument struct inline,
+    ///      that function runs out of stack.
+    function _routeSwap(address who, bool zeroForOne, uint256 amountIn) private {
+        vm.prank(who);
+        swapRouter.swapExactTokensForTokens({
+            amountIn: amountIn,
+            amountOutMin: 0,
+            zeroForOne: zeroForOne,
+            poolKey: k,
+            hookData: "",
+            receiver: who,
+            deadline: block.timestamp
+        });
     }
 
     /// @dev External so a negative control can capture the revert and assert its SPECIFIC reason.

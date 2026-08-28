@@ -59,13 +59,31 @@ check with each of them often and ALWAYS when a task or sub task is delivered. t
 
 **The single most important sentence in the project:**
 
-> Every concentrated AMM is a **pro-rata** market. Every real electronic market on earth is
-> **price–time priority**, and queue position is the most valuable asset in electronic market making.
-> **Uniswap has never had a queue, so it has never had a price for one.**
+> Every concentrated AMM is a **pro-rata** market. Every real electronic market on earth prices
+> queue position — most of them implicitly, in latency spend that is burnt on infrastructure rather
+> than paid to anyone in the market.
+> **Uniswap has never had a queue, so it has never had a price for one — which does not make the
+> ordering worthless, it makes it unpriceable INSIDE the pool and therefore captured OUTSIDE it.**
+
+**SHARPENED 2026-08-28.** The older form of this sentence said "every real electronic market on earth
+is price–time priority", and a reader who knows markets will immediately object that QUEUE is not
+price–time priority either: its roster is closed, you cannot join by arriving, and the "time" is
+gone. That objection is correct and the claim was weaker than the truth. QUEUE does not reproduce
+price–time priority; it reproduces the **scarcity and value** of queue position and makes them
+explicit, priced, and payable to the LPs you are standing in front of. **Why PAID seats rather than
+an open queue is the question the design lives or dies on — see `README.md` and `BUSINESS.md` §0.**
 
 ---
 
 ## 2. The mindset — this is not decoration, it is the method
+
+**PHASE 6 UPDATE — THE INVARIANT CAMPAIGN IS NOT OPTIONAL POLISH.** It found **three real bugs** in
+code that had already passed 135 tests and 61 mutations, all reachable through the ordinary public
+API, one of which bricked both deposit paths on any pool with accrued fees. It also showed that two
+of our own **instruments** were wrong rather than the code (PITFALLS 5.75, 5.79) — a broken
+measurement that looks like a broken mechanism has cost this project more time than any real bug.
+`script/mutate.py --campaign` runs a mutation against the invariant suite alone and names the
+invariant that caught it.
 
 > **Brutally honest. You are NOT here to validate the owner or yourself. A false "PASS" is worse than
 > an honest "FAIL". Over-fitting and green-number-chasing are the first sin. When a test passes on
@@ -206,6 +224,28 @@ Widening a tolerance until the mutation is "caught" is none of these.
 - **Never let a test hardcode a storage layout.** `_seatSlot` assumed `q` sat at slot 0; a new base
   contract put three mappings in front of it, and the test would have poked an unrelated slot and
   passed for the wrong reason. Read the slot from the contract.
+- **NEVER PREDICT THE SIGN OF A BALANCE CHANGE FROM THE SIGN OF THE REQUEST YOU MADE.**
+  `modifyLiquidity` realises accrued fees on every call, so an *add* can leave you net CREDITED.
+  `unlockCallback` chose its subtraction direction from `delta > 0`, underflowed, and **bricked both
+  paths capital has into the queue** on any pool with accrued fees. Measure signed (PITFALLS 5.74).
+- **A LEG THAT IS NOT BINDING MUST NOT DECIDE THE OUTCOME.** v4-periphery's
+  `getLiquidityForAmounts` narrows *each* leg to `uint128` before taking the minimum, so the leg you
+  did not care about reverts the call. Take minima and maxima in full width, then narrow once
+  (PITFALLS 5.76). This is the Periphery lens in §5, and it cost a live deposit DoS.
+- **A ZERO SPAN IS AN ANSWER, NOT AN ERROR — and `FullMath.mulDiv` reports it as EMPTY REVERT DATA.**
+  An empty revert is a bare `require` somewhere below you. And a revert on the seat-evacuation path
+  is not an inconvenience, it is an incumbent **veto on their own buyout** (PITFALLS 5.77).
+- **UNDER `fail_on_revert = false`, AN ASSERTION INSIDE A HANDLER IS A REVERT AND IS SWALLOWED.**
+  Every per-call check in an invariant handler must be a ghost COUNTER that an invariant asserts is
+  zero. And a coverage floor cannot live in `afterInvariant` either: the shrinker answers it by
+  shrinking to a one-call sequence. Use a deterministic scripted campaign instead (`test_6_0`).
+- **A TOOL THAT EDITS `src/` MUST RESTORE IT IN A `finally`.** `script/mutate.py` did not, an
+  interrupted run left a mutant on disk, and a whole campaign ran against it. The only symptom was a
+  BAD-PATTERN on the one mutation that targeted that exact line (PITFALLS 5.79). **Corollary: never
+  run `forge test`, `forge fmt` or anything else against the repo WHILE `mutate.py` is running.** It
+  holds a mutant on disk for the duration of each case, so a concurrent run reads mutated source and
+  reports a failure that has nothing to do with your change. That happened in the Phase 6 session
+  and cost a confusing minute.
 - **Write down what you PROVED, not what the guard is for.** A first draft of the reentrancy guard's
   comment described a double-payment that could not be reproduced. The window is real and the
   corruption is real; the theft was not demonstrated, and the comment now says exactly that

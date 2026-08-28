@@ -15,6 +15,23 @@ via_ir = false
 exclude_lints = ["screaming-snake-case-immutable", "screaming-snake-case-const"]
 lint_on_build = false
 
+# PHASE 6 — the adversarial and invariant campaign (PLAN §D.8).
+#
+# `fail_on_revert = false` is the DELIBERATE choice and §D.8 V5 requires the reason to be written
+# down. The handler is expected to hit legitimate reverts — authorisation on a seat you do not own,
+# over-withdrawal, `QueueUnderflow` when the queue cannot source a swap, buying your own seat.
+# `true` would abort every sequence at the first of them, so nothing deep would ever be reached.
+#
+# What normally makes `false` dangerous is that it hides a handler whose calls ALL revert. That is
+# closed here by two things that are stronger than the flag: the handler classifies every revert
+# against an explicit allow-list and I7 asserts the unexpected count is zero, and
+# `test_6_0_campaignWasNotVacuous` asserts the campaign actually landed calls on each path.
+[profile.default.invariant]
+runs = 256
+depth = 64
+fail_on_revert = false
+shrink_run_limit = 5000
+
 # TEMPORARY research profile (protocol-fee experiment, PLAN §E.5). Does not touch the default
 # profile. Points src/test at the archived tree so the archived spike can run unmodified.
 [profile.spike]

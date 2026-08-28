@@ -17,7 +17,7 @@ Newest entry first. Never delete an entry — supersede it.
 | 3 | ERC-6909 rank token + transfer | **COMPLETE 2026-08-27** | **YES** — 77 tests, all 10 §D.5 criteria plus 2 added, 29 Phase 3 mutations red, 0 survivors |
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
-| 6 | Adversarial + invariant campaign | NOT STARTED | — |
+| 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
 | 7 | Testnet deploy + demo + video | NOT STARTED | — |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
@@ -28,10 +28,16 @@ individual exit criteria inside those sections are ticked one by one. This board
 two ever disagree, PLAN's dashboard and the ticked criteria win, because they sit next to the
 criteria they describe.
 
-**Verified 2026-08-28 (end of the Phase 5 session):** Phases 0-5 are done. `forge test` is
-**135/135 green**, `forge lint src/` is CLEAN with zero notes, and `python3 script/mutate.py` runs
-**61 mutations with ZERO survivors**. **Every gas number recorded before this session was
-optimistic** and all three affected tests have been re-measured — see the entry below and LAW 4.
+**Verified 2026-08-28 (end of the Phase 6 session):** Phases 0-6 are done. `forge test` is
+**163/163 green**, `forge lint src/` is CLEAN with zero notes, and `python3 script/mutate.py` runs
+**66 mutations with ZERO survivors**. **The Phase 6 campaign found THREE REAL BUGS in code that had
+already passed 135 tests and 61 mutations**, all reachable through the ordinary public API — see the
+entry below and PITFALLS 5.73-5.80.
+
+*(Superseded — 2026-08-28, end of the Phase 5 session:* Phases 0-5 are done. `forge test` is
+**135/135 green**, `forge lint src/` is CLEAN, `script/mutate.py` runs **61 mutations with ZERO
+survivors**. **Every gas number recorded before that session was optimistic** and all three affected
+tests were re-measured — see LAW 4.*)*
 
 *(Superseded — 2026-08-27, end of the Phase 4 session:* Phases 0-4 are done. `src/queue/QueueHook.sol`,
 `src/queue/QueueSeats.sol`, `src/queue/libraries/Allocation.sol` and `src/queue/libraries/Rent.sol`
@@ -363,6 +369,110 @@ each row carries its evidence grade. The rows below are the headline items and p
 ---
 
 ## Session log
+
+### 2026-08-28 — PHASE 6 COMPLETE. The campaign found three real bugs, and the product was reframed.
+
+**Result: `forge test` 163/163 green · `forge lint src/` clean · 66 mutations, ZERO survivors ·
+§D.8 GATE 6 PASS.**
+
+#### What was built
+
+| File | What it is |
+|---|---|
+| `test/queue/handlers/QueueHandler.sol` | The bounded actor. Twelve actions, `bound()`ed inputs, four actors, a ghost ledger built from handler inputs and token flows measured across the hook's boundary — never from `hook.totals()`, which is the thing under test |
+| `test/queue/Invariant.t.sol` | 11 invariants × 256 runs × 64 depth. `targetContract` **and** `targetSelector` both set. Plus `test_6_0`, a deterministic 500-call campaign asserting every invariant after **every single call** |
+| `test/queue/Adversarial.t.sol` | 15 tests: every named attack in §C.6 with an asserted outcome, plus a directed regression for each bug found |
+| `script/mutate.py --campaign` | Runs a mutation against the INVARIANT SUITE ONLY and names the invariant that caught it — §D.8 V3's actual requirement, which "the full suite goes red" does not satisfy |
+
+#### THE THREE BUGS. All reachable through the public API. None visible to 135 tests.
+
+**1. The degenerate fill left a cursor LEADING a funded seat (PITFALLS 5.73).** A swap whose output
+rounds to zero credits its whole input to one seat. `_allocate` has always pulled the incoming
+token's cursor back after crediting; **the degenerate path never did.** Once `cursor0` leads rank 0,
+every later one-for-zero swap starts *behind a funded seat* and sources from further back — the head
+is passed over, which is exactly the theft of rank the mechanism exists to prevent. The credited
+amount is dust; the cursor corruption is not dust-bounded. **Fifth instance of "one rule, two places,
+right in only one of them"** (5.37, 5.50, 5.52 ×2, 5.62).
+
+**2. An ADD can CREDIT the caller, and the measurement was unsigned (PITFALLS 5.74).**
+`modifyLiquidity` realises the position's accrued fees on every call and returns
+`callerDelta = principalDelta + feesAccrued`. When the fees exceed the principal being added — the
+ordinary state of a busy pool between two deposits — the hook's balance goes **up** on an **add**,
+and `unlockCallback`'s `b0Before - balanceAfter` underflowed. **`addToSeat` and
+`sweepFloatIntoPosition`, the only two paths capital has INTO the queue, reverted with an arithmetic
+panic for as long as the fees stood.** Fixed with a signed measurement (`_moved`) plus a named
+`UnexpectedPositionDebit` guard on the removal side, where the sign genuinely is predictable. **Rule:
+never predict the SIGN of a balance change from the sign of the request you made.**
+
+**3. Liquidity sizing reverted at a tick boundary — on BOTH sides (PITFALLS 5.76, 5.77).**
+v4-periphery's `getLiquidityForAmounts` computes both legs and narrows **each** to `uint128` before
+taking the minimum, so the non-binding leg decides the outcome: measured, depositing 393e18 of token1
+reverted `SafeCastOverflow` while the binding leg was **1,033**. And on the removal side,
+`_liquidityToCover` divided by a span that goes to zero at the tick — `FullMath.mulDiv` answers a
+bare `require`, so the call died with **empty revert data** and both `withdraw` and `_onSeatTransfer`
+were blocked. **The evacuation one is the serious half**: §B.8 made that path unblockable on purpose
+because the buyout leans on it, so a holder at the tick boundary could not be bought out — the exact
+incumbent veto Phase 3 removed. Fixed by taking the minimum in 256 bits, clamping to
+`Pool.tickSpacingToMaxLiquidityPerTick`, and treating a zero span as "this leg cannot be sourced".
+
+#### Two things that were WRONG IN OUR OWN INSTRUMENTS, not in the code
+
+**`_positionValue()` overstated the position by 8.28e18 wei (5.75).** `minUsableTick(60)` is -887220
+and `MIN_TICK` is -887272, so a "full-range" position's range **can be left**, and the estimator was
+computing `getAmount0Delta(sqrtP, hi, L)` with an unclamped price. INVARIANT F looked broken while the
+ledger was correct to 12 wei. **Two wrong explanations were entertained before the instrument was
+suspected.** After clamping it agrees with a real `redeemAll()` exactly over a 500-call campaign.
+
+**`script/mutate.py` left a mutant on disk when interrupted (5.79).** It restored the source only on
+the happy path. An interrupted run left the 5.77 guard absent, a whole campaign ran against the
+mutated hook, and the **only** symptom was a `BAD-PATTERN` on the one mutation targeting that exact
+line. Had that mutation not existed the repository would have silently regressed. Fixed with
+`try/finally` and a report of every file it had to put back.
+
+#### Two things §C.6 asked for that rested on FALSE PREMISES — corrected in place, not dropped
+
+- **I6 named `seatIndex`/`indexSeat`**, which Phase 4 deliberately replaced with one packed word and
+  a scanning `rankOfId` so there is no second copy of the order. Live form asserted instead: `order`
+  is a permutation of `0..n-1` and `rankOfId(idAtRank(r)) == r` at every rank.
+- **"A swap one wei larger than the queue → `QueueUnderflow`" — there is no such swap** (5.78). A
+  swap takes out only what the POSITION holds; INVARIANT F says the position never exceeds the ledger
+  (**surplus measured at exactly 0 wei** across the whole campaign); INVARIANT C says everything
+  below the cursor is empty. `QueueUnderflow` is not a trader-reachable boundary — it is the loud
+  failure that fires when the ledger and the position have come apart.
+
+#### The residual claim was corrected (5.80)
+
+"~0.15 wei per swap, linear and converging" holds **at the seeded price and nowhere else**. The
+truncation scales with price displacement: a drained pool pushed to the tick floor loses ~1e9 wei on
+one swap. What generalises is the ratio against **lifetime inflow, not the current ledger** — the
+residual accumulates while the ledger is drained, so the campaign reached `owed = 5,337,018,741`,
+`backing = 0`. Measured: worst surplus **exactly 0 wei**, worst shortfall **under 1 ppb of lifetime
+inflow**, and **the last holders to withdraw bear it**. README, BUSINESS §9 and PLAN say so.
+
+#### Method notes worth keeping
+
+- **A coverage floor CANNOT live in `afterInvariant`.** The shrinker answers any cumulative
+  assertion there by shrinking to a ONE-CALL sequence, which trivially has no coverage. That is why
+  `test_6_0` is a deterministic scripted campaign instead.
+- **Under `fail_on_revert = false`, an `assertEq` inside a handler is a revert and is SWALLOWED.**
+  Every per-call check in the handler is therefore a ghost COUNTER that an invariant asserts is zero.
+- **`fail_on_revert = false` plus a revert allow-list is strictly stronger than `true`**, which only
+  says *something* reverted. I7 asserts the unexpected-selector count is zero.
+- The "nothing happened: this test proves nothing" guards caught **six** of my own broken
+  adversarial tests before they could pass vacuously.
+
+#### The product was reframed (README, BUSINESS §0)
+
+The pitch was true but was being read as "an order book bolted onto an AMM". It is not that. The
+frame now states the **Uniswap decision being challenged** (pro-rata fill, unexamined for seven
+years), what that choice costs (priority has no price, subordination cannot be sold, and ordering
+value relocates to the sequencer instead of vanishing), and **why paid seats specifically**: free
+rank is griefable, unbounded rank is worthless, so scarcity IS the mechanism — and Harberger is what
+stops a scarce roster becoming a cartel. **Scarce, but never capturable.** The honest claim is that
+QUEUE is the first venue that produces a *number* for what being filled first is worth, and that
+both possible answers are results.
+
+---
 
 ### 2026-08-27 (third session) — Phase 3: rank becomes an object, and the plan's own transfer design turns out to be a free DoS
 
