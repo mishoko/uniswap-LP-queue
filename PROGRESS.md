@@ -329,17 +329,25 @@ found an unguarded external entry point.
 
 ## Carried forward from the design phase — what is ALREADY PROVEN
 
-These were established by executed experiments before the build started. **Do not re-derive them.**
-Evidence lives in `archive/2026-08-26/`.
+These were established by executed experiments before the build started. Evidence lives in
+`archive/2026-08-26/`.
+
+> ### ⚠ READ THIS BEFORE QUOTING ANY NUMBER BELOW
+> **Three rows of this table were measured on the SPIKE, not on the shipping hook, and two of them
+> are now known to be WRONG.** The spike had no cursors, no owners, no seat tokens and no lease.
+> "Do not re-derive them" was the wrong instruction and it is withdrawn: a measurement inherited
+> from an earlier prototype is not a measurement of the thing you are shipping (PITFALLS 5.68).
+> Superseded rows are marked inline. The live gas table is `PLAN.md` §B.9 and `test/queue/Gas.t.sol`;
+> the live residual claim is PITFALLS 5.80.
 
 | Claim | Status | Evidence |
 |---|---|---|
 | Front-first allocation at the swap's realised average price is **exact to the wei in both tokens at a non-unit price (1:4)** | **PROVEN** | `archive/2026-08-26/test/spike/QueueAllocator.t.sol`, 9 tests; conservation measured on PoolManager's own ERC20 balances |
 | The remainder-assignment line is load-bearing | **PROVEN** | Negative control: floor-only mutation survives swap 1 and dies at swap 2 |
 | Pro-rata allocation and an off-by-one cursor both break it | **PROVEN** | Two further negative controls, both red, revert reasons asserted |
-| Head-only swap gas is **flat at ~31,874** regardless of queue depth | **MEASURED** (with `vm.cool()`) | Spike §Q2 |
-| A sweeping swap is O(entries) at **~6,753 gas/entry**; ~44 seats at a 300k budget | **MEASURED** | Spike §Q2 |
-| A **~0.26 wei/swap** redemption residual exists; the last withdrawer eats it | **MEASURED** | Spike §Q1 |
+| ~~Head-only swap gas is flat at ~31,874~~ | ⚠ **SUPERSEDED — spike figure, and measured with `vm.cool()` alone, which meters writes at 100 gas instead of 2,900 (LAW 4 as amended).** The shipping hook's head-only swap is **117,971–117,992 gas**, still flat (a 21-gas spread from 1 to 32 seats), re-measured with state built in `setUp()`. PITFALLS 5.66 | `test/queue/Gas.t.sol` `test_5_1` |
+| ~~A sweeping swap is O(entries) at ~6,753 gas/entry; ~44 seats at a 300k budget~~ | ⚠ **SUPERSEDED AND THE `MAX_SEATS` JUSTIFICATION IT SUPPORTED WAS FALSE.** Re-measured on the shipping hook: **12,254 gas/seat**, i.e. **37% OVER** the budget the roster bound was picked to fit. Phase 5b's packing brought it to **8,070**. And the real bound is `addToSeat` at **2,610,805 gas** (quadratic), not the sweep. PITFALLS 5.68, 5.72 | `test_5_3`, `test_5_3b`, `test_5_6` |
+| ~~A **~0.26 wei/swap** redemption residual exists; the last withdrawer eats it~~ | ⚠ **HALF SUPERSEDED.** The *last withdrawer eats it* half is right and still shipped (dust policy F1 spreads it over withdrawers). The *per-swap constant* half **does not generalise**: the truncation scales with price displacement, and a drained pool at the tick floor loses **~1e9 wei on one swap**. What generalises is the ratio against **lifetime inflow**: worst shortfall **under 1 ppb**, worst surplus **exactly 0 wei**. PITFALLS 5.80 | `Invariant.t.sol` `K`; `QueueHandler::_noteSolvency` |
 | That residual is **NOT** fee-growth truncation | **FALSIFIED** by a zero-fee pool retaining 88% of the drift | Spike §Q1 |
 | The residual is **unfarmable** — cost-to-damage off by ~20 orders of magnitude | **REASONED from measurement** | Spike §Q1 |
 | No forgeable-proof toxicity signal exists for a v4 hook | **PROVEN** | `archive/2026-08-26/docs/research/IDEAS_CONSTRAINED.md` §1 |
@@ -353,12 +361,15 @@ each row carries its evidence grade. The rows below are the headline items and p
 
 | Item | Why it matters | Where | Ledger row |
 |---|---|---|---|
-| **Redemption dust fix** | Until built, *"the queue's face value is redeemable"* must not be claimed | `PLAN.md` Phase 2 | `PITFALLS.md` §5.7 |
-| **Per-seat withdrawal feasibility** | **MEASURED:** §B.7's withdraw spec is impossible as specified — seat 1 holds 258.877 token0 / 0 token1 and can withdraw nothing via `modifyLiquidity(−Δ)`. A **Phase 2 BLOCKER**, and the second reason the face-value claim is barred. `withdraw` must never call `poolManager.swap` | `PLAN.md` §B.7 (not yet corrected); `docs/research/protocol-fee/queue-exposure.md` §A2 | `PITFALLS.md` §5.5, §5.6 |
-| **Protocol fee remedy P2** *(was P1 — superseded)* | Hazard is MEASURED and real. **Owner decided 2026-08-26: ship P2** (net out `protocolFeesAccrued` in `_afterSwap`), **not** the refusal this row previously named. Phase 1 must build it and assert against `PoolManager balance − protocolFeesAccrued` / `redeemAll()`, having first asserted `protocolFeesAccrued > 0` | `PLAN.md` §E.5, Phase 1 acceptance 1.10 | `PITFALLS.md` §3.1, §5.1–§5.4 |
+| ✅ ~~**Redemption dust fix**~~ | **CLOSED Phase 2** — dust policy F1 pays `min(face, available)`. The claim *"the queue's face value is redeemable"* is **still barred**, and Phase 6 measured the bound honestly: under 1 ppb of lifetime inflow, borne by the last holders to exit | `PLAN.md` §B.7 | `PITFALLS.md` §5.7, §5.80 |
+| ✅ ~~**Per-seat withdrawal feasibility**~~ — **CLOSED Phase 2** by the shared float; §B.7 corrected in place | **MEASURED:** §B.7's withdraw spec is impossible as specified — seat 1 holds 258.877 token0 / 0 token1 and can withdraw nothing via `modifyLiquidity(−Δ)`. A **Phase 2 BLOCKER**, and the second reason the face-value claim is barred. `withdraw` must never call `poolManager.swap` | `PLAN.md` §B.7 (not yet corrected); `docs/research/protocol-fee/queue-exposure.md` §A2 | `PITFALLS.md` §5.5, §5.6 |
+| ✅ ~~**Protocol fee remedy P2**~~ — **CLOSED Phase 1**, built and asserted at max fee, `lpFee == 0`, and against a foreign pool | Hazard is MEASURED and real. **Owner decided 2026-08-26: ship P2** (net out `protocolFeesAccrued` in `_afterSwap`), **not** the refusal this row previously named. Phase 1 must build it and assert against `PoolManager balance − protocolFeesAccrued` / `redeemAll()`, having first asserted `protocolFeesAccrued > 0` | `PLAN.md` §E.5, Phase 1 acceptance 1.10 | `PITFALLS.md` §3.1, §5.1–§5.4 |
 | **LAW 3 is amended** | Conservation must net out `protocolFeesAccrued`; the raw-balance form is blind to this bug class. Now stated in `AGENTS.md` §3.3 **and** `PLAN.md` §D.1 LAW 3 | `docs/research/protocol-fee/experiment.md` | `PITFALLS.md` §2.6 |
-| **Rank-then-run hole** | Plain-token rank can be abandoned before a scheduled event; only the Harberger variant closes it — and Harberger has its own unsolved gap (it cannot express a negative seat value) | `PLAN.md` Phase 4 | `PITFALLS.md` §5.9, §5.10 |
-| **O(1) prefix-sum redesign** | Named but **unbuilt and unverified** — do not quote it as a property | `PLAN.md` Phase 5 | `PITFALLS.md` §5.12, §3.16 |
+| ✅ ~~**Rank-then-run hole**~~ — **CLOSED Phase 4** by the firm quote; asserted in `test_6_11`. The negative-seat-value gap it names is still OPEN | Plain-token rank can be abandoned before a scheduled event; only the Harberger variant closes it — and Harberger has its own unsolved gap (it cannot express a negative seat value) | `PLAN.md` Phase 4 | `PITFALLS.md` §5.9, §5.10 |
+| ⛔ **O(1) prefix-sum redesign** | **DECIDED PHASE 5: NOT SHIPPED, and do not reopen without new evidence.** §C.5 gated it behind "only if 5a/5b leave a real problem"; they did not. Its objection is also unanswered — a prefix-sum accumulator does not know which seat is "the last one filled" when the scalar is updated, so the remainder line has no lazy analogue | `PLAN.md` §B.11 | `PITFALLS.md` §5.12, §3.16 |
+| **Phase 6's three bugs are FIXED, but their FAMILIES are standing** | The cursor bug was the **fifth** instance of "one rule, two places"; the unsigned measurement was the first of "predicting a balance change's sign from the request"; the periphery helper was the first of "a non-binding leg decides the outcome". Every new external path, every new measurement, and every new use of a periphery helper inherits these | `AGENTS.md` §3b | `PITFALLS.md` §5.73, §5.74, §5.76, §5.77 |
+| **Harberger cannot express a negative seat value** | Under toxic flow everyone declares near zero, no rent flows, and the front is free to take. **This is the headline unsolved item** and it sits exactly where the cohort's problem statement points | `README.md` | `PITFALLS.md` §5.10 |
+| **Enforcement needs somebody to poke `settleRent`** | Nothing ships that does and none is required, but a seat nobody wants and nobody pokes accrues a debt nothing collects | `README.md` | `PITFALLS.md` §5.64 |
 | **Seat governance** | Rank must be bought or Harberger-held, **never granted by deposit order** (dust-griefing the head). Phase 2's append-at-tail is provisional and must carry a named known-hole test | `BUSINESS.md` §8; `PLAN.md` §B.8, §E.16 | `PITFALLS.md` §3.8, §5.8 |
 | **Theme framing** | The honest bridge to "Sustainable Liquidity and MEV Protection" is the weakest part of the pitch | `BUSINESS.md` §10 | `PITFALLS.md` §5.16 |
 | **Full-range capital efficiency** | The sharpest unanswered attack, and **absent from `BUSINESS.md` and `PLAN.md` entirely**. [ANALYSIS] | `docs/research/premise-review/economics.md` §6 | `PITFALLS.md` §5.17 |

@@ -113,7 +113,9 @@ bear it**. Say that; do not say face value is redeemable.
 =======================================================================
 START BY READING, IN THIS ORDER, AND DO NOT SKIP ANY
 =======================================================================
-  1. README.md     — THE FRAME. Rewritten 2026-08-28. Do not re-derive the pitch.
+  1. README.md     — THE FRAME. Rewritten 2026-08-28. Do not re-derive the pitch. It now also
+                     carries the business-language translation ("In plain business terms", "What the
+                     engineering results mean commercially") and the shot-by-shot video plan.
   2. AGENTS.md     — how to work here. The five laws (LAW 4 amended 2026-08-28), the decision
                      framework, §3b THE TESTING ARCHITECTURE. It is NOT TDD.
   3. PLAN.md       — opens with a BUILD STATUS dashboard. Then §C.7 (Phase 7) and §D.9 (the "how to
@@ -141,15 +143,23 @@ Phase 7 is the last one and it is SHIPPING work, not mechanism work. In order:
   2. The demo, run against the deployed hook: seed the roster, run a small swap (head fills), run a
      sweeping swap (the queue walks), transfer a seat, show the fills follow the rank, price a seat
      and have somebody buy it out.
-  3. README — already carries the frame and the limitations. Add the deployed address and the demo
-     transcript. **§7.5 requires every open weakness to be stated; they already are — do not trim
-     them to make the page shorter.**
-  4. The video, UNDER 5:00, human voice. Structure: the problem (Uniswap fills pro-rata and has
-     never priced ordering) -> the mechanism (front-first allocation, one diagram) -> **why PAID
-     seats** (free rank is griefable, unbounded rank is worthless, Harberger stops the cartel) ->
-     how it compares (am-AMM auctions management rights to one winner per block; QUEUE sells an
-     ordering over the existing LPs' capital, perpetually, to many holders, with no auction) ->
-     the honest limitations, said out loud.
+  3. README — already carries the frame, the business-language translation, the limitations and the
+     video plan. Add the deployed address and the demo transcript. **§7.5 requires every open
+     weakness to be stated; they already are — do not trim them to make the page shorter.** The
+     sections a non-engineer reads are "In plain business terms" (who pays whom, three cashflows,
+     no new party taxed) and "What the engineering results mean commercially" (each wei-level proof
+     translated into what it says about the product). Keep those two current if anything changes.
+  4. The video, UNDER 5:00, human voice. **THE SHOT-BY-SHOT RECOMMENDATION IS ALREADY WRITTEN — see
+     `README.md` "The video — what it must show, and why".** It carries a minute-by-minute table,
+     the business point each beat has to make, and an explicit list of what NOT to do. Do not
+     re-derive it. The two things it exists to prevent:
+       - a viewer filing this under "order book bolted onto an AMM" in the first twenty seconds
+         (which is why the mechanism must be SHOWN, wordlessly, before 0:30), and
+       - the "why not just an open queue?" objection landing before we answer it (which is why
+         1:15-2:15 is spent griefing a naive open queue on screen and then showing the lease taking
+         a seat back off someone who under-priced it).
+     The limitations are read out at 4:00, not skipped. The am-AMM comparison is the closing line,
+     unprompted.
 
 **§D.9 is the gate and every line must be a yes.** The am-AMM distinction is §7.6 and a judge WILL
 test it (§E.14).

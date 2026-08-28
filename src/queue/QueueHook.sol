@@ -23,14 +23,21 @@ import {Allocation} from "./libraries/Allocation.sol";
 import {Rent} from "./libraries/Rent.sol";
 import {QueueSeats} from "./QueueSeats.sol";
 
-/// @title QUEUE — price-time priority for a Uniswap v4 pool
+/// @title QUEUE — a priced, front-first fill queue for a Uniswap v4 pool
 ///
 /// @notice The hook custodies the pool's entire liquidity as ONE position and keeps an ordered list
 ///         of seats. Every swap's aggregate entitlement is allocated FRONT-FIRST rather than
 ///         pro-rata: the head seat surrenders as much of the outgoing token as it holds and is
 ///         credited the incoming token at the swap's own realised average price.
 ///
-///         Uniswap has never had a queue, so it has never had a price for one.
+///         Uniswap has never had a queue, so it has never had a price for one — which did not make
+///         the ordering worthless. It made it unpriceable INSIDE the pool, and therefore captured
+///         OUTSIDE it, at the sequencer. This contract is the pool taking it back.
+///
+///         **It is NOT price-time priority.** The roster is closed and rank goes to willingness to
+///         pay rent, not to arrival. Rank is scarce ON PURPOSE — free rank is griefable rank and
+///         unbounded rank has no price — and leased rather than owned, so a scarce roster cannot
+///         become a cartel. Scarce, but never capturable. See `README.md`.
 contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     using CurrencySettler for Currency;
     using StateLibrary for IPoolManager;

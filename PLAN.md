@@ -1,4 +1,4 @@
-# PLAN.md — QUEUE: price–time priority for Uniswap v4 liquidity
+# PLAN.md — QUEUE: a priced fill queue for Uniswap v4 liquidity
 
 **Status:** written 2026-08-26. This is the build plan. It is a **living document** — when reality
 diverges from it, update it (see §F.5).
@@ -184,8 +184,11 @@ managed; they are the honest scope, and stating them is what makes the rest cred
 | "QUEUE reduces LVR." | It does not. **Total LVR paid by the pool is unchanged.** What changes is *who bears it and at what known price*. |
 | "QUEUE recaptures value from searchers." | It does not. It creates no new payment and takes nothing from anyone. |
 | "QUEUE detects toxic flow." | It does not, **and it must not try** — proven impossible (§E.19). It sells LPs different slices of the flow and lets them bid. |
-| "The queue's face value is redeemable." | **Not until BOTH are resolved: (a) the Phase 2 dust fix is built and proven** — measured ~0.26 wei/swap shortfall (§E.4) — **and (b) per-seat withdrawal feasibility.** §B.7's withdraw spec is MEASURED impossible as specified: after the spike's own 4-swap scenario seat 1 holds 258.877 token0 / 0 token1 and can withdraw **nothing** via `modifyLiquidity(−Δ)` (`PITFALLS.md` §5.5, §5.7; `docs/research/protocol-fee/queue-exposure.md` §A2). Conservation ≠ solvency (§D.1 LAW 3, second corollary). |
-| "Sweeps are O(1)." | **They are O(entries touched).** The O(1) redesign is named, unbuilt and unverified (Phase 5). |
+| "The queue's face value is redeemable." | **Still not claimed, and Phase 6 measured why.** Both original blockers are closed — Phase 2 built the shared float and dust policy F1, which pays `min(face, available)` — but face value remains an **upper bound**, because v4 computes a swap's amounts and a position's redeemable value with two differently-rounded formulas. Measured over the Phase 6 campaign: worst SURPLUS **exactly 0 wei**, worst SHORTFALL **under 1 part per billion of everything ever deposited**, and it is borne by **the last holders to withdraw**. The "~0.26 wei per swap" figure holds at the seeded price and **does not generalise** (PITFALLS 5.80). Conservation ≠ solvency (§D.1 LAW 3, second corollary). |
+| "Sweeps are O(1)." | **They are O(entries touched)**, at 8,070 gas per seat. The O(1) redesign is DECIDED NOT SHIPPED (§B.11). And the roster is bounded by `addToSeat`, which is **quadratic** at 2,610,805 gas worst case — not by the sweep (PITFALLS 5.72). |
+| "QUEUE is price–time priority." | **It is not, and saying so invites an objection we cannot answer.** The roster is closed, you cannot join by arriving, and rank goes to willingness to pay rent. What QUEUE reproduces is the **scarcity and value** of queue position, made explicit and payable to the LPs behind you. See §A.3. |
+| "A queue is obviously better than pro-rata." | **We do not know, and that is the point.** QUEUE produces the number — the self-assessed price of the head seat — and both answers are results. Claiming to know it in advance is the one thing that would make this uninteresting. |
+| "The overhead is negligible." | **It is +36% gas versus a bare pool** (117,989 vs 86,820, measured). The defensible claim is that it is a **constant a trader can price**, flat from 1 to 32 seats — not that it is small (PITFALLS 5.71). |
 
 The honest answer to *"the theme slide says neutralize the attack and recapture the value — where is
 that?"* is:
@@ -1577,7 +1580,9 @@ code (5.75, 5.79), and corrected the residual claim (5.80).
   table from §A.4, verbatim**, then how to run the tests, then the partner-integrations line
   (**required by Gate 5** — write "No partner integrations." if there are none).
 - Video, **≤5 min, human voice**. Structure: the problem (every AMM is pro-rata; every real market is
-  price–time priority) → how it works (the queue, the realised-price allocation, one diagram) → how
+  Uniswap fills pro-rata and has never priced ordering) → **why PAID seats** (free rank is griefable,
+  unbounded rank is worthless, Harberger stops the cartel) → how it works (the queue, the
+  realised-price allocation, one diagram) → how
   it compares (am-AMM auctions *management rights to one winner per block*; QUEUE sells *an ordering
   over the existing LPs' capital*, perpetually, to many holders, with no auction) → the honest
   limitations.
@@ -2141,7 +2146,16 @@ was taken after `vm.cool()`.
 Covered in §B.5 step 4. **It survives swap 1 and only dies at swap 2.** If your refactor's test suite
 has only single-seat fills, the line is untested. Multi-seat fill or it does not count.
 
-## E.4 The ~0.26 wei/swap redemption residual — and the hypothesis that is FALSE
+## E.4 The redemption residual — and the hypothesis that is FALSE
+
+> ### ⚠ THE MAGNITUDE IN THIS SECTION IS CORRECTED BY PITFALLS 5.80 (Phase 6)
+> "~0.26 wei/swap" (and Phase 2's cleaner "~0.15 wei/swap") hold **at the seeded price and nowhere
+> else**. The truncation scales with how far the price has been driven from where the liquidity
+> sits, so a pool drained into the float and pushed to the tick floor loses **~1e9 wei on a single
+> swap**. What generalises is the ratio against **lifetime inflow, not the current ledger** —
+> measured over the Phase 6 campaign: worst SURPLUS **exactly 0 wei**, worst SHORTFALL **under 1
+> part per billion**, borne by the **last holders to withdraw**. The CAUSE analysis below is
+> unchanged and still correct.
 
 Covered in §B.7. Restated because someone will re-derive the wrong cause:
 
@@ -2803,18 +2817,25 @@ regex over it is the method. Print the regex next to the count, as every prior p
 
 ## APPENDIX — the one-page version
 
-**What:** a Uniswap v4 hook that replaces pro-rata fills with **price–time priority**. The hook is
+**What:** a Uniswap v4 hook that replaces pro-rata fills with a **priced, front-first fill queue**
+(*not* price–time priority — the roster is closed and rank goes to willingness to pay, see §A.3). The hook is
 the pool's sole LP; it holds an ordered roster of seats; every swap fills **front-first** at the
 swap's own realised average price; the seat is an ERC-6909 token you can hold, transfer and price.
 
-**Why it is new:** every concentrated AMM is a pro-rata market. Every real electronic market is
-price–time priority. **Uniswap has never had a queue, so it has never had a price for one.**
+**Why it is new:** every concentrated AMM is a pro-rata market. Every real electronic market already
+prices queue position — implicitly, in latency spend burnt on infrastructure. **Uniswap has never had
+a queue, so it has never had a price for one — which did not make ordering worthless, it made it
+unpriceable INSIDE the pool and therefore captured OUTSIDE it.** See §A.3 for why the older,
+weaker phrasing was dropped.
 
 **What is proven:** front-first allocation at the realised average price conserves both tokens
 **exactly, to the wei, at a non-unit price**, measured on PoolManager's own balances, with three
 mutations red.
 
-**What is open:** a ~0.26 wei/swap redemption residual (fix specified, unbuilt); a ~44-seat gas
+**What is open:** ⚠ *this appendix predates Phases 1-6 and is kept as a record of the original
+pitch; the residual figure below was CORRECTED in Phase 6 (PITFALLS 5.80) and the seat bound was
+re-measured in Phase 5 (5.68). Read §A.3, `README.md` and `BUSINESS.md` §0 for the live version.*
+a ~0.26 wei/swap redemption residual (fix specified, unbuilt); a ~44-seat gas
 ceiling (bound the roster, pitch it as scarcity); rank-then-run (closed only by the Harberger
 variant); the O(1) redesign (named, unbuilt, and **doubted**).
 

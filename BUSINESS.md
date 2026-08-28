@@ -182,11 +182,21 @@ where a third party can do that inside the protocol.
 | **There is no reward for quoting early.** | In every real market, time priority is what pays a market maker to show a quote *before* they have to. In an AMM, being early to a tick buys you nothing beyond the same pro-rata share. |
 | **Gains from trade are unavailable.** | A hedger with offsetting inventory can bear toxic flow far more cheaply than a treasury can. Today neither party can act on that difference. |
 
-Every real electronic market on earth — equities, futures, FX ECNs — runs price–time priority, and
-queue position is the single most valuable asset in electronic market making. Firms build their
-business around getting to the front and staying there.
+Every real electronic market on earth — equities, futures, FX ECNs — **already prices queue
+position.** It just does it implicitly, and the currency is **latency**: firms spend nine figures on
+colocation, FPGAs and microwave towers to get to the front and stay there. That spend is deadweight —
+it buys priority from the exchange's matching engine and accrues to infrastructure vendors, not to
+the participants being jumped ahead of.
 
 > **Uniswap has never had a queue, so it has never had a price for one.**
+
+⚠ **SHARPENED 2026-08-28.** The older wording here said every real market "runs price–time
+priority", full stop. That invites a correct objection: **QUEUE is not price–time priority either.**
+Its roster is closed, you cannot join by arriving, and the "time" is gone — position goes to
+willingness to pay rent. The honest and stronger claim is the one above: ordering is already priced
+everywhere, the alternative to pricing it explicitly is a latency race, and Uniswap's choice did not
+make ordering worthless — it made it unpriceable *inside* the pool, so it is captured *outside* it.
+See §0.
 
 ---
 
@@ -327,7 +337,7 @@ the role has no reason to adopt.
 ### (a) SEMANTIC — what a queue *is*, against what a pool *is*
 
 ```
-        PRO-RATA  (every AMM that exists)              QUEUE  (price–time priority)
+        PRO-RATA  (every AMM that exists)              QUEUE  (front-first, priced)
 
    swap consumes 500,000 of the pool               swap consumes 500,000 of the pool
                     │                                             │
@@ -949,18 +959,48 @@ present-state property and can never be a predicate. Rank is present state. Nobo
 front; the front is **bought**, from a party who agreed to sell it, at a price they agreed to.
 
 **Counter 6 — "Uniswap already has priority — swaps cross ticks in order."**
-Yes, and that is price priority. QUEUE adds **time** priority, which does not exist within a tick.
-See §2.1. Anyone who states the claim loosely will lose this exchange.
+Yes, and that is price priority: capital at a nearer tick is filled before capital at a further one.
+QUEUE adds an ordering **within** a tick, which does not exist today. See §2.1. Anyone who states
+this loosely will lose the exchange — and note that the ordering QUEUE adds is **not time
+priority** either (Counter 7).
+
+**Counter 7 — "This is not price–time priority. Your roster is closed, so nobody can join by
+arriving."** ⚠ *Added 2026-08-28. This is the objection the pitch was previously inviting and could
+not answer.*
+**Correct, and conceding it immediately is what makes the rest land.** QUEUE is not price–time
+priority; rank goes to willingness to pay rent, not to arrival. The honest claim is different and
+stronger:
+
+- Real markets already price queue position. They pay for it in **latency** — a deadweight cost burnt
+  on colocation and microwave towers that accrues to infrastructure vendors, not to the participants
+  being jumped ahead of. On-chain, the same value is sold at the **sequencer**, and the pool's LPs get
+  none of it.
+- **Uniswap did not eliminate the value of ordering. It made it unpriceable inside the pool, so it is
+  captured outside it.** QUEUE makes the price explicit and routes it to the LPs standing behind you.
+- **And an open, arrival-ordered queue does not work here** — which is why paid seats are the design,
+  not a compromise. Free rank is griefable rank: if arrival grants rank, the head costs one wei, and
+  dusting it buys the whole front of the book. Unbounded rank is worthless rank: a non-scarce asset
+  has no price, so no rent ever reaches the tail. **Scarcity is the mechanism.** The Harberger lease
+  is what stops a scarce roster becoming a cartel — self-assessed, always for sale, rent paid
+  continuously to the seats behind. *Scarce, but never capturable.*
+
+See §0 for the full form. **This counter should be pre-empted in the pitch, not defended under
+questioning** — an informed listener forms it inside twenty seconds, and answering it first converts
+the most obvious weakness into the clearest statement of what the design is for.
 
 ---
 
 ## APPENDIX — the one-paragraph version
 
 Every concentrated AMM is a pro-rata market: within a tick, every LP is filled in proportion to size
-and no LP can be first or last. Every real electronic market on earth is price–time priority, and
-queue position is the single most valuable asset in electronic market making. QUEUE gives a Uniswap v4
-pool the missing half — a transferable rank in the fill order, so that two LPs with identical capital
-at identical prices hold different assets. The front is filled by every swap; the back only by swaps
+and no LP can be first or last. Every real electronic market on earth already prices queue position —
+implicitly, in latency spend that is burnt on infrastructure rather than paid to the participants
+being jumped ahead of. Uniswap's choice did not make ordering worthless; it made it unpriceable
+*inside* the pool, so it is captured *outside* it, at the sequencer. QUEUE gives a Uniswap v4 pool
+the missing half — a transferable, continuously-priced rank in the fill order, so that two LPs with
+identical capital at identical prices hold different assets. Rank is scarce **on purpose** (free rank
+is griefable rank and unbounded rank has no price) and leased rather than owned, so a scarce roster
+cannot become a cartel: scarce, but never capturable. The front is filled by every swap; the back only by swaps
 large enough to sweep to it. Front-first allocation at the swap's own realised average price is exact
 to the wei, executed and measured against a real PoolManager at a non-unit price, with three negative
 controls red. It does not stop sandwiches, does not reduce total LVR, and does not tax searchers. What
