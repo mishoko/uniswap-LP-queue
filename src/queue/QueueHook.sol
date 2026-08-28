@@ -1513,6 +1513,27 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         return (cursor0, cursor1);
     }
 
+    /// @notice The one pool this hook serves, and the range it custodies liquidity over.
+    ///
+    /// @dev **WITHOUT THIS, THE POOL A DEPLOYED HOOK SERVES IS NOT READABLE ON CHAIN AT ALL.** `key`
+    ///      is written once by `_afterInitialize` and this contract emits no event of its own, so
+    ///      an integrator — a viewer, a router, an analytics job, another contract — had to scan
+    ///      `PoolManager`'s `Initialize` logs and match on the hook address to learn even which
+    ///      currencies it holds. Anything wanting the token decimals in order to display a balance
+    ///      simply could not. A hook that cannot say what it is attached to is not integrable, and
+    ///      every value here is already public: the key is in PoolManager's own event and the ticks
+    ///      are a pure function of `tickSpacing`.
+    ///
+    ///      `isBound` is RETURNED rather than left to be inferred from a zero key, because
+    ///      `Currency.wrap(address(0))` is native ETH and therefore a legal `currency0` — a caller
+    ///      checking `key.currency0 != address(0)` would read an unbound hook as an ETH pool.
+    ///
+    ///      Pure disclosure: `view`, no branch, and nothing here can be reached before
+    ///      `_afterInitialize` has fixed it or changed after.
+    function pool() external view returns (PoolKey memory poolKey, bool isBound, int24 lower, int24 upper) {
+        return (key, bound, tickLower, tickUpper);
+    }
+
     function positionLiquidity() external view returns (uint128) {
         return liquidity;
     }

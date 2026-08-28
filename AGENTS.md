@@ -165,6 +165,9 @@ is real, the swaps are real, the rounding is v4's own.
 | `test/queue/QueueFixture.sol` | The shared abstract fixture: token deployment at chosen decimals, pool setup, `_swap` (measures PoolManager's own balances net of protocol fees), the **independently written reference allocator**, and the INVARIANT C / INVARIANT F assertions |
 | `test/queue/QueueHarness.sol` | **TEST-ONLY.** Adds `seed()`, `redeemAll()` and `seatArraySlot()`. The first two were once on the production hook and both were real holes. It ADDS entry points and OVERRIDES NOTHING, so the code under test is still exactly production. `seed()` funds the FOUNDING ROSTER; it cannot create a seat, because production cannot |
 | `test/queue/Gas.t.sol` | **EVERY gas measurement in the project, and the only place they belong.** Its rosters are built in `setUp()` because `vm.cool()` alone measures a contract whose storage is free to write (LAW 4 as amended). Three measurements were moved here in Phase 5 from suites that had them wrong |
+| `test/queue/Deploy.t.sol` | **THE DEPLOYMENT PATH ITSELF.** Runs `script/QueueDeployBase.sol` — the same functions the broadcast script runs — and asserts the demo beat by beat |
+| `test/queue/DeployFork.t.sol` | The same five tests against a **live Unichain Sepolia fork**. Off by default (`QUEUE_FORK=true`), and it skips LOUDLY |
+| `test/queue/Hygiene.t.sol` | Tests about the project's own INSTRUMENTS: the viewer's hardcoded selectors, and the mutation-campaign interlock |
 | `test/queue/*.t.sol` | The suites |
 
 ### The six kinds of test, and what each is for
@@ -246,6 +249,27 @@ Widening a tolerance until the mutation is "caught" is none of these.
   holds a mutant on disk for the duration of each case, so a concurrent run reads mutated source and
   reports a failure that has nothing to do with your change. That happened in the Phase 6 session
   and cost a confusing minute.
+- **A DEPLOY SCRIPT IS NOT A TESTED PATH.** Six phases and 163 tests were green here while not one
+  line of the real deployment sequence had ever executed — every suite reached the pool through the
+  test-only `seed()` or through `deployCodeTo`, which *places* a hook at an address of your choosing.
+  The fix is structural: the sequence lives in a base that BOTH the script and a test execute, with
+  only the identity seam (`_as` / `_stopActing`) differing. Then run it against a **fork of the real
+  chain**, which is the only thing that proves a vendored address constant is not stale
+  (PITFALLS 5.81).
+- **DERIVE A PERMISSION MASK, NEVER COPY ONE.** `PLAN.md` carried `0x0840` for a contract whose
+  permissions are `0x18C0`, while another section of the same document already had the right value.
+  `BaseHook` validates the address in ITS constructor, which runs first, so a stale mask reverts at
+  deploy time with no diagnosis attached. Reconstruct it from `getHookPermissions()` and assert it
+  (PITFALLS 5.82).
+- **v4 WRAPS A HOOK'S OWN ERROR.** `Hooks.callHook` bubbles it inside
+  `CustomRevert.WrappedError(target, selector, reason, details)`, so `vm.expectRevert(MyError.selector)`
+  FAILS against a hook that reverted with exactly `MyError`. That is why bare `vm.expectRevert()` is
+  tempting on callbacks, and it is how two LAW 2 violations survived six phases — one of which could
+  not detect the deletion of the guard it claimed to test (PITFALLS 5.83, 5.84).
+- **PROSE IS NOT AN INTERLOCK.** 5.79's corollary — never run `forge test` while `mutate.py` holds a
+  mutant on disk — was documented in Phase 6 and violated in Phase 7 by the agent who had just read
+  it. A hazard that recurs after being written down needs a mechanism: the campaign now publishes a
+  marker and a test refuses to run while it is present (PITFALLS 5.86).
 - **Write down what you PROVED, not what the guard is for.** A first draft of the reentrancy guard's
   comment described a double-payment that could not be reproduced. The window is real and the
   corruption is real; the theft was not demonstrated, and the comment now says exactly that

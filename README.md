@@ -85,6 +85,34 @@ That is precisely why a seat is **leased, not owned** — a self-assessed, alway
 neither half survives alone: a bounded roster without Harberger is a cartel, and Harberger without a
 bounded roster prices nothing.
 
+### "So it isn't really a queue" — the sharpest form of the objection, and the answer
+
+A queue, in ordinary usage, means **arrival grants position**. QUEUE has no arrival, and a reader who
+knows markets will point out in the first thirty seconds that this is therefore not price–time
+priority either. That is correct, and it is worth meeting head-on rather than hoping nobody says it.
+
+Two things resolve it.
+
+**First: the "time" in price–time priority is not free — it is burnt.** Every real electronic market
+prices queue position. Most price it in *time*, and firms buy that time with microwave towers,
+colocation and priority fees. That spend is real, it is enormous, and **it is paid to nobody inside
+the market.** On-chain, "arrival" is just a gas auction, so time-priority reduces to a latency race
+with the same property. QUEUE deletes the time component and keeps the price component — and routes
+the payment to **the LPs you are standing in front of**, who are the people whose P&L your position
+in the queue actually determines.
+
+**Second: the roster is bounded, but it is not closed.** This distinction matters and it is easy to
+state carelessly. Under an always-for-sale lease, *anyone may enter at any moment, at a price the
+incumbent posted themselves*. What is scarce is the **slot**, not the **participant**. There is no
+waiting list, no application, no whitelist, and nobody who can say no. So the honest sentence is not
+"a closed roster of 32" but:
+
+> **QUEUE is a queue with a permanently posted entry price — and the price is paid to the people you
+> are queueing in front of.**
+
+Which is, incidentally, how every membership market that has ever worked has worked: an exchange seat
+is scarce, tradeable, and available to anyone who meets the holder's number.
+
 ## What this makes possible that Uniswap cannot express today
 
 **(a) The maker who wants to be *first*, not *bigger*.**
@@ -125,6 +153,7 @@ It is falsifiable in both directions, and **both outcomes are results**:
 
 | Objection | Answer |
 |---|---|
+| *"This is an order book bolted onto an AMM."* | **It is the opposite side of the market.** An order book orders *traders' orders* — with limit prices, matching, and cancellation. QUEUE orders *LPs' fills*, and has none of those things: there is no matching engine, no limit price, no cancel, and **a trader never interacts with the queue at all.** They swap through any ordinary v4 router, at the same price, for the same fee, and the queue is invisible to them. What is ordered is who gets to be the counterparty, not who gets to trade. |
 | *"Pro-rata is what makes an AMM permissionless. A queue reintroduces privilege."* | The privileged position exists — and **nobody can hold it except by continuously paying for it, and nobody can be excluded from taking it.** The shipping contract has no admin, no whitelist, no upgrade path and no privileged role of any kind. Compare the status quo, where ordering privilege also exists, is unpriced, and is decided by whoever sequences the block. |
 | *"32 seats is an oligopoly."* | 32 is roughly the number of serious market makers in any given pair on any venue. And the **capital is unbounded** — anyone may deposit any amount into a seat they hold. Only the *ordering slots* are scarce, and they have to be, or they have no price. |
 | *"This is am-AMM."* | am-AMM auctions **management rights over the whole pool** to **one winner per block**. QUEUE sells **an ordering over the existing LPs' own capital**, perpetually, to **many simultaneous holders**, with no auction, no winner, and no per-block reference anywhere in the contract. |
@@ -181,6 +210,7 @@ product:
 | Rent **cannot be captured by a flash loan**, and settlement conserves the rent pot to the wei | The coupon paid to back-seat LPs cannot be farmed by someone who was not there. The income is real, not gameable |
 | Foreclosure **demotes, never seizes** — the holder keeps the seat and every wei of capital | Running out of prepaid rent costs you your place in line, not your money. That is what makes the seat holdable by an institution: there is no liquidation risk, no collateral call, and no oracle to argue with |
 | The contract has **no admin, no upgrade path, and no privileged role of any kind** | There is nobody to trust, nobody to lobby, and nobody who can change the rent rate after you have bought a seat |
+| The **allocator never reads the position's range** — the identical roster allocates to the wei over a ±10% band as over the full range | The thin-depth limitation is a **parameter this version set conservatively**, not something baked into the mechanism. That is the difference between "this cannot scale" and "this has not been tuned yet" |
 | The invariant campaign **found three real bugs** in code that had already passed 135 tests | Stated plainly because it is the most commercially relevant fact in this section: this mechanism was attacked by its own authors and it broke. Everything above is what survived that |
 
 ## The video — what it must show, and why
@@ -247,17 +277,39 @@ they see a buyer, for the cost of a few seconds of rent — four parts in ten mi
 "always for sale" means nothing. A raise applies immediately to what you *pay* and only after the
 window to what you can be *taken* at.
 
-**The founding endowment dissolves itself.** Every seat on the deployed roster starts unpriced, and
-an unpriced seat is free for anyone to take. Whoever deploys chooses the first holders, and that
-choice is worth a head start of exactly one transaction.
+**The founding endowment dissolves itself.** Every seat on the deployed roster starts unpriced and
+unfunded, and an unpriced seat is **free for anyone to take**. That is not a hole left open, it is
+the bootstrap: a roster that could not be taken from its founders would be the cartel the lease
+exists to prevent. Whoever deploys chooses who starts, and that choice is worth a head start of
+exactly one transaction — after which the seats belong to whoever values them enough to price them,
+pay rent on them, and defend them at their own number. **Somebody taking the whole founding roster
+in block one is not the mechanism failing; it is the mechanism starting.**
 
-## Status — Phases 0-6 built and green, 2026-08-28
+## Status — Phases 0-6 complete, Phase 7 shipping, 2026-08-29
 
 ```
-forge test               ->  163 passed, 0 failed      (13 suites)
+forge test               ->  172 passed, 0 failed, 1 skipped   (16 suites)
 forge lint src/          ->  clean, zero notes
-python3 script/mutate.py ->  66 mutations on production code, ZERO survivors
+python3 script/mutate.py ->  68 mutations on production code, ZERO survivors
 ```
+
+The one skipped suite is `DeployFork.t.sol`, which is off unless you ask for it because the default
+suite must not need a network. It skips **loudly**, never silently:
+
+```
+QUEUE_FORK=true forge test --match-path "test/queue/DeployFork.t.sol" -vv
+```
+
+**Phase 7 found that the deployment path had never executed.** Six green phases, 163 tests, and not
+one line of the real sequence — mine a CREATE2 salt for the permission bits, deploy through the
+canonical proxy, `initialize`, `addToSeat` — had ever run: every suite reached the pool through the
+TEST-ONLY `QueueHarness.seed()` or through `deployCodeTo`, which places a hook at an address of your
+choosing. The first execution would have been a live broadcast. It also found this repo's own plan
+carried a **stale hook-flag mask** (`0x0840` for a contract whose permissions are `0x18C0` — which
+reverts at deploy time with no diagnosis), **two pool-binding tests that asserted only "it
+reverted"**, one of which could not detect the deletion of the very guard it claimed to
+test, and a viewer whose four hardcoded call selectors were **three-quarters wrong**. All fixed,
+each with a test, one with a new mutation. `PITFALLS.md` 5.81–5.88.
 
 Everything runs against **real v4 contracts deployed locally** — a real `PoolManager`,
 `PositionManager` and `V4SwapRouter`. Nothing is mocked; the rounding is v4's own.
@@ -313,7 +365,17 @@ exactly 0 wei across the entire campaign**, in both tokens, after every action.
   117,989 vs 86,820 gas. The overhead is a constant a trader can price: **flat from 1 to 32 seats**,
   a spread of 21 gas. Walking the queue costs a further 8,070 gas per seat, so a full 32-seat sweep
   is a 416,053-gas transaction.
-- **One full-range position is thin.** ~1/200th the depth per dollar of a ±1% concentrated position.
+- **One full-range position is thin** — ~1/200th the depth per dollar of a ±1% concentrated
+  position, which is why the sweep in the demo needs a large trade to reach rank 2 at all. **The
+  honest half-answer: the queue is orthogonal to the range, and that is now proven rather than
+  asserted.** `tickLower`/`tickUpper` appear in exactly two places in the hook — the liquidity
+  sizing helpers and the `modifyLiquidity` call — and nowhere in the allocator, which sees only the
+  realised deltas of a swap that already happened. `test_1_11` seeds the identical roster over a
+  **±10% band** instead of the full range and runs both directions against the independent witness:
+  conservation, per-seat composition and INVARIANT C all hold to the wei. So concentrating the
+  custodied position is a **v2 parameter, not a redesign**. What is *not* claimed: that a
+  narrow-range QUEUE is finished. Out-of-range behaviour, rebalancing and the depth-versus-coverage
+  trade-off are unbuilt.
 - **Face value is an upper bound, not a promise, and the residual is NOT a per-swap constant.**
   §E.4's "~0.15 wei per swap" holds near the seeded price and **does not generalise**: the
   truncation scales with how far the price has been driven from where the liquidity sits, and a pool
@@ -349,10 +411,94 @@ project more time than any real bug.
 | [`NEXT_SESSION_PROMPT.md`](NEXT_SESSION_PROMPT.md) | The prompt to hand a fresh agent. |
 | `archive/2026-08-26/` | The design phase: 25 hard-won v4 facts, every experiment, and every rejected candidate with the evidence that killed it. |
 
+## Running it yourself
+
+Everything runs against **real v4 contracts deployed locally** — a real `PoolManager`,
+`PositionManager` and `V4SwapRouter`, from `hookmate` artifacts. Nothing is mocked and the rounding
+is v4's own. You need [Foundry](https://book.getfoundry.sh/getting-started/installation) and nothing
+else — no node, no RPC, no keys, no network.
+
 ```bash
+git clone --recurse-submodules https://github.com/<owner>/<repo>.git
+cd <repo>
 forge build
 forge test
 ```
+
+> **The `--recurse-submodules` matters.** The v4 stack, `forge-std` and `hookmate` are git
+> submodules, and a plain `git clone` leaves `lib/` empty and the build broken with an error that
+> does not say why. If you have already cloned without it:
+> `git submodule update --init --recursive`.
+
+Expect **172 passed, 0 failed, 1 skipped** across 16 suites. The skip is deliberate and loud — see
+the status section below. Useful subsets:
+
+```bash
+forge test --match-path "test/queue/Deploy.t.sol"       -vv   # the deployment path, beat by beat
+forge test --match-path "test/queue/Invariant.t.sol"    -vv   # 11 invariants + the scripted campaign
+forge test --match-path "test/queue/Adversarial.t.sol"        # every named attack, with an outcome
+forge test --match-path "test/queue/Gas.t.sol"          -vv   # prints the gas table
+forge lint src/                                               # must stay clean, zero notes
+python3 script/mutate.py                                      # 68 mutations, must be 0 survivors
+```
+
+`script/mutate.py` is the one that finds things — it edits `src/` in place, runs the suite, and puts
+it back. **Do not run `forge` against the repo while it is going**; it holds a deliberate bug on disk
+for the duration of each case, and the suite will now refuse to run and tell you so rather than
+reporting a failure that has nothing to do with your change.
+
+## Deploying it
+
+Unichain Sepolia only. **No mainnet, ever** — the script enforces that with a chain allow-list
+rather than an intention.
+
+```bash
+export PRIVATE_KEY=0x...
+forge script script/DeployQueue.s.sol:DeployQueue \
+  --rpc-url https://sepolia.unichain.org --broadcast -vvv
+```
+
+It deploys two demo ERC-20s at 18/6 decimals, mines a CREATE2 salt whose address carries the hook's
+four permission bits, deploys through the canonical deterministic proxy, opens the pool at
+1 token0 = 4 token1, funds five seats, and then runs the whole demo on-chain — printing the full
+seat table after every beat, so the transcript is a copy of what the chain did rather than a
+description of it.
+
+**Every risky step in that script is already under test.** The sequence lives in
+`script/QueueDeployBase.sol` and is executed by two callers: the script broadcasts it, and
+`test/queue/Deploy.t.sol` runs the same functions and asserts each beat. The only thing that differs
+is who signs. `DeployFork.t.sol` then runs those same five tests against a **live fork of Unichain
+Sepolia** — which is what proves the vendored addresses are not stale, the CREATE2 proxy is present,
+and the numbers come out identical to the local run.
+
+## The frontend
+
+`frontend/index.html` — one static file, no build step, no server, no keys.
+
+```bash
+open frontend/index.html
+```
+
+It does three things, in the order a viewer needs them:
+
+1. **The comparison, wordlessly.** The same swap arriving at a pro-rata pool and at a queued pool,
+   on a real constant-product full-range curve with the pool the test suite actually deploys. Drag
+   the size. Pro-rata: every bar shrinks a little. QUEUE: the front bar empties and the rest do not
+   move. At 2,500 in the page computes 3,745.7 out; the deployed contract gives 3,746.34 —
+   **0.02% apart**, so what you are watching is the mechanism, not an illustration of it.
+2. **The book, live.** Paste a deployed hook address and it reads `ranking`, `seat`, `leaseOf` and
+   `ownerOf` over plain `eth_call` — rank, holder, capital in both tokens, self-price, and the
+   head-seat price. Read-only: the page has no keys and sends no transactions. If a read fails it
+   **says so** rather than quietly rendering zeros.
+3. **Why paid seats.** Grief a naive open queue on screen — one wei of dust takes the head and the
+   book is dead — then watch the Harberger lease take a seat back off someone who under-priced it.
+   That pair is the argument, and it is the objection every informed viewer forms.
+
+Those four selectors are a writer/reader pair, which on this project has been wrong five times — so
+`test/queue/Hygiene.t.sol` reads the page, extracts the live bindings, and asserts each against the
+compiler's own selector. Rename a view on the hook and the test goes red there, instead of the page
+silently showing an empty queue to a judge. (The first draft was written from memory and three of
+the four were wrong.)
 
 ## Partner integrations
 

@@ -724,9 +724,16 @@ pure market-design parameter and the deployer should set it, per pool.
 Stated at full strength. Nothing here is softened.
 
 > ⚠️ **This list is NOT complete, and the gaps are on the record elsewhere.** Research closed on
-> 2026-08-26 named four limitations that appear **nowhere in this document**: **full-range capital
-> efficiency** (one full-range position offers ~1/200th the depth per dollar of a ±1% concentrated
-> one — the sharpest unanswered attack, `PITFALLS.md` §5.17); **the Ratchet** (front-first applies in
+> 2026-08-26 named four limitations that appear **nowhere else in this document**: **full-range
+> capital efficiency** (one full-range position offers ~1/200th the depth per dollar of a ±1%
+> concentrated one — the sharpest attack, `PITFALLS.md` §5.17. **UPDATED 2026-08-29: half of it is
+> now answered.** The queue is PROVEN orthogonal to the position's range — `tickLower`/`tickUpper`
+> appear only in the liquidity-sizing helpers and the `modifyLiquidity` call, never in the
+> allocator, and `test_1_11` seeds the identical roster over a ±10% band with conservation,
+> per-seat composition and INVARIANT C all holding to the wei. So concentrating the custodied
+> position is a **v2 parameter, not a redesign**. The economics of a thin pool — no aggregator
+> routes retail to it, and retail is the entire benign side of the P&L — **still stand, and
+> out-of-range behaviour and rebalancing are unbuilt.** Say both halves); **the Ratchet** (front-first applies in
 > both directions, so the tail is a one-way accumulator with no priority to exit — §5.18); **Phase 3
 > is a one-sided market** (the tail's compensation channel is Harberger rent, which is Phase 4 —
 > §5.19); and **"the seat price IS the toxicity" is OVERCLAIMED** (§5.20). All four are [ANALYSIS],

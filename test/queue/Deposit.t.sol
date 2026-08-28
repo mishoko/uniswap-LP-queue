@@ -9,6 +9,8 @@ import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 /// @notice Phase 2 — deposit, withdraw, the shared float, and the reinjection sweep.
@@ -429,7 +431,20 @@ contract DepositTest is QueueFixture {
         PoolKey memory hostile =
             PoolKey({currency0: c0, currency1: c1, fee: 500, tickSpacing: SPACING, hooks: IHooks(address(fresh))});
         vm.prank(address(0xBAD));
-        vm.expectRevert();
+        // LAW 2 — THE REASON, NOT MERELY "IT REVERTED". This assertion used to be a bare
+        // `vm.expectRevert()`, which passes for an out-of-gas, for a hook that is not there, and
+        // for `AlreadyBound` — i.e. for every reason except the one it claims to prove. v4 bubbles
+        // a hook's own error inside `WrappedError(target, selector, reason, details)`, so the
+        // reason has to be unwrapped to be asserted. Corrected in Phase 7.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(fresh),
+                IHooks.afterInitialize.selector,
+                abi.encodeWithSelector(QueueHook.WrongPool.selector),
+                abi.encodeWithSelector(Hooks.HookCallFailed.selector)
+            )
+        );
         poolManager.initialize(hostile, startPrice);
 
         // The intended pool still binds.
@@ -439,10 +454,25 @@ contract DepositTest is QueueFixture {
     }
 
     /// @dev And a second pool cannot re-bind an already-bound hook.
+    ///
+    ///      **THIS TEST WAS PROVING THE WRONG THING UNTIL PHASE 7.** It re-initialized the
+    ///      IDENTICAL key, which `PoolManager` refuses from its own state with
+    ///      `PoolAlreadyInitialized` before the hook is ever called — so it passed whether or not
+    ///      `_afterInitialize` had an `AlreadyBound` guard at all, and a mutation deleting that
+    ///      guard would have survived it. The re-bind that the HOOK has to refuse is a DIFFERENT
+    ///      pool naming the same hook, and a fresh fee tier is the cheapest one.
     function test_2_21_cannotRebindAnAlreadyBoundHook() public {
         PoolKey memory second =
-            PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(hook))});
-        vm.expectRevert();
+            PoolKey({currency0: c0, currency1: c1, fee: 500, tickSpacing: SPACING, hooks: IHooks(address(hook))});
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(hook),
+                IHooks.afterInitialize.selector,
+                abi.encodeWithSelector(QueueHook.AlreadyBound.selector),
+                abi.encodeWithSelector(Hooks.HookCallFailed.selector)
+            )
+        );
         poolManager.initialize(second, startPrice);
     }
 }

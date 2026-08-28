@@ -18,9 +18,130 @@ Newest entry first. Never delete an entry — supersede it.
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
-| 7 | Testnet deploy + demo + video | NOT STARTED | — |
+| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-08-29** | **PARTLY** — 172 tests, **68 mutations red, 0 survivors**. The deploy + demo sequence is built, asserted beat by beat, and **verified against a live Unichain Sepolia fork**; the frontend is built. **The broadcast and the video are outstanding.** Found that the deployment path had never executed (PITFALLS 5.81) plus four more instrument defects (5.82-5.86) |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## 2026-08-29 — Phase 7a: the deployment path had never run, and four of our own instruments were wrong
+
+**Status: 172 tests green, 68 mutations with zero survivors, six deployment tests passing against a
+live Unichain Sepolia fork. The broadcast and the video are outstanding.**
+
+### The finding that mattered
+
+**Six phases were green while not one line of the actual deployment sequence had ever executed.**
+Every suite in this repo reaches the pool one of two ways: `QueueHarness.seed()`, which is TEST-ONLY
+code, or `_deployHookUnfunded` → `deployCodeTo`, which *places* a hook at an address of your
+choosing. Neither is how a v4 hook reaches a chain. The real path is: mine a CREATE2 salt whose
+address carries the permission bits → deploy through the canonical deterministic proxy →
+`PoolManager.initialize` → `addToSeat` into a virgin position. Its first execution would have been a
+live broadcast with a judge watching.
+
+Fixed **structurally**, not by adding a script. The sequence lives in `script/QueueDeployBase.sol`
+and is executed by two callers — `script/DeployQueue.s.sol` broadcasts it, `test/queue/Deploy.t.sol`
+runs the same functions and asserts every beat — and the only thing that differs is who signs, behind
+`_as` / `_stopActing`. `DeployFork.t.sol` then runs the same five tests against a live fork, which is
+what actually proves the vendored `AddressConstants` is not stale, the CREATE2 proxy is present on
+that chain, and the numbers are identical. (PITFALLS 5.81.)
+
+### Four instruments that were wrong, in the session's own order
+
+1. **`PLAN.md` §H.3's hook flag mask was stale** — `0x0840` for a contract whose permissions are
+   `0x18C0`, four phases after `afterInitialize` and `beforeAddLiquidity` were added. §F.2 of the
+   same document already recorded `0x18C0`: **the plan disagreed with itself.** Mining for a stale
+   mask yields an address `BaseHook`'s constructor rejects, with no diagnosis attached. Now derived
+   from `Hooks.Permissions` and asserted against `getHookPermissions()` by `test_7_1`. (5.82.)
+2. **`test_2_20` and `test_2_21` were LAW 2 violations**, and `test_2_21` was worse than that: it
+   re-initialized the IDENTICAL key, which `PoolManager` refuses from its own state before the hook
+   is ever called, so it passed **whether or not `_afterInitialize` had an `AlreadyBound` guard at
+   all**. Demonstrated by deleting the guard and watching both tests stay green in their old form.
+   Both now unwrap v4's `CustomRevert.WrappedError` and assert the selector; kept honest by the new
+   **M67**. (5.83, 5.84.)
+3. **The frontend's four hardcoded call selectors were three-quarters wrong.** Written from memory;
+   only `ownerOf(uint256)` was right. The failure mode is the worst available — an `eth_call` to a
+   selector that does not exist returns EMPTY DATA, so the page renders zeros and looks like a
+   working demo of an empty queue. Closed the way every writer/reader pair here is closed:
+   `test_7_6` reads the page, extracts the live `const` bindings, and asserts each against the
+   compiler's own. (5.85.)
+4. **PITFALLS 5.79's corollary was violated by the agent who had just read it.** `forge test` was
+   run while `mutate.py` held a mutant on disk, and the result was briefly believed. A hazard that
+   recurs after being documented needs an interlock, not a louder note: `mutate.py` now publishes
+   `.forge-snapshots/MUTATION_IN_PROGRESS` and `test_7_7` refuses to run when it sees one, while the
+   campaign's own runs pass through on `QUEUE_MUTATION_RUN=1`. Both directions have a control.
+   (5.86.)
+
+### Two wrong predictions, written down next to the right answers
+
+- **"A 400e18 sweep will walk several seats."** It touched exactly one. The allocator was correct and
+  the trade was small: the queue IS the pool's liquidity, so reaching rank 2 means removing ranks 0
+  and 1's whole stock of the outgoing token from a FULL-RANGE position, and a constant-product curve
+  releases 60% of a leg only for a 6.25x price move. 2,500e18 walks it. **This is the measured form
+  of the README's "the back is reached only by trades large enough to sweep the front", and it is
+  5.17 (thin full-range depth) showing up in the demo.** (5.87.)
+- **"Settling rent reduces `escrowTotal`."** It does not — `_distributeRent` moves the money from the
+  payer's escrow to the recipients' escrow, so the total is CONSERVED, exactly as `AGENTS.md` says
+  ("rent moves escrow to escrow"). The draft assertion would have passed against a *leaking*
+  implementation. Replaced with the identity: payer falls by `due`, the seats behind rise by `due` in
+  total, `escrowTotal` unchanged, `unallocatedRent0` zero while eligible recipients exist — which is
+  also the business model stated as an assertion. (5.88, and 5.53 again.)
+
+### Decisions taken under ambiguity
+
+- **Built a frontend, against `PLAN.md` §H.4's "do not build a frontend just in case."** That
+  guidance was written when the mechanism was unproven and a frontend would have been a distraction.
+  The mechanism is now proven and the remaining score sits almost entirely in what a judge can see.
+  It is one static file, read-only, no build step and no server — so it is a *viewer*, not an
+  off-chain component, and §6.1 is untouched. Its simulator was validated against the contract before
+  being trusted: 2,500 in gives 3,745.7 on the page and 3,746.34 on chain, 0.02% apart.
+- **The demo needs exactly two signing accounts**, not five. The counterparty key is derived
+  deterministically from the deployer's, so the operator manages one secret. Every extra funded
+  testnet key is another way for a live demo to fail.
+- **Sharpened the "so it isn't really a queue" answer in the README.** The old framing conceded a
+  "closed roster", which is false: under an always-for-sale lease anyone may enter at any moment at a
+  price the incumbent posted. What is scarce is the SLOT, not the PARTICIPANT. The stronger and more
+  accurate statement is that every market prices queue position, most price it in *time* which is
+  burnt on infrastructure and paid to nobody, and QUEUE prices it in money paid to the LPs you are
+  standing in front of.
+
+### Two things the product was missing, found by trying to use it
+
+- **The pool a deployed hook serves was not readable on chain at all.** `key` is written once by
+  `_afterInitialize`, the contract emits no event of its own, and every field was `internal` — so an
+  integrator had to scan `PoolManager`'s `Initialize` logs and match on the hook address, and
+  anything wanting the token *decimals* to render a balance simply could not. The frontend was
+  hardcoding 18/6 to work around it, which would have shown balances a million times off on any
+  other deployment, silently. Closed with `pool()`, a pure-disclosure view returning the key, the
+  bound flag and the two ticks. `isBound` is returned rather than inferred from a zero key because
+  `Currency.wrap(address(0))` is legal native ETH. **A hook that cannot say what it is attached to
+  is not integrable.** (PITFALLS 5.89, 5.90; mutation M68.)
+- **§5.17 — thin full-range depth, "the sharpest unanswered attack" — now has half an answer, and
+  it is executed rather than argued.** The row always claimed the range was "a reversible design
+  choice, not a v4 constraint"; that was ANALYSIS. `tickLower`/`tickUpper` turn out to appear in
+  exactly two places — the sizing helpers and `modifyLiquidity` — and nowhere in the allocator, which
+  sees only realised deltas. `test_1_11` seeds the identical roster over a **±10% band** and runs
+  both directions against the independent witness: conservation, per-seat composition and INVARIANT
+  C hold to the wei, and the sweep exhausts the head exactly as at full range. **Concentrating the
+  custodied position is a v2 parameter, not a redesign.** Still unbuilt and NOT claimed: out-of-range
+  behaviour, rebalancing, the depth/coverage trade-off. (PITFALLS 5.17, upgraded.)
+
+### A third wrong prediction, worth recording because it was about a CONTROL
+
+The first negative control for `test_1_11` mutated `_allocate` to index by seat id instead of rank
+(M5) and the test stayed **green** — which briefly read as the new test having no teeth. It does not.
+The founding order is the identity permutation, so `_idAt(ord, i) == i` wherever nothing has been
+foreclosed, and that mutation is a genuine no-op in this fixture; M5 is caught by the rank suites,
+which permute the order. The replacement controls discriminate: M60 makes it revert, and forcing the
+range back to full makes the narrowness guard fire naming both numbers. **Before concluding a test is
+weak, check the control can be detected in that fixture at all.** (PITFALLS 5.91.)
+
+### What is left
+
+The broadcast (needs a funded Unichain Sepolia key) and the video. Everything the broadcast will do
+is already executed and asserted against a fork of that chain, so the remaining risk there is
+operational, not mechanical.
+
 
 **Where to look for status, so nobody has to read the log to find it:** `PLAN.md` opens with a
 **BUILD STATUS** dashboard, each completed phase carries a ✅ block at its own §C section, and the
@@ -28,11 +149,17 @@ individual exit criteria inside those sections are ticked one by one. This board
 two ever disagree, PLAN's dashboard and the ticked criteria win, because they sit next to the
 criteria they describe.
 
-**Verified 2026-08-28 (end of the Phase 6 session):** Phases 0-6 are done. `forge test` is
+**Verified 2026-08-29 (end of the Phase 7a session):** `forge test` is **172 passed / 0 failed /
+1 loudly skipped** (`DeployFork.t.sol`, off unless `QUEUE_FORK=true`, because the default suite must
+not need a network). `forge lint src/` CLEAN. `python3 script/mutate.py` runs **67 mutations with
+ZERO survivors**. The six deployment tests also pass **against a live fork of Unichain Sepolia**,
+producing numbers identical to the local run.
+
+*(Superseded — 2026-08-28, end of the Phase 6 session:* Phases 0-6 are done. `forge test` is
 **163/163 green**, `forge lint src/` is CLEAN with zero notes, and `python3 script/mutate.py` runs
 **66 mutations with ZERO survivors**. **The Phase 6 campaign found THREE REAL BUGS in code that had
 already passed 135 tests and 61 mutations**, all reachable through the ordinary public API — see the
-entry below and PITFALLS 5.73-5.80.
+entry below and PITFALLS 5.73-5.80.*)*
 
 *(Superseded — 2026-08-28, end of the Phase 5 session:* Phases 0-5 are done. `forge test` is
 **135/135 green**, `forge lint src/` is CLEAN, `script/mutate.py` runs **61 mutations with ZERO

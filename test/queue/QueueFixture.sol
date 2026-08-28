@@ -143,10 +143,17 @@ abstract contract QueueFixture is BaseTest {
     }
 
     function _open(uint256[] memory bps) internal {
+        _openRange(bps, TickMath.minUsableTick(SPACING), TickMath.maxUsableTick(SPACING));
+    }
+
+    /// @dev The same, over a CHOSEN range. It exists for one claim: `PITFALLS.md` 5.17 calls thin
+    ///      full-range depth "the sharpest unanswered attack" and adds that the range is a
+    ///      reversible design choice rather than a v4 constraint. That second half was ANALYSIS
+    ///      until `Allocator.t.sol`'s range-independence test used this to execute it.
+    function _openRange(uint256[] memory bps, int24 tl, int24 tu) internal {
         k = PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(hook))});
         poolManager.initialize(k, startPrice);
-        (uint256 s0, uint256 s1) =
-            hook.seed(k, TickMath.minUsableTick(SPACING), TickMath.maxUsableTick(SPACING), LIQ, bps);
+        (uint256 s0, uint256 s1) = hook.seed(k, tl, tu, LIQ, bps);
         require(s0 != s1, "LAW 1: fixture is unit-priced");
 
         delete ref0;

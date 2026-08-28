@@ -143,6 +143,99 @@ contract AllocatorTest is QueueFixture {
 
     // ======================================================== 1.9 — oversized swap reverts, loudly
 
+    /// @dev **THE ALLOCATOR DOES NOT READ THE POSITION'S RANGE, AND THAT IS WHY §5.17 IS A
+    ///      PARAMETER CHOICE RATHER THAN A FLAW IN THE MECHANISM.**
+    ///
+    ///      `PITFALLS.md` 5.17 calls thin full-range depth "the sharpest unanswered attack" — one
+    ///      full-range position offers ~1/200th the depth per dollar of a ±1% concentrated one —
+    ///      and adds that the range is "a reversible design choice, not a v4 constraint". That
+    ///      second half was **ANALYSIS**, and the README stated the attack with no answer attached.
+    ///      This executes it.
+    ///
+    ///      Structurally the claim is that `tickLower` / `tickUpper` appear in exactly two places —
+    ///      the liquidity SIZING helpers and the `modifyLiquidity` call — and nowhere in `_allocate`
+    ///      or `Allocation.sol`, which see only the realised deltas of a swap that already happened.
+    ///      Structure is not evidence, so: seed the identical roster over a **±10% band instead of
+    ///      the full range** and run swaps in both directions against the INDEPENDENT witness. If
+    ///      any part of the allocation depended on the range, `_check` diverges seat by seat.
+    ///
+    ///      What this does NOT claim: that a narrow-range QUEUE is a finished product. Out-of-range
+    ///      behaviour, rebalancing and the depth/coverage trade-off are unbuilt. It claims exactly
+    ///      one thing — **the queue is orthogonal to the range** — so concentrating the custodied
+    ///      position is a v2 parameter and not a redesign.
+    function test_1_11_theAllocatorIsIndependentOfThePositionRange() public {
+        // LAW 1 holds here too: a non-unit price and asymmetric decimals, exactly as test_1_3.
+        dec0 = 18;
+        dec1 = 6;
+        startPrice = Constants.SQRT_PRICE_1_4;
+        _deployTokens();
+        _deployHook(0x1006, 3);
+
+        int24 mid = TickMath.getTickAtSqrtPrice(startPrice);
+        // ~±10% in price, snapped to the spacing. Wide enough that the scenario's swaps stay inside
+        // it — a swap that leaves the band measures v4 running out of liquidity, not the allocator.
+        int24 half = 960;
+        int24 tl = ((mid - half) / SPACING) * SPACING;
+        int24 tu = ((mid + half) / SPACING) * SPACING;
+
+        _openRange(_bps(), tl, tu);
+
+        // The position really is narrow. Without this the test could pass over a full-range pool
+        // and prove nothing at all.
+        (, bool isBound, int24 lower, int24 upper) = hook.pool();
+        assertTrue(isBound, "pool did not bind");
+        assertEq(lower, tl, "the harness did not narrow the range");
+        assertEq(upper, tu, "the harness did not narrow the range");
+        assertLt(
+            int256(upper) - int256(lower),
+            int256(TickMath.maxUsableTick(SPACING)) - int256(TickMath.minUsableTick(SPACING)),
+            "the range is not narrower than full range"
+        );
+
+        uint256 s0 = expT0;
+        uint256 s1 = expT1;
+        assertTrue(s0 != 0 && s1 != 0, "nothing was seeded: this test proves nothing");
+
+        // Both directions, several sizes. `_check` asserts conservation AND every seat against the
+        // independently written reference allocator, plus INVARIANT C.
+        // A small swap must land entirely in the head, exactly as it does at full range.
+        _swap(true, s0 / 500);
+        _check("narrow: small 0->1");
+        assertEq(lastTouched, 1, "narrow: a small fill smeared past the head");
+
+        // A sweeping swap must walk. THE CURSOR IS ASSERTED HERE, NOT AT THE END: the reverse swap
+        // below re-funds the head with token1, and `_allocate` then correctly pulls `cursor1` back
+        // to it — so an end-of-test cursor check reads zero and proves nothing. (A first draft
+        // asserted exactly that and failed for this reason, which is the rule about checking a path
+        // was ENTERED rather than checking the state you happen to end in.)
+        _swap(true, s0 / 12);
+        _check("narrow: sweeping 0->1");
+        assertGe(lastTouched, 2, "narrow: the sweep never advanced the cursor");
+        {
+            (, uint256 headA1) = hook.seat(0);
+            (, uint256 c1After) = hook.cursors();
+            assertEq(headA1, 0, "narrow: the sweep did not exhaust the head");
+            assertGt(c1After, 0, "narrow: the head is empty but cursor1 never moved");
+        }
+
+        // The other direction, which re-funds the front and pulls the cursor back.
+        _swap(false, s1 / 50);
+        _check("narrow: medium 1->0");
+        {
+            (, uint256 headA1) = hook.seat(0);
+            (, uint256 c1Back) = hook.cursors();
+            assertGt(headA1, 0, "narrow: the reverse swap did not re-fund the head");
+            assertEq(c1Back, 0, "narrow: cursor1 was left LEADING a funded seat");
+        }
+
+        _swap(true, s0 / 200);
+        _check("narrow: small 0->1 again");
+
+        // And it was not vacuous: the seeded composition actually changed.
+        (uint256 h0, uint256 h1) = hook.seat(0);
+        assertTrue(h0 != 0 || h1 != 0, "narrow: the head seat is empty");
+    }
+
     function test_1_9_swapLargerThanTheQueueReverts() public {
         startPrice = Constants.SQRT_PRICE_1_4;
         _deployTokens();

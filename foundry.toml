@@ -4,7 +4,14 @@ evm_version = "cancun"
 ffi = true
 # `src/` is READ-ONLY, and the test that needs it is the §D.6 review assertion: the shipping
 # source must contain no oracle, collateral or liquidation machinery, checked by reading it.
-fs_permissions = [{access = "read-write", path = ".forge-snapshots/"}, {access = "read", path = "src/"}]
+# `frontend/` is read for the same reason `src/` is: `test/queue/Frontend.t.sol` reads the page's
+# hardcoded call selectors and asserts each against the compiler's own, so a renamed view cannot
+# leave the viewer silently rendering zeros.
+fs_permissions = [
+    {access = "read-write", path = ".forge-snapshots/"},
+    {access = "read", path = "src/"},
+    {access = "read", path = "frontend/"},
+]
 libs = ["lib"]
 out = "out"
 solc_version = "0.8.30"

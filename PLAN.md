@@ -29,10 +29,18 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 | **4** | Harberger rent variant ◀ **SUBMITTABLE** | ✅ **COMPLETE** 2026-08-27 | §D.6 PASS | all 10 criteria; 5 negative controls red; **53 mutations red, 0 survivors** |
 | **5** | Gas + scale | ✅ **COMPLETE** 2026-08-28 | §D.7 PASS | all 6 criteria; the gas table re-measured honestly and §B.9 CORRECTED; 61 mutations red, **0 survivors** |
 | **6** | Adversarial + invariant campaign | ✅ **COMPLETE** 2026-08-28 | §D.8 PASS | all 5 criteria; 11 invariants x 256 runs x 64 depth; **3 REAL BUGS FOUND AND FIXED** (PITFALLS 5.73, 5.74, 5.76/5.77); 66 mutations red, **0 survivors** |
-| 7 | Testnet + demo + video | ⬜ NOT STARTED | — | — |
+| **7** | Testnet + demo + video | 🟨 **IN PROGRESS** 2026-08-29 | §D.9 | Deploy script + demo built and **fork-verified against live Unichain Sepolia**; frontend built; `pool()` disclosure added; §5.17's orthogonality claim PROVEN; **broadcast and video still outstanding** |
 
-**Whole suite as of 2026-08-28: `forge test` → 163 passed, 0 failed. `forge lint src/` → clean.**
-**66 production mutations, zero survivors (`python3 script/mutate.py`).**
+**Whole suite as of 2026-08-29: `forge test` → 172 passed, 0 failed, 1 loudly skipped (the fork
+suite, which needs `QUEUE_FORK=true`). `forge lint src/` → clean.**
+**68 production mutations, zero survivors (`python3 script/mutate.py`).**
+
+**⚠ PHASE 7 FOUND THAT THE DEPLOYMENT PATH HAD NEVER EXECUTED.** After six green phases, every suite
+reached the pool through the TEST-ONLY `QueueHarness.seed()` or through `deployCodeTo` — neither of
+which is how a hook reaches a chain. It also found this document's own hook-flag mask was stale
+(PITFALLS 5.82), two pool-binding tests that were LAW 2 violations one of which could not detect the
+deletion of the guard it claimed to test (5.83), and a viewer whose four hardcoded call selectors
+were three-quarters wrong (5.85). See PITFALLS 5.81–5.88.
 
 **⚠ PHASE 6 FOUND THREE REAL BUGS IN CODE THAT HAD PASSED 135 TESTS AND 61 MUTATIONS.** All three
 were reachable through the ordinary public API and none of them was visible to any correctness test:
@@ -1571,11 +1579,18 @@ code (5.75, 5.79), and corrected the residual claim (5.80).
 **Entry criteria:** Phase 6 exit criteria all true — **or** Phase 3's, if shipping early.
 
 **Build**
-- `script/DeployQueue.s.sol` using `HookMiner` + CREATE2. Templates:
-  `archive/2026-08-26/script/base/BaseScript.sol`,
-  `archive/2026-08-26/script/01_CreatePoolAndAddLiquidity.s.sol`,
-  `archive/2026-08-26/script/03_Swap.s.sol`.
-- Deploy per §H.
+- ✅ `script/QueueDeployBase.sol` — the deploy + demo sequence, written ONCE.
+- ✅ `script/DeployQueue.s.sol` — the broadcast wrapper (`HookMiner` + the canonical CREATE2 proxy).
+- ✅ `test/queue/Deploy.t.sol` — the SAME sequence, asserted beat by beat.
+- ✅ `test/queue/DeployFork.t.sol` — the same five tests against a live Unichain Sepolia fork.
+- ✅ `frontend/index.html` — a static, read-only viewer + simulator.
+- ⬜ Broadcast to Unichain Sepolia (needs a funded key) and the video.
+
+> **THE STRUCTURAL RULE PHASE 7 ADDED: A DEPLOY SCRIPT IS NOT A TESTED PATH.** Six phases were green
+> while not one line of the real deployment sequence had ever run — every suite reached the pool via
+> the test-only `seed()` or via `deployCodeTo` (PITFALLS 5.81). So the sequence does not live in the
+> script. It lives in a base both the script and a test execute, and the only thing that differs is
+> who signs (`_as` / `_stopActing`). Do not move it back.
 - `README.md` — the thesis sentence first (§A.3), then the mechanism, then **the "what QUEUE is NOT"
   table from §A.4, verbatim**, then how to run the tests, then the partner-integrations line
   (**required by Gate 5** — write "No partner integrations." if there are none).
@@ -1591,12 +1606,14 @@ code (5.75, 5.79), and corrected the residual claim (5.80).
 
 | # | Must be true |
 |---|---|
-| 7.1 | All eight binary gates (§A.5) are satisfiable and satisfied |
-| 7.2 | A third party can clone the repo and get a green `forge test` from the README alone |
-| 7.3 | The demo runs against the deployed testnet hook: seed the roster, run a small swap (head fills), run a sweeping swap (queue walks), transfer a seat, show the fills follow the rank |
-| 7.4 | The video is under 5:00 and has a human voice |
-| 7.5 | The README states every open weakness in §A.4 and §6.4 |
-| 7.6 | **The am-AMM distinction is made explicitly**, because a judge will test it (§E.14) |
+| 7.1 | ⬜ All eight binary gates (§A.5) are satisfiable and satisfied — **blocked only on the video** |
+| 7.2 | ✅ A third party can clone the repo and get a green `forge test` from the README alone |
+| 7.3 | 🟨 The demo sequence is built, asserted beat by beat, and **verified against a live Unichain Sepolia fork** (`test_7_5`, `DeployForkTest`). The remaining step is the broadcast itself, which needs a funded key |
+| 7.4 | ⬜ The video is under 5:00 and has a human voice |
+| 7.5 | ✅ The README states every open weakness in §A.4 and §6.4, and `frontend/index.html` repeats them on the page |
+| 7.6 | ✅ **The am-AMM distinction is made explicitly** — README objections table, and a dedicated card on the frontend |
+| 7.7 | ✅ **NEW.** The deployment path is executed by a test, not only by a script (PITFALLS 5.81) |
+| 7.8 | ✅ **NEW.** The viewer's hardcoded call selectors are asserted against the contract (5.85) |
 
 **Gate:** §D.9 — the "how to know you are done" checklist.
 
@@ -2714,11 +2731,22 @@ RPC or faucet is unreliable on the day. Losing reason 2 above is a real cost, so
 
 ## H.3 What to deploy
 
-1. `QueueHook` at a CREATE2 address whose low 14 bits are `0x0840` (§B.2), mined with `HookMiner`
+1. `QueueHook` at a CREATE2 address whose low 14 bits are **`0x18C0`**, mined with `HookMiner`
    (`lib/uniswap-hooks/lib/v4-periphery/src/utils/HookMiner.sol`).
+
+   > **CORRECTED 2026-08-29 (PITFALLS 5.82). This line said `0x0840` — the Phase-1 permission set —
+   > for four phases after `afterInitialize` and `beforeAddLiquidity` were added, while §F.2 above
+   > already recorded `0x18C0`. The document disagreed with itself.** The failure mode is nasty:
+   > `BaseHook` validates the address in ITS constructor, which runs FIRST, so mining for a stale
+   > mask yields an address that reverts at deploy time with nothing attached to say why.
+   > **Never copy a permission mask from a document.** `script/QueueDeployBase.FLAGS` derives it
+   > from the `Hooks.Permissions` flags, and `test_7_1` reconstructs it from the contract's own
+   > `getHookPermissions()` and asserts equality, so the two cannot drift again.
 2. Two test ERC-20s **at a non-unit price and ideally with different decimals** — the fixture rule
    applies to the demo too, and a 1:1 demo pool would be an embarrassing thing for a judge to notice.
-3. Initialize the pool with the hook, seed the roster explicitly (§B.8), fund 3–5 seats.
+3. Initialize the pool with the hook, then fund 3–5 seats **through `addToSeat`**. There is no
+   `seed()` on the shipping contract — it is test-only harness code — and no runtime path creates a
+   seat at all: the roster is minted once, in the constructor (§B.8).
 4. Run the demo sequence on-chain and **keep the transaction hashes** — they go in the README:
    - a small swap → **the head seat fills, nobody else moves**
    - a sweeping swap → **the queue walks; seats exhaust in order**

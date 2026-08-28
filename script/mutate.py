@@ -15,6 +15,16 @@ HOOK = os.path.join(ROOT, "src/queue/QueueHook.sol")
 RENT = os.path.join(ROOT, "src/queue/libraries/Rent.sol")
 ALLOC = os.path.join(ROOT, "src/queue/libraries/Allocation.sol")
 
+# **THE INTERLOCK.** While this harness runs it holds a MUTANT on disk, so any OTHER `forge test`
+# started against the repo compiles mutated production source and reports a failure that has nothing
+# to do with what its author changed. AGENTS.md has warned about this in prose since Phase 6; prose
+# does not stop it, and it has now cost time twice. So the campaign publishes a marker while it is
+# live and `test/queue/Hygiene.t.sol` refuses to run when it sees one — except for the campaign's
+# OWN `forge test` invocations, which are distinguished by `QUEUE_MUTATION_RUN` in their env.
+# It lives under `.forge-snapshots/` because that path already carries write permission in
+# `foundry.toml`, so the guard needs no new filesystem grant to read it.
+MARKER = os.path.join(ROOT, ".forge-snapshots", "MUTATION_IN_PROGRESS")
+
 # (id, file, description, find, replace)
 MUTS = [
     # ---------------------------------------------------------------- rank / the order word
@@ -215,6 +225,17 @@ MUTS = [
     ("M66", HOOK, "the removal sizing divides by a zero span at the tick boundary again (5.77)",
      "        uint256 l1 = (need1 == 0 || p == lo) ? 0 : _liq1(lo, p, need1);",
      "        uint256 l1 = need1 == 0 ? 0 : _liq1(lo, p, need1);"),
+
+    # PHASE 7. The pool-binding guard was covered by TWO tests that could not tell this mutant from
+    # a healthy contract: both used a bare `vm.expectRevert()`, and the mutant still reverts — with
+    # `WrongPool` instead of `AlreadyBound`. LAW 2 exists for exactly this, and the violation
+    # survived six phases. Both assertions now unwrap v4's `WrappedError` and name the selector.
+    ("M67", HOOK, "an already-bound hook can be re-bound to a second pool (LAW 2: the reason matters)",
+     "        if (bound) revert AlreadyBound();",
+     "        // MUT"),
+    ("M68", HOOK, "the pool disclosure lies about being bound, so an integrator reads an unbound hook",
+     "        return (key, bound, tickLower, tickUpper);",
+     "        return (key, false, tickLower, tickUpper);"),
 ]
 
 
@@ -235,9 +256,14 @@ def failing_invariants(out):
 
 def run(ids, campaign=False):
     src = {HOOK: open(HOOK).read(), RENT: open(RENT).read(), ALLOC: open(ALLOC).read()}
+    os.makedirs(os.path.dirname(MARKER), exist_ok=True)
+    with open(MARKER, "w") as f:
+        f.write(f"pid {os.getpid()} started {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     try:
         return _run(src, ids, campaign)
     finally:
+        if os.path.exists(MARKER):
+            os.remove(MARKER)
         # **THIS `finally` IS LOAD-BEARING AND IT WAS PAID FOR.** This harness edits PRODUCTION
         # SOURCE in place. An earlier version restored the file only on the happy path, so a
         # Ctrl-C — or any interrupt from the tool driving it — left a MUTANT on disk, and the next
@@ -261,7 +287,10 @@ def _run(src, ids, campaign):
             print(f"{mid:5} BAD-PATTERN ({original.count(find)} matches)  {desc}", flush=True)
             continue
         open(path, "w").write(original.replace(find, repl))
-        p = subprocess.run(CAMPAIGN if campaign else ["forge", "test"], cwd=ROOT, capture_output=True, text=True)
+        env = dict(os.environ, QUEUE_MUTATION_RUN="1")
+        p = subprocess.run(
+            CAMPAIGN if campaign else ["forge", "test"], cwd=ROOT, capture_output=True, text=True, env=env
+        )
         open(path, "w").write(original)
         out = p.stdout + p.stderr
         if "Compiler run failed" in out or "Error (" in out:
