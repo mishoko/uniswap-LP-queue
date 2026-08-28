@@ -59,8 +59,8 @@ contract QueueHarness is QueueHook {
             uint256 a1 = last ? s1 - acc1 : FullMath.mulDiv(s1, bps[i], 10_000);
             acc0 += a0;
             acc1 += a1;
-            q[i].a0 = a0;
-            q[i].a1 = a1;
+            q[i].a0 = _u128(a0);
+            q[i].a1 = _u128(a1);
         }
     }
 
@@ -71,6 +71,14 @@ contract QueueHarness is QueueHook {
         assembly {
             slot := q.slot
         }
+    }
+
+    /// @dev The Phase 5b narrowing check, exposed so its BOUNDARY can be asserted directly. The
+    ///      production paths that reach it cannot be driven past `2^128` through Uniswap — v4's own
+    ///      deltas are `int128` — so a test that only went through `addToSeat` could never reach
+    ///      the exact edge. This calls the production function, it does not reimplement it.
+    function u128(uint256 x) external pure returns (uint128) {
+        return _u128(x);
     }
 
     /// @dev The Phase 1 solvency oracle. LAW 3 as amended: a raw PoolManager-balance conservation

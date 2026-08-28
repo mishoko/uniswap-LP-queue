@@ -16,7 +16,7 @@ Newest entry first. Never delete an entry — supersede it.
 | 2 | Deposit / withdraw + redemption-dust fix | **COMPLETE 2026-08-27** | **YES** — 59 tests, all §D.4 criteria, 11 Phase 2 mutations red, 0 survivors |
 | 3 | ERC-6909 rank token + transfer | **COMPLETE 2026-08-27** | **YES** — 77 tests, all 10 §D.5 criteria plus 2 added, 29 Phase 3 mutations red, 0 survivors |
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
-| 5 | Gas + scale (O(1) prefix-sum redesign) | NOT STARTED | — |
+| 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | NOT STARTED | — |
 | 7 | Testnet deploy + demo + video | NOT STARTED | — |
 
@@ -28,10 +28,15 @@ individual exit criteria inside those sections are ticked one by one. This board
 two ever disagree, PLAN's dashboard and the ticked criteria win, because they sit next to the
 criteria they describe.
 
-**Verified 2026-08-27 (end of the Phase 4 session):** Phases 0-4 are done. `src/queue/QueueHook.sol`,
+**Verified 2026-08-28 (end of the Phase 5 session):** Phases 0-5 are done. `forge test` is
+**135/135 green**, `forge lint src/` is CLEAN with zero notes, and `python3 script/mutate.py` runs
+**61 mutations with ZERO survivors**. **Every gas number recorded before this session was
+optimistic** and all three affected tests have been re-measured — see the entry below and LAW 4.
+
+*(Superseded — 2026-08-27, end of the Phase 4 session:* Phases 0-4 are done. `src/queue/QueueHook.sol`,
 `src/queue/QueueSeats.sol`, `src/queue/libraries/Allocation.sol` and `src/queue/libraries/Rent.sol`
 are the mechanism. `forge test` is **125/125 green** and `forge lint src/` is CLEAN with zero notes.
-`python3 script/mutate.py` runs 53 mutations against the Phase 4 code and **none survive**.
+`python3 script/mutate.py` runs 53 mutations against the Phase 4 code and **none survive**.*)*
 
 *(Superseded — earlier the same day:* Phases 0-3 are done. `src/queue/QueueHook.sol`,
 `src/queue/QueueSeats.sol` and `src/queue/libraries/Allocation.sol` are the mechanism. `forge test`
@@ -42,6 +47,161 @@ is **77/77 green** and `forge lint src/` is CLEAN with zero notes.*)*
 *(Superseded — 2026-08-26 doc-audit:* every row above is still accurate — **no `src/` directory exists
 at the repo root** and no mechanism code has been written.*)* The two 2026-08-26 sessions below produced
 research and documents only. `PITFALLS.md` §5 is the standing list of what is open.
+
+---
+
+## 2026-08-28 — Phase 5: the gas numbers were all wrong, and the roster bound was never justified
+
+**Status: COMPLETE. 135/135 green, `forge lint src/` clean, 61 mutations with ZERO survivors.**
+
+### The finding that mattered was not a gas number
+
+I set out to reproduce §B.9's table against our hook. The first honest table disagreed with the EVM
+cost model by about 35%, which is the sort of gap you are supposed to chase rather than round off.
+It resolved into something that invalidated every gas figure this project had ever recorded:
+
+> **`vm.cool()` restores cold ACCESS pricing. It does not restore cold WRITE pricing.**
+
+`vm.cool()` resets the EIP-2929 access list, so the next `SLOAD` costs 2,100 again. EIP-2200 meters
+a *write* against the slot's value **at the start of the transaction** — and a slot the current test
+body already wrote is "dirty", so writing it again costs **100 gas** instead of 2,900 or 20,000. A
+suite that deploys, seeds and then measures inside one test body is measuring a contract whose
+entire storage is free to write.
+
+Measured, same swap, same `vm.cool()`:
+
+| | gas |
+|---|---:|
+| roster seeded **in the test body** | 172,263 |
+| roster seeded **in `setUp()`** | 252,966 |
+
+**47% optimistic.** Forge commits `setUp()` as its own transaction, so state built there is metered
+honestly. `vm.snapshotState()` + `vm.revertToState()` is not a substitute — I tested it, identical
+numbers to the wei. **LAW 4 is amended** and PITFALLS 5.66 carries it.
+
+Three existing tests were affected. All three were re-measured from `setUp()`-built state, and the
+optimistic copies were deleted rather than left standing next to the honest ones:
+
+| test | was | now |
+|---|---:|---:|
+| head-only flatness (`Allocator.t.sol`) | — | moved to `test_5_1` |
+| pure-rank transfer (`test_3_16`) | 24,969 | **23,208** (it went *down*: packing more than paid for the correction) |
+| worst-case `addToSeat` (`test_4_44`) | 2,337,576 | **2,610,805** |
+
+### And a second measurement artefact that produced a confident, wrong story
+
+The first table showed a 21,179-gas excess on its depth-1 row. I explained it twice — swap size,
+then `cursor1`'s first non-zero write — and both explanations were plausible and wrong. Running the
+identical pair of measurements **in both orders** settled it: the excess followed the ORDER, not the
+depth. `vm.cool` is per-account and a v4 swap crosses six of them; the first call in a test body
+warms whatever was not named. Comparative series now burn a swap on a roster they never measure
+(PITFALLS 5.67).
+
+### §B.9's table was a different contract, and `MAX_SEATS = 32` was not justified by it
+
+§B.9 quoted **6,753 gas per seat** from the Phase-0 spike — no cursors, no owners, no seat tokens,
+no lease — and chose the roster bound as "comfortably inside a 300k budget". Re-measured against the
+shipping hook:
+
+| | per seat | queue cost at 32 seats | verdict |
+|---|---:|---:|---|
+| §B.9's inherited figure | 6,753 | 216,096 | ✅ (but not this contract) |
+| this hook, measured | **12,254** | **412,028** | ❌ **37% over budget** |
+| after Phase 5b's packing | **8,070** | **278,110** | ✅ 7% to spare |
+
+The bound was never justified by the numbers written next to it. `test_5_3b` now **derives** the
+supportable depth (34 seats) from the measurement and asserts it is at least `MAX_SEATS`, so the
+constant in the source and the number in the document cannot drift apart again.
+
+### The honest table (`test/queue/Gas.t.sol`)
+
+Complete swap transactions through the real router and PoolManager — what a trader pays. State built
+in `setUp()`, all six accounts cooled, a warm-up burned first, and **the swap size held constant
+across the sweep series** so the pool's own work cancels exactly rather than approximately.
+
+| seats | head-only | full sweep |
+|---:|---:|---:|
+| 1 | 117,971 | 145,980 |
+| 2 | 117,989 | 173,950 |
+| 5 | 117,990 | 198,161 |
+| 10 | 117,990 | 238,511 |
+| 25 | 117,991 | 359,562 |
+| 32 | 117,992 | **416,053** |
+
+> `sweep(n) = 137,866 + 8,070·n + 19,900·[n ≥ 2]` — reproduces every row to within **3 gas**.
+
+- **Head-only is flat: a 21-gas spread from 1 to 32 seats.** That is the cursors working.
+- **The slope is exactly 8,070**, identical between every adjacent pair, not a fitted approximation.
+- **The 19,900 one-off** is `cursor1`'s first non-zero write: `0 → 0` costs 2,200 at depth 1,
+  `0 → nonzero` costs 22,100 at every greater depth. Predicted 19,900, measured 19,900.
+
+Against **no hook at all** — same tokens, fee, spacing, price, full-range liquidity, same swap —
+QUEUE costs **117,989 vs 86,820: +31,169 gas, +36%.** Say that number. The defensible claim is not
+"the common case is free"; it is that the overhead is a **constant a trader can price** rather than
+something that grows with book depth.
+
+### 5b — what shipped, and what was measured and rejected
+
+**Shipped: the seat balance pair packed into one slot** (`uint128 a0; uint128 a1;`), with every
+narrowing in the contract routed through one checked `_u128` that reverts rather than wraps. The
+bound cannot bind on anything Uniswap can represent — v4 settles in `int128` deltas, so no position
+it can account for holds `2^127` of either token — but it is checked anyway, because a silent wrap
+would mint balance out of nothing.
+
+| | before | after |
+|---|---:|---:|
+| gas per seat walked | 12,254 | **8,070** (−34%) |
+| full 32-seat sweep | 549,897 | **416,053** (−24%) |
+| head-only swap | 122,130 | **117,990** |
+
+**Rejected, with numbers (PITFALLS 5.70):**
+
+- **Copying the packed seat through memory** to force one `SLOAD`/one `SSTORE`: **worse** — 8,477
+  vs 8,070. The memory round-trip costs more than the compiler's masking.
+- **Hoisting `q.length` into an immutable**, since the roster is fixed at construction: **85 gas per
+  swap, 0.07%** — and it broke `test_3_9`, the control that mints a seat at runtime to prove Phase
+  3's fixed roster is load-bearing. It had created a *second copy of the roster size*, so the
+  control's new seat became invisible to the allocator. A 0.07% optimisation reintroducing the
+  writer/reader class that has been wrong four times on this project. Reverted.
+
+### 5c — the O(1) prefix-sum redesign is NOT SHIPPED
+
+§C.5 gates it behind "only if 5a/5b leave a real problem". They did not: the common case is flat and
+cheap, the full sweep is 1.4% of a 30M block, and the queue-attributable cost is inside the stated
+budget. §B.11's objection is also still unanswered — **the remainder line has no lazy analogue**,
+because a prefix-sum accumulator does not know which seat is "the last one filled" at the moment the
+scalar is updated. Shipping a subtly non-conservative allocator to save gas on a book already inside
+budget would trade the one property QUEUE has for nothing. Criterion 5.6 is satisfied by *not*
+building it, and this paragraph is the record §C.5 asks for.
+
+### Mutation testing found something for the eighth consecutive time
+
+61 mutations, and **M61 survived**: `Allocation.allocate` returned a `nextCursor` computed by its own
+copy of INVARIANT C's "advance only if the seat was exhausted" rule. Every call site discarded it,
+and **no production path calls that function at all** — it exists so the arithmetic can be fuzzed
+without a pool.
+
+So a production library was carrying an untested second copy of the single rule whose failure mode
+is silent theft of rank, in the exact family that has been wrong four times here. The honest answer
+was **(b) delete the line** — the second time on this project after `_demoteToTail`'s early return.
+Testing it would have entrenched the duplicate. The cursor already has an *independent* witness in
+`QueueFixture`, written from §B.6's prose rather than from `src/`, asserted after every swap. M61 now
+targets the hook's real copy and goes red.
+
+The harness also gained `Allocation.sol` as a mutation target, which it never had — including the
+remainder line, the most load-bearing line in the project (M59).
+
+### What I would flag
+
+- **The worst-case `addToSeat` at 2,610,805 gas is the binding constraint on the roster, not the
+  sweep.** `_settleAhead` is O(priced ahead × roster) where the sweep is linear. At 32 seats it is
+  8.7% of a 30M block, which is fine; at 64 it would be roughly four times that. Any future proposal
+  to raise `MAX_SEATS` has to be argued against that number (PITFALLS 5.72).
+- **+36% per swap against a bare pool is a real cost** and should be in the pitch as a number, not
+  as "negligible".
+- Two of my own three explanations for the depth-1 anomaly were wrong before the order-swap test
+  settled it. The pattern is worth remembering: a plausible mechanism that predicts roughly the
+  right magnitude is not evidence.
 
 ---
 

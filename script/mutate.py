@@ -13,6 +13,7 @@ import subprocess, sys, os, shutil, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOK = os.path.join(ROOT, "src/queue/QueueHook.sol")
 RENT = os.path.join(ROOT, "src/queue/libraries/Rent.sol")
+ALLOC = os.path.join(ROOT, "src/queue/libraries/Allocation.sol")
 
 # (id, file, description, find, replace)
 MUTS = [
@@ -160,11 +161,42 @@ MUTS = [
     ("M53", HOOK, "anyone can set anyone's self-price",
      "        if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);\n        _setPrice(seatId, price);",
      "        _setPrice(seatId, price);"),
+
+    # ------------------------------------------------- Phase 5b: the packed seat and its narrowing
+    ("M54", HOOK, "the narrowing to uint128 truncates instead of reverting",
+     "        if (x > type(uint128).max) revert SeatBalanceOverflow(x);\n        // casting",
+     "        // casting"),
+    ("M55", HOOK, "the allocator does not debit the seat it just filled (token1 out)",
+     "                seat_.a1 = _u128(bal - take);", "                seat_.a1 = _u128(bal);"),
+    ("M56", HOOK, "the allocator does not debit the seat it just filled (token0 out)",
+     "                seat_.a0 = _u128(bal - take);", "                seat_.a0 = _u128(bal);"),
+    ("M57", HOOK, "the incoming token is never credited to the seat (token1 out)",
+     "                seat_.a0 = _u128(uint256(seat_.a0) + give);", "                // MUT"),
+    ("M58", HOOK, "the incoming token is never credited to the seat (token0 out)",
+     "                seat_.a1 = _u128(uint256(seat_.a1) + give);", "                // MUT"),
+
+    # ------------------------------------------------------- the remainder line (PLAN B.5 step 4)
+    # Never previously in this harness, and it is the single most load-bearing line in the project:
+    # without it every floored share loses up to a wei and the shortfall compounds forever. It is
+    # ONE implementation shared by the swap allocator and the rent distribution, so one mutation
+    # reaches both.
+    ("M59", ALLOC, "the remainder line is gone: every share is floored and the queue is short",
+     "        give = st.remaining == 0 ? st.amtIn - st.assigned : FullMath.mulDiv(st.amtIn, take, st.amtOut);",
+     "        give = FullMath.mulDiv(st.amtIn, take, st.amtOut);"),
+    ("M60", ALLOC, "the fill takes the whole balance even when less is needed",
+     "        take = bal < st.remaining ? bal : st.remaining;", "        take = bal;"),
+    # M61 was "the array form's cursor advances past a partially filled seat". It SURVIVED, and
+    # the honest answer was to DELETE the line rather than test it: no production path calls
+    # `Allocation.allocate`, every caller discarded its cursor, and the rule already lives in
+    # `_allocate` (covered below) and in the fixture's independent witness. See PITFALLS 5.49 —
+    # an unnecessary line is indistinguishable from an untested one.
+    ("M61", HOOK, "the allocator's cursor advances past a seat that was only partially filled",
+     "            next = take == bal ? i + 1 : i;", "            next = i + 1;"),
 ]
 
 
 def run(ids):
-    src = {HOOK: open(HOOK).read(), RENT: open(RENT).read()}
+    src = {HOOK: open(HOOK).read(), RENT: open(RENT).read(), ALLOC: open(ALLOC).read()}
     results = []
     todo = [m for m in MUTS if not ids or m[0] in ids]
     for mid, path, desc, find, repl in todo:

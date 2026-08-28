@@ -67,16 +67,20 @@ window to what you can be *taken* at.
 an unpriced seat is free for anyone to take. Whoever deploys chooses the first holders, and that
 choice is worth a head start of one transaction.
 
-## Status — Phases 0-4 built and green, 2026-08-27
+## Status — Phases 0-5 built and green, 2026-08-28
 
 ```
-forge test              ->  125 passed, 0 failed
+forge test              ->  135 passed, 0 failed
 forge lint src/         ->  clean, zero notes
-python3 script/mutate.py -> 53 mutations on production code, ZERO survivors
+python3 script/mutate.py -> 61 mutations on production code, ZERO survivors
 ```
 
 Everything runs against **real v4 contracts deployed locally** — a real `PoolManager`,
 `PositionManager` and `V4SwapRouter`. Nothing is mocked; the rounding is v4's own.
+
+**What the gas costs, said plainly.** Every figure is a complete swap transaction through the real
+router, with state built in `setUp()` so writes are metered at real prices — `vm.cool()` alone is
+not enough, and finding that out is what Phase 5 was actually for (`AGENTS.md` LAW 4).
 
 **What is proven.** Front-first allocation is exact to the wei in both tokens, at 1:4, 1:1000 and
 1000:1, at 18/6 and 6/18 decimals. The protocol fee is handled correctly at a maximum fee, with
@@ -102,6 +106,12 @@ seizes. The whole always-for-sale guarantee survives a holder who front-runs the
 - **The roster is bounded at 32 seats,** because a full sweep of a thousand positions cannot be paid
   for — and because the queue's whole order is one 32-byte word. This is a professional venue, not a
   replacement for every Uniswap pool.
+- **A swap through QUEUE costs 36% more than the same swap on a pool with no hook** — measured,
+  117,989 vs 86,820 gas. The overhead is a constant a trader can price: it is **flat from 1 to 32
+  seats**, a spread of 21 gas. Walking the queue costs a further 8,070 gas per seat, so a full
+  32-seat sweep is a 416,053-gas transaction. Depositing into a seat with 31 priced seats ahead of
+  it is the expensive path at 2,610,805 gas, and it is that number — not the sweep — that bounds
+  the roster.
 - **One full-range position is thin.** ~1/200th the depth per dollar of a ±1% concentrated position.
 - **Face value is an upper bound, not a promise.** Each seat redeems to within a gap that grows
   linearly at ~0.15 wei per swap and never compounds.

@@ -103,8 +103,23 @@ Violating any of these produces a green test that proves nothing. All five were 
    *Second corollary:* conservation of the **ledger** and redeemability of the **position** are two
    different claims and need two different assertions. Evidence: `docs/research/protocol-fee/`,
    `PITFALLS.md` §2. This law was paid for the same day it was amended.
-4. **Measure gas with `vm.cool()`.** Forge keeps storage warm inside a test body. A real measurement
-   here was **2.5× optimistic** until cold-access pricing was restored.
+4. **Measure gas with `vm.cool()` — AND BUILD THE STATE IN `setUp()`.** Forge keeps storage warm
+   inside a test body. A real measurement here was **2.5× optimistic** until cold-access pricing was
+   restored.
+   **AMENDED 2026-08-28 — `vm.cool()` ALONE IS NOT ENOUGH, and every gas number this project had
+   recorded was optimistic because of it.** `vm.cool()` resets the EIP-2929 *access list*, so the
+   next `SLOAD` costs 2,100 again. It does **not** reset the value EIP-2200 meters a *write*
+   against: a slot the current test body already wrote is "dirty", and writing it again costs
+   **100 gas** instead of 2,900 or 20,000. A suite that deploys, seeds and then measures inside one
+   test body is therefore measuring a contract whose entire storage is free to write. Measured, same
+   swap, same `vm.cool()`: **172,263 gas seeded in the test body, 252,966 seeded in `setUp()` — 47%
+   optimistic.** Forge commits `setUp()` as its own transaction, so state built there is metered
+   honestly. Snapshot/revert does **not** work as a substitute (tested: identical numbers).
+   Corollary: `vm.cool()` is per-account and a v4 swap crosses six of them. Cooling only the hook
+   leaves the router, Permit2 and both ERC20s warm, and the **first** measurement in a test body
+   then costs ~21,200 gas more than every later one. Warm up on a throwaway fixture before any
+   comparative series, or a measurement's position in the loop looks like a property of the thing
+   being measured. Evidence: `test/queue/Gas.t.sol`, `PITFALLS.md` §5.66–5.67.
 5. **A first-run pass is a reason for suspicion.** Before believing any suite, deliberately break the
    code it covers and confirm the suite goes red.
 
@@ -131,6 +146,7 @@ is real, the swaps are real, the rounding is v4's own.
 | `test/utils/Deployers.sol`, `BaseTest.sol` | Copied from the archive. Deploy the real v4 stack. **Do not edit.** |
 | `test/queue/QueueFixture.sol` | The shared abstract fixture: token deployment at chosen decimals, pool setup, `_swap` (measures PoolManager's own balances net of protocol fees), the **independently written reference allocator**, and the INVARIANT C / INVARIANT F assertions |
 | `test/queue/QueueHarness.sol` | **TEST-ONLY.** Adds `seed()`, `redeemAll()` and `seatArraySlot()`. The first two were once on the production hook and both were real holes. It ADDS entry points and OVERRIDES NOTHING, so the code under test is still exactly production. `seed()` funds the FOUNDING ROSTER; it cannot create a seat, because production cannot |
+| `test/queue/Gas.t.sol` | **EVERY gas measurement in the project, and the only place they belong.** Its rosters are built in `setUp()` because `vm.cool()` alone measures a contract whose storage is free to write (LAW 4 as amended). Three measurements were moved here in Phase 5 from suites that had them wrong |
 | `test/queue/*.t.sol` | The suites |
 
 ### The six kinds of test, and what each is for
@@ -144,8 +160,13 @@ is real, the swaps are real, the rounding is v4's own.
    that passes for an unrelated reason looks like success.
 4. **Fuzz** — the pure arithmetic with no pool at all, plus interleaved deposit/withdraw/swap
    sequences for the invariants.
-5. **Gas regression** — measured with `vm.cool()` (LAW 4). This exists because a defect that made a
-   head-only swap read the entire queue was **invisible to all 31 correctness tests**.
+5. **Gas regression** — measured with `vm.cool()` **and built in `setUp()`** (LAW 4 as amended), all
+   in `test/queue/Gas.t.sol`. This exists because a defect that made a head-only swap read the entire
+   queue was **invisible to all 31 correctness tests**. Two rules it paid for: **hold one variable at
+   a time** (an early draft varied swap size along with roster depth and read the pool's own work as
+   a queue cost), and **before attributing a difference to the thing you varied, swap the order and
+   check it does not follow the order instead** — that is what unmasked a 21,179-gas artefact after
+   two plausible wrong explanations.
 6. **Mutation testing** — on-disk edits to `src/`, run, then reverted. **Not committed.** This is
    the one that finds things, and its results belong in `PROGRESS.md` and `PITFALLS.md`.
 

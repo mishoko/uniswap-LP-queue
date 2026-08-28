@@ -16,7 +16,7 @@ contract AllocationHarness {
     function allocate(uint256[] memory balances, uint256 start, uint256 amtIn, uint256 amtOut)
         external
         pure
-        returns (Allocation.Fill[] memory fills, uint256 nextCursor)
+        returns (Allocation.Fill[] memory fills)
     {
         return Allocation.allocate(balances, start, amtIn, amtOut);
     }
@@ -158,7 +158,7 @@ contract AllocatorTest is QueueFixture {
         uint256 n = hook.seatCount();
         for (uint256 i; i < n; i++) {
             (, uint256 a1) = hook.seat(i);
-            if (a1 != 0) vm.store(address(hook), _seatSlot(i, 1), bytes32(uint256(0)));
+            if (a1 != 0) _zeroSeatToken1(i);
         }
 
         bytes memory reason = _expectSwapRevert(
@@ -175,11 +175,23 @@ contract AllocatorTest is QueueFixture {
         }
     }
 
-    /// @dev Each `Seat` occupies two slots (a0, a1). The BASE slot is read from the contract, not
-    ///      assumed to be 0 — `QueueSeats` declares three mappings ahead of `q`, and a hardcoded
-    ///      layout would have this test poking at an unrelated slot and passing for the wrong reason.
-    function _seatSlot(uint256 i, uint256 which) internal view returns (bytes32) {
-        return bytes32(uint256(keccak256(abi.encode(hook.seatArraySlot()))) + i * 2 + which);
+    /// @dev Force a seat's token1 balance to zero, leaving token0 alone.
+    ///
+    ///      Since Phase 5b a `Seat` is ONE slot — `a0` in the low 128 bits, `a1` in the high ones —
+    ///      where it used to be two. The base slot is read from the contract rather than assumed
+    ///      (PITFALLS: never hardcode a storage layout in a test), but the LAYOUT WITHIN the
+    ///      element still has to be written down somewhere, so the write is READ BACK THROUGH THE
+    ///      CONTRACT'S OWN VIEW. A future repacking makes this fail loudly instead of poking an
+    ///      unrelated slot and letting the swap revert for some other reason — which is exactly how
+    ///      a negative control passes while proving nothing (LAW 2).
+    function _zeroSeatToken1(uint256 i) internal {
+        (uint256 a0,) = hook.seat(i);
+        bytes32 slot = bytes32(uint256(keccak256(abi.encode(hook.seatArraySlot()))) + i);
+        vm.store(address(hook), slot, bytes32(a0));
+
+        (uint256 got0, uint256 got1) = hook.seat(i);
+        assertEq(got0, a0, "seat layout moved: the poke clobbered token0");
+        assertEq(got1, 0, "seat layout moved: token1 was not zeroed, so this test proves nothing");
     }
 
     // ================================================== 1.12 — stateless fuzz of the pure arithmetic
@@ -201,7 +213,7 @@ contract AllocatorTest is QueueFixture {
         uint256 amtOut = bound(rawOut, 1, total);
         uint256 amtIn = bound(rawIn, 1, 1e36);
 
-        (Allocation.Fill[] memory fills,) = harness.allocate(balances, 0, amtIn, amtOut);
+        Allocation.Fill[] memory fills = harness.allocate(balances, 0, amtIn, amtOut);
 
         uint256 sumTake;
         uint256 sumGive;
@@ -260,55 +272,22 @@ contract AllocatorTest is QueueFixture {
         assertEq(k0Final, 0, "cursor0 was not pulled back and now LEADS a funded seat");
     }
 
-    /// @dev The cursors only mean anything if a head-only swap costs the same at a FULL roster as
-    ///      at one seat. The top depth is `MAX_SEATS` — 32 — because Phase 3 made that the largest
-    ///      queue that can exist, so it is the real worst case rather than a hypothetical one.
-    ///      This is a REGRESSION TEST for a defect in the first draft of `_allocate`, which loaded
-    ///      every seat into a memory array before allocating and therefore read the entire roster
-    ///      on every swap — throwing the cursor optimisation away silently while every correctness
-    ///      test stayed green.
+    /// @dev **THE HEAD-ONLY FLATNESS MEASUREMENT MOVED TO `Gas.t.sol` IN PHASE 5, AND IT WAS
+    ///      WRONG HERE.** It built its rosters inside its own test body, so every `SSTORE` the
+    ///      swap performed was priced at 100 gas — a write to a slot the same transaction had
+    ///      already dirtied — instead of the 2,900 or 20,000 a real swap pays. `vm.cool()` does not
+    ///      fix that: it resets the EIP-2929 access list, not the value EIP-2200 meters a write
+    ///      against. Measured, same swap: 172,263 in-body vs 252,966 from `setUp()`.
     ///
-    ///      LAW 4 — measured with `vm.cool()`, because Forge keeps storage warm inside a test body
-    ///      and a warm measurement here was previously 2.5x optimistic.
-    function test_headOnlySwapCostIsFlatInQueueDepth() public {
-        uint256[] memory depths = new uint256[](4);
-        (depths[0], depths[1], depths[2], depths[3]) = (1, 8, 20, 32);
-        uint256[] memory costs = new uint256[](4);
-
-        for (uint256 d; d < depths.length; d++) {
-            dec0 = 18;
-            dec1 = 18;
-            startPrice = Constants.SQRT_PRICE_1_4;
-            _deployTokens();
-            _deployHook(uint160(0x7000 + d), depths[d]);
-
-            uint256 n = depths[d];
-            uint256[] memory bps = new uint256[](n);
-            for (uint256 i; i < n; i++) {
-                bps[i] = 10_000 / n;
-            }
-            bps[n - 1] = 10_000 - (10_000 / n) * (n - 1);
-            _open(bps);
-
-            // A swap small enough to land entirely inside the head seat at every depth.
-            uint256 amt = expT0 / (n * 400);
-            uint256[] memory before = _snapshot(true);
-
-            vm.cool(address(hook));
-            uint256 g = gasleft();
-            this.doSwap(true, amt);
-            costs[d] = g - gasleft();
-
-            emit log_named_uint(string.concat("head-only swap gas @ seats=", vm.toString(n)), costs[d]);
-            // `doSwap` bypasses `_swap`'s bookkeeping on purpose, so count the touched seats here.
-            assertEq(_countChanged(true, before), 1, "fixture drifted: swap was not head-only");
-        }
-
-        // A full 32-seat roster must not cost meaningfully more than a single seat. The old
-        // array-loading draft grew by roughly one cold SLOAD per seat.
-        uint256 growth = costs[3] > costs[0] ? costs[3] - costs[0] : 0;
-        assertLt(growth, 3_000, "head-only swap cost scales with queue depth: the cursor is not working");
-    }
+    ///      It also scaled the swap size by `1/(n·400)` so the fill stayed head-only, which made
+    ///      swap size a second variable, and it measured the first row before the router and the
+    ///      ERC20s were warm, which put 21,179 gas of first-call cost into that row alone. Both
+    ///      artefacts read as depth effects.
+    ///
+    ///      `GasTest.test_5_1_theGasTable` makes the same claim — a head-only swap must cost the
+    ///      same at a full roster as at one seat, or the cursors are not working — from state built
+    ///      in `setUp()`, at a constant swap size, after a warm-up. It measures 118,012 gas flat
+    ///      from 1 to 32 seats, a spread of 3 gas.
 
     /// @dev A swap the queue cannot cover must REVERT, never silently under-fill. Under-filling
     ///      would hand the swapper tokens no seat owns. Mutation testing showed the pool-level test
@@ -338,7 +317,7 @@ contract AllocatorTest is QueueFixture {
         vm.assume(total > 0);
         uint256 amtOut = bound(rawOut, 1, total);
 
-        (Allocation.Fill[] memory fills,) = harness.allocate(balances, 0, 1e18, amtOut);
+        Allocation.Fill[] memory fills = harness.allocate(balances, 0, 1e18, amtOut);
 
         for (uint256 f; f + 1 < fills.length; f++) {
             assertLt(fills[f].index, fills[f + 1].index, "fills are not in rank order");

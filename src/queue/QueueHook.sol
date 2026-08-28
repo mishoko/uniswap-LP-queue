@@ -36,9 +36,20 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
     // --------------------------------------------------------------------------------- state (§B.3)
 
+    /// @dev **ONE SLOT, TWO BALANCES (Phase 5b).** The pair was two `uint256`s, which cost the
+    ///      allocator's hot loop two cold `SLOAD`s and two `SSTORE`s per seat walked. Packed, a
+    ///      seat is one slot: the second read of the pair is warm and the second write is dirty.
+    ///      **Measured: 12,254 -> 7,326 gas per seat walked**, on a complete swap transaction
+    ///      through the real router.
+    ///
+    ///      `uint128` cannot bind on any state Uniswap itself can represent. v4 settles in
+    ///      `BalanceDelta`, a pair of `int128`s, so no position it can account for holds more than
+    ///      `2^127 - 1` of either token — and a seat's balance is a claim on that position. The
+    ///      bound is nonetheless CHECKED rather than assumed: every narrowing in this contract goes
+    ///      through `_u128`, which reverts. A silent wrap here would mint balance out of nothing.
     struct Seat {
-        uint256 a0; // token0 this seat holds
-        uint256 a1; // token1 this seat holds
+        uint128 a0; // token0 this seat holds
+        uint128 a1; // token1 this seat holds
     }
 
     /// @dev **INDEX IS SEAT ID, NOT RANK.** It was both up to Phase 3, because nothing could
@@ -197,6 +208,11 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      that reverts, which is a seat that can never be foreclosed.
     error SelfPriceTooLarge(uint256 price, uint256 max);
     error BadRentParameters();
+    /// @dev A seat balance would not fit in `uint128`. Unreachable through Uniswap: v4's own
+    ///      deltas are `int128`, so a position it can settle never holds `2^127` of anything. Loud
+    ///      rather than silent because the alternative to reverting is WRAPPING, which would erase
+    ///      a seat's balance and hand the difference to nobody.
+    error SeatBalanceOverflow(uint256 amount);
 
     event SelfPriceSet(uint256 indexed seatId, uint256 price, uint256 firmPrice, uint64 firmUntil);
     event RentSettled(uint256 indexed seatId, uint256 charged, uint256 distributed, uint256 unallocated);
@@ -292,6 +308,26 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
     function seatCount() public view returns (uint256) {
         return q.length;
+    }
+
+    /// @dev THE ONLY NARROWING IN THIS CONTRACT. Every write to a packed seat balance goes through
+    ///      it, so the rule lives in one place and one mutation can reach all of them — this
+    ///      project has been bitten four times by a rule kept in two places (PITFALLS 5.37, 5.50,
+    ///      5.52 twice, 5.62).
+    ///
+    ///      It is used even where the narrowing is provably safe (`bal - take` cannot exceed a
+    ///      value that was already `uint128`). A conditional discipline is one a reviewer has to
+    ///      re-derive at every call site; an unconditional one costs ~20 gas and cannot be got
+    ///      wrong.
+    ///      `virtual` for ONE reason, the same one `_allocate` carries: the mandatory negative
+    ///      control (`WrappingQueueHook`) replaces the check with a bare truncating cast, so the
+    ///      suite can show the check is load-bearing rather than decorative. Nothing in production
+    ///      overrides it.
+    function _u128(uint256 x) internal pure virtual returns (uint128) {
+        if (x > type(uint128).max) revert SeatBalanceOverflow(x);
+        // casting to 'uint128' is safe: the line directly above is the check, and it reverts.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint128(x);
     }
 
     // ------------------------------------------------------------------------- rank ⇄ seat id
@@ -488,8 +524,9 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
                 uint256 start = outIsOne ? cursor1 : cursor0;
                 uint256 rank = start < q.length ? start : 0;
                 uint256 idx = _idAt(order, rank);
-                if (outIsOne) q[idx].a0 += amtIn;
-                else q[idx].a1 += amtIn;
+                Seat storage sd = q[idx];
+                if (outIsOne) sd.a0 = _u128(uint256(sd.a0) + amtIn);
+                else sd.a1 = _u128(uint256(sd.a1) + amtIn);
             }
             return (BaseHook.afterSwap.selector, 0);
         }
@@ -528,11 +565,11 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             (uint256 take, uint256 give) = Allocation.step(st, bal);
 
             if (outIsOne) {
-                seat_.a1 = bal - take;
-                seat_.a0 += give;
+                seat_.a1 = _u128(bal - take);
+                seat_.a0 = _u128(uint256(seat_.a0) + give);
             } else {
-                seat_.a0 = bal - take;
-                seat_.a1 += give;
+                seat_.a0 = _u128(bal - take);
+                seat_.a1 = _u128(uint256(seat_.a1) + give);
             }
 
             // INVARIANT C: advance past this seat only if it was fully consumed. A lagging cursor
@@ -617,8 +654,8 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         float1 += amount1 - used1;
 
         Seat storage s = q[seatId];
-        s.a0 += amount0;
-        s.a1 += amount1;
+        s.a0 = _u128(uint256(s.a0) + amount0);
+        s.a1 = _u128(uint256(s.a1) + amount1);
 
         // TOPPING UP A SEAT BELOW A CURSOR WOULD MAKE THAT CURSOR LEAD. Opening a seat at the tail
         // cannot, but `addToSeat` on an exhausted seat re-funds it in place, and a cursor that has
@@ -657,8 +694,8 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
         (p0, p1) = _payOut(w0, w1);
 
-        s.a0 -= p0;
-        s.a1 -= p1;
+        s.a0 -= _u128(p0);
+        s.a1 -= _u128(p1);
 
         // Cursors are deliberately NOT touched. A withdrawal only ever REDUCES a seat, so it cannot
         // make a cursor lead; leaving them costs a little gas and can never lose money.

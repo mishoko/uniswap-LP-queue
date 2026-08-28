@@ -356,8 +356,9 @@ WITHDRAW
 
 - WETH/USDC, ETH at 3,000 USDC, fee tier 0.30%, taken on the input token.
 - Pool custodies **$1,000,000** in five seats: `S1 $20k · S2 $50k · S3 $100k · S4 $300k · S5 $530k`.
-- Price impact is folded into the stated realised average price. Gas figures are the **[MEASURED]**
-  spike numbers.
+- Price impact is folded into the stated realised average price. **Gas figures are [MEASURED] on the
+  SHIPPING hook** (`test/queue/Gas.t.sol`, 2026-08-28) as complete swap transactions through the real
+  router — not the superseded spike numbers, and not an isolated callback. See §8.1.
 
 ### 7.1 Small swap — head only
 
@@ -369,7 +370,7 @@ Trader's realised average price = 3,000 / 0.997 = **3,009 USDC/WETH**.
 | S1 sells | **0.997 WETH** | 0.0199 WETH |
 | S1 earns | **9.00 USDC** | 0.18 USDC |
 | S2–S5 earn | **0.00** | 8.82 USDC combined |
-| Hook gas | **31,874** [MEASURED] | — |
+| Swap gas, complete tx | **117,990** [MEASURED]; +31,169 (+36%) vs the same pool with no hook | — |
 
 S1 is 2% of the pool and earned 100% of the fee: a **50× multiple**, which is not a result, it is an
 identity — the ratio is exactly `total capital / front seat capital`.
@@ -392,7 +393,7 @@ average **2,970**. Gross input 168.86 WETH, of which fee 0.5066 WETH (≈ $1,505
 | S5 | 530,000 | **30,000 (5.7%)** | 10.1010 | 6.0% | 0.03040 |
 | | | **500,000** | **168.3501** | **100%** | **0.50663** |
 
-Entries touched: **5**. Hook gas ≈ **38,976** [MEASURED at 5 entries].
+Seats touched: **5**. Swap gas ≈ **198,161** [MEASURED at a 5-seat roster], of which ~40,000 is the queue walk.
 
 Marked at the post-swap price of 2,940:
 
@@ -456,44 +457,99 @@ problem. Anyone building the Harberger variant must solve this, and it is not so
 
 ### 8.1 Why seats must be limited — the measurement
 
-`test/spike/QueueAllocator.t.sol`, cold-storage pricing restored with `vm.cool()` [MEASURED]:
+> ⚠ **RE-MEASURED 2026-08-28 AGAINST THE SHIPPING HOOK. The table that used to sit here was the
+> Phase-0 *reference spike* — no cursors, no owners, no seat tokens, no Harberger lease — and it was
+> also measured with a technique that understated writes. Both numbers below moved. The spike table
+> is preserved at the bottom of this section so the correction is visible rather than quiet.**
 
-| entries in queue | head-only swap | sweeping swap | entries touched |
+`test/queue/Gas.t.sol` [MEASURED]. Every figure is a **complete swap transaction** through the real
+`V4SwapRouter` against the real `PoolManager` — what a trader actually pays, not an isolated hook
+callback that nobody is ever charged for. State is built in `setUp()` so writes are metered
+honestly, all six accounts on the swap path are cooled, and the sweep series **holds the swap size
+constant** so the pool's own work cancels rather than contaminating the slope.
+
+| seats in queue | head-only swap | full sweep | seats walked |
 |---:|---:|---:|---:|
-| 1 | 31,874 | 11,964 | 1 |
-| 2 | 31,874 | 18,717 | 2 |
-| 5 | 31,874 | 38,976 | 5 |
-| 10 | 31,874 | 65,998 | 9 |
-| 25 | 31,874 | 160,540 | 23 |
-| 50 | 31,874 | **309,106** | 45 |
+| 1 | 117,971 | 145,980 | 1 |
+| 2 | 117,989 | 173,950 | 2 |
+| 5 | 117,990 | 198,161 | 5 |
+| 10 | 117,990 | 238,511 | 10 |
+| 25 | 117,991 | 359,562 | 25 |
+| 32 | 117,992 | **416,053** | 32 |
 
-Two facts:
+> `sweep(n) = 137,866 + 8,070·n + 19,900·[n ≥ 2]` — reproduces every row to within **3 gas**.
 
-1. **The common case is flat and cheap: 31,874 gas, independent of queue depth.** A swap that lands
-   inside the head entry never walks the queue. Most swaps are this.
-2. **A sweeping swap is O(entries touched), slope ~6,753 gas/entry, intercept ~5,200.**
+Three facts, and the third is the one people ask about:
 
-> ⚠ **The first measurement of this was wrong by 2.5×.** Forge keeps storage warm across a test body,
-> so seeding N entries in the same context made every slot warm and understated the 50-entry sweep as
-> 125k instead of 309k. The number above is the corrected one.
+1. **The common case is flat: 117,971 → 117,992 across 1 → 32 seats, a spread of 21 gas.** A swap
+   that lands inside the head seat never walks the queue, and most swaps are this. Flatness is the
+   cursors working, and it is measured, not assumed.
+2. **A sweeping swap is O(seats walked), slope exactly 8,070 gas/seat.** The marginal between every
+   adjacent pair of depths is the same number — this is not a fitted line with a tolerance.
+   The extra 19,900 at depth ≥ 2 is a one-off: `cursor1`'s first non-zero write.
+3. **QUEUE costs 36% more per swap than no hook at all.** Against a pool with the same tokens, fee
+   tier, spacing, price and full-range liquidity and no hook: **117,989 vs 86,820, +31,169 gas**
+   [MEASURED]. Say the number. The claim worth making is not that the common case is free — it is
+   that the overhead is a **constant a trader can price**, rather than something that grows with how
+   deep the book is.
 
-Projected maximum depth, `(budget − 5,200) / 6,753`:
+Maximum depth the budget supports, `(budget − 19,900) / 8,070`:
 
 | assumed hook-callback budget | max queue depth |
 |---|---:|
-| 300k | **~44** |
-| 500k | **~73** |
-| 1M | **~147** |
+| 300k | **34** |
+| 500k | **59** |
+| 1M | **121** |
 
 **These budgets are not protocol constants.** v4 imposes no per-hook gas limit; PoolManager forwards
-the remaining gas. The budget is an economic and UX choice — how much extra gas a swapper will tolerate
-on the worst-case swap. 300k is the conservative row and the one to design against.
+the remaining gas. The budget is an economic and UX choice — how much extra gas a swapper will
+tolerate on the worst-case swap. 300k is the conservative row and the one designed against.
+`MAX_SEATS = 32` sits inside it with ~7% to spare, and `test_5_3b` **derives** the supportable depth
+from the measurement and asserts it covers `MAX_SEATS`, so the constant in the code and the number
+in this document cannot drift apart.
+
+**The binding constraint is not the sweep.** `addToSeat` settles every priced seat ahead of the
+depositor, and each of those settlements pays every funded seat behind it — O(priced ahead × roster),
+which is **quadratic in the roster** where the sweep is linear. Measured at the worst configuration
+the contract can reach: **2,610,805 gas**, 8.7% of a 30M block. That is the cost of closing a
+flash-loan rent grab worth 16× the honest share, it is not free to an attacker (every settlement it
+forces also drains the payer's own meter), and **it is the number any proposal to raise `MAX_SEATS`
+has to be argued against.**
+
+<details>
+<summary>The superseded spike table, kept so the correction is visible</summary>
+
+Measured 2026-08-26 against `test/spike/QueueAllocator.t.sol`, which is the reference spike and
+**not the shipping contract** — it had no cursors, no owners, no seat tokens and no Harberger lease,
+and it measured an isolated allocation loop rather than a swap:
+
+| entries | head-only | sweeping | touched |
+|---:|---:|---:|---:|
+| 1 | 31,874 | 11,964 | 1 |
+| 50 | 31,874 | **309,106** | 45 |
+
+⇒ slope ~6,753 gas/entry, and a 300k budget was projected to support **~44** seats. Re-measured on
+the shipping hook the slope was **12,254** — a full 32-seat sweep cost 412,028 gas of queue work,
+**37% over** the 300k budget the roster bound had been chosen to fit. Packing the seat balance pair
+into one storage slot brought it to 8,070 and 278,110.
+
+> ⚠ **This table was wrong twice, in two different ways, and both are worth knowing.**
+> *First:* Forge keeps storage warm across a test body, so the original 50-entry sweep read 125k
+> instead of 309k — 2.5× optimistic, fixed with `vm.cool()`.
+> *Second, found 2026-08-28:* **`vm.cool()` is not enough.** It restores cold *access* pricing but
+> not cold *write* pricing — a slot the same test body already wrote costs 100 gas to write again
+> instead of 2,900 or 20,000. Every gas number this project had recorded was optimistic; one
+> measured A/B put it at **47%**. State must be built in `setUp()`, which Forge commits as its own
+> transaction. See `AGENTS.md` LAW 4 and `PITFALLS.md` 5.66.
+
+</details>
 
 ### 8.2 What happens if seats are unlimited
 
 **The mechanism breaks under its own success.** A pool that attracts 1,000 LPs has a 1,000-entry
-queue. A swap large enough to sweep it costs `5,200 + 1,000 × 6,753` ≈ **6.76M gas** — well past a
-block on most chains and certainly past what any trader will pay. That swap **cannot execute**.
+queue. A swap large enough to sweep it costs `137,866 + 1,000 × 8,070` ≈ **8.2M gas** — and that is only
+the sweep; the quadratic `addToSeat` path would be far past a block long before that. Well past what
+any trader will pay. That swap **cannot execute**.
 
 Follow the consequence: the pool now has a size above which trades silently fail. That is a
 **size threshold**, and `CLAUDE.md` §5.17 (the Splitting Lemma) says any mechanism keyed on a size is
@@ -518,8 +574,10 @@ nothing. There is no price, and with no price there is no signal — which is th
 
 **For scarcity:**
 
-- Gas forces it. 44 seats at a 300k budget [MEASURED]. There is no version of this at retail scale
-  without the unbuilt O(1) redesign (§9).
+- Gas forces it. **34 seats at a 300k budget [MEASURED 2026-08-28 on the shipping hook]**, and the
+  roster ships at 32. There is no version of this at retail scale without the unbuilt O(1) redesign
+  (§9) — which Phase 5 decided **not** to build, because the O(N) allocator came in inside budget and
+  the redesign's exactness is unproven.
 - **A seat everyone can have is worth nothing.** The price of the seat is the mechanism. Scarcity is
   not a side effect of the gas limit; it is a precondition for there being a price at all, and it
   would be a design choice even if gas were free.
@@ -527,7 +585,7 @@ nothing. There is no price, and with no price there is no signal — which is th
 
 **Against scarcity:**
 
-- **A 44-seat pool is a professional venue, not an open retail pool.** Uniswap's identity is
+- **A 32-seat pool is a professional venue, not an open retail pool.** Uniswap's identity is
   permissionless access. This is a genuine departure and it should be conceded in the first sentence
   of the pitch, not defended later.
 - Small LPs must aggregate into a syndicate vault to get a seat — which **recreates the intermediary**
@@ -578,8 +636,9 @@ stating exactly: **the tight-range JIT queue-jump is structurally unavailable in
 (external adds revert), and the equivalent right must be bought from an incumbent LP. That is
 recapture on one vector, not on MEV generally.
 
-**4. The bounded seat count makes it a professional venue, not an open retail pool.** ~44 seats at a
-300k budget [MEASURED]. Retail participation requires a syndicate wrapper. See §8.4.
+**4. The bounded seat count makes it a professional venue, not an open retail pool.** **34 seats at
+a 300k budget [MEASURED 2026-08-28 on the shipping hook], and the roster ships at 32.** Retail
+participation requires a syndicate wrapper. See §8.4.
 
 **5. The redemption residual is open.** [MEASURED] The queue's face value is **not** exactly
 redeemable. v4 computes a swap's amounts and a position's redeemable value with two different
@@ -742,7 +801,7 @@ is: **QUEUE trades breadth for solving the one open problem the organizers named
 problem #3 has **one** prior attempt in 662 submissions, against **189 dynamic-fee hooks** that all
 fail at exactly this [COUNTED].
 
-**Counter 3 — "44 seats is not a Uniswap pool."**
+**Counter 3 — "32 seats is not a Uniswap pool."**
 Correct. It is a professional venue. See §8.4, where both sides are argued. This should be said in the
 first minute of the pitch, not defended in the last.
 

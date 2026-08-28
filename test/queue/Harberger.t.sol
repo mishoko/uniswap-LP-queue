@@ -142,7 +142,7 @@ contract RentFromSeatCapitalHook is QueueHarness {
         uint256 have = q[seatId].a0;
         bool short_ = due > have;
         uint256 charged = short_ ? have : due;
-        q[seatId].a0 = have - charged;
+        q[seatId].a0 = _u128(have - charged);
         l.lastSettled = uint64(block.timestamp);
         if (short_) {
             l.selfPrice = 0;
@@ -1710,40 +1710,13 @@ contract HarbergerTest is QueueFixture {
         _checkInvariantR("4.43");
     }
 
-    /// @dev `addToSeat` settles every PRICED seat ahead of it, and each of those hands money to
-    ///      every funded seat behind. That is O(priced ahead x roster) and it is the price of closing
-    ///      the flash-loan grab in 4.14. Measured at the worst case the contract can reach — a full
-    ///      32-seat roster, every seat ahead priced and funded — so the number is stated rather than
-    ///      assumed, and so a future change that makes it worse is visible.
-    function test_4_44_theWorstCaseDepositCostIsMeasured() public {
-        _deployHookUnfunded(0x9403, _syntheticRoster(32));
-        _initPool();
-        for (uint256 i; i < 32; i++) {
-            address who = address(uint160(0x5EA700 + i));
-            _addTo(who, i, 10e18, 3e18);
-            _fund(who, 2e18, 0);
-            vm.startPrank(who);
-            hook.setSelfPrice(i, 100e18);
-            hook.fundRent(i, 2e18);
-            vm.stopPrank();
-        }
-        vm.warp(block.timestamp + 30 days);
-
-        address last = address(uint160(0x5EA700 + 31));
-        _fund(last, 5e18, 1e18);
-        vm.cool(address(hook)); // LAW 4: forge keeps storage warm inside a test body
-        vm.prank(last);
-        uint256 g = gasleft();
-        hook.addToSeat(31, 5e18, 1e18);
-        uint256 cost = g - gasleft();
-        emit log_named_uint("   worst-case addToSeat (32 seats, 31 priced ahead)", cost);
-
-        // MEASURED 2026-08-27: 2,337,576 gas. The bound is that number with ~50% headroom, and it
-        // is deliberately a CEILING on a cost rather than an assertion about correctness — its job
-        // is to make a regression loud. It fits a 30M block roughly thirteen times over, and the
-        // configuration that produces it costs an attacker rent paid to the very seat they are
-        // trying to price out.
-        assertLt(cost, 3_500_000, "the worst-case deposit cost has regressed");
-        _checkInvariantR("4.44");
-    }
+    /// @dev **THE WORST-CASE DEPOSIT MEASUREMENT MOVED TO `Gas.t.sol` IN PHASE 5.** It was a pure
+    ///      gas assertion built from state this suite's own test body had written, which prices
+    ///      every `SSTORE` at 100 gas instead of 2,900 or 20,000 — so the 2,337,576 it reported was
+    ///      never a real cost, and the 3,500,000 ceiling guarding it was guarding nothing.
+    ///      `vm.cool()` does not fix that: it resets the EIP-2929 access list, not the value
+    ///      EIP-2200 meters a write against.
+    ///
+    ///      `GasTest.test_5_6` builds the identical configuration in `setUp()` and measures
+    ///      2,610,805, and it carries the same `_checkInvariantR` assertion this one did.
 }

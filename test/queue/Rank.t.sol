@@ -960,12 +960,15 @@ contract RankTest is QueueFixture {
     }
 
     /// @dev Trading PURE RANK is the product's headline operation, and it must not open the
-    ///      position at all. Measured with `vm.cool()` (LAW 4).
+    ///      position at all. The STRUCTURAL half of that claim lives here; the COST half moved to
+    ///      `Gas.t.sol` in Phase 5.
     ///
-    ///      **MUTATION SURVIVOR, 2026-08-27.** The empty-seat early return in `_onSeatTransfer` is
-    ///      invisible to every correctness assertion — `_payOut(0, 0)` is a no-op in every respect
-    ///      except cost. Gas is the only instrument that can see it, which is exactly the situation
-    ///      that hid the whole-roster-scan defect in PITFALLS 5.38.
+    ///      It moved because it was measured wrongly here. This suite builds its roster inside the
+    ///      test body, which makes every subsequent `SSTORE` a 100-gas write to a slot the same
+    ///      transaction already dirtied rather than the 2,900 or 20,000 a real one pays.
+    ///      `vm.cool()` does not correct it — it resets the EIP-2929 access list, not the value
+    ///      EIP-2200 meters a write against. `GasTest.test_5_2` builds the same state in `setUp()`
+    ///      and measures 23,208 gas against a mutant's 29,603.
     function test_3_16_transferringAnEmptySeatDoesNotOpenThePosition() public {
         _three();
         (uint256 a0, uint256 a1) = hook.seat(0);
@@ -975,24 +978,16 @@ contract RankTest is QueueFixture {
         uint128 liqBefore = hook.positionLiquidity();
         (uint256 f0, uint256 f1) = hook.floats();
 
-        vm.cool(address(hook));
+        (uint256 e0, uint256 e1) = hook.seat(0);
+        assertTrue(e0 == 0 && e1 == 0, "the seat is not empty: this test proves nothing");
+
         vm.prank(ALICE);
-        uint256 g = gasleft();
         hook.transfer(DAVE, 0, 1);
-        uint256 cost = g - gasleft();
-        emit log_named_uint("   empty-seat (pure rank) transfer gas", cost);
 
         assertEq(hook.positionLiquidity(), liqBefore, "a pure-rank transfer moved the position");
         (uint256 g0, uint256 g1) = hook.floats();
         assertEq(g0, f0, "a pure-rank transfer moved float0");
         assertEq(g1, f1, "a pure-rank transfer moved float1");
-        // RE-MEASURED 2026-08-27 against Phase 4: 24,969 with the early return, 31,010 without it
-        // (the removed line makes the transfer call `getSlot0` and run the whole dust-policy path
-        // for nothing). Both numbers moved up ~7k from Phase 3's 17,939 / 23,905 because a transfer
-        // now also reads the lease — that is Harberger's real cost on this path, not a regression,
-        // and the DETECTION GAP is unchanged at ~6k. The bound sits between the two: 12% above the
-        // real number, 10% below the mutant. Re-derived from the measurement, not widened until the
-        // test went green.
-        assertLt(cost, 28_000, "a pure-rank transfer is walking the withdrawal path");
+        assertEq(hook.ownerOf(0), DAVE, "the rank did not move");
     }
 }

@@ -57,17 +57,26 @@ library Allocation {
     }
 
     /// @notice Array-driven form of the same allocation, for fuzzing without a pool.
+    ///
+    /// @dev **IT DELIBERATELY DOES NOT REPORT A CURSOR.** It used to, and Phase 5's mutation
+    ///      campaign found that nothing read it: every call site discarded the value, and no
+    ///      production path calls this function at all. That made the cursor rule a SECOND COPY of
+    ///      INVARIANT C — the hook's `_allocate` carries the real one — with all the liability of a
+    ///      rule kept in two places (wrong four times on this project: PITFALLS 5.37, 5.50, 5.52
+    ///      twice) and none of the value. Deleting an unused line is one of the three honest
+    ///      answers to a surviving mutation, and it was the right one here: the cursor already has
+    ///      an INDEPENDENT witness in `QueueFixture`, written from PLAN §B.6's prose rather than
+    ///      from this file, and asserted after every swap by `_checkInvariantC`.
+    ///
     /// @return fills one entry per seat touched, in rank order
-    /// @return nextCursor index of the first seat the fill did not fully exhaust
     function allocate(uint256[] memory balances, uint256 start, uint256 amtIn, uint256 amtOut)
         internal
         pure
-        returns (Fill[] memory fills, uint256 nextCursor)
+        returns (Fill[] memory fills)
     {
         State memory st = init(amtIn, amtOut);
         fills = new Fill[](balances.length);
         uint256 touched;
-        nextCursor = start;
 
         for (uint256 i = start; i < balances.length && st.remaining > 0; i++) {
             uint256 bal = balances[i];
@@ -75,9 +84,6 @@ library Allocation {
             (uint256 take, uint256 give) = step(st, bal);
             fills[touched] = Fill({index: i, take: take, give: give});
             touched++;
-            // INVARIANT C: the cursor may LAG but must never LEAD. It advances past this seat only
-            // if the fill consumed the whole balance; otherwise it stays ON it.
-            nextCursor = take == bal ? i + 1 : i;
         }
 
         if (st.remaining != 0) revert QueueUnderflow(st.remaining);

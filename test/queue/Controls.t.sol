@@ -111,11 +111,11 @@ contract MutantQueueHook is QueueHarness {
 
     function _apply(uint256 i, bool outIsOne, uint256 take, uint256 give) private {
         if (outIsOne) {
-            q[i].a1 -= take;
-            q[i].a0 += give;
+            q[i].a1 -= _u128(take);
+            q[i].a0 = _u128(uint256(q[i].a0) + give);
         } else {
-            q[i].a0 -= take;
-            q[i].a1 += give;
+            q[i].a0 -= _u128(take);
+            q[i].a1 = _u128(uint256(q[i].a1) + give);
         }
     }
 }
