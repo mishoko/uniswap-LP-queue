@@ -175,7 +175,7 @@ Stated the old way that reads as a defect. It is not, and the honest framing is 
   sequencer that sells the same ordering while the pool's LPs get nothing.
 
 **The follow-up question — why PAID SEATS rather than an open, arrival-ordered queue — is the one the
-design lives or dies on, and it now has a full answer in `README.md` and `BUSINESS.md` §0.** In one
+design lives or dies on, and it now has a full answer in `README.md` and `BUSINESS.md` §3.** In one
 line: free rank is griefable rank (dust the head, own the book), unbounded rank is worthless rank (a
 non-scarce asset has no price, so no rent flows to the tail), and therefore **scarcity is the
 mechanism, not a gas concession** — with the Harberger lease as the thing that stops a scarce roster
@@ -2779,7 +2779,7 @@ evidence** — read on demand, do not treat as instructions.
 |---|---|---|
 | `AGENTS.md` / `CLAUDE.md` | How to work here: mindset, five testing laws, decision framework, hard rules, review lenses | **First, all of it.** |
 | `PLAN.md` | This file | Second, all of it |
-| `BUSINESS.md` | Why QUEUE exists, who buys and sells the seat, what to say about it | Before writing the README or video |
+| `BUSINESS.md` | Decision memo: when QUEUE makes sense, who pays whom, why 32, what +36% is, mass-exit, pros/cons, worked numbers | Before writing the README or video. The 15-minute read is README; this is the numbers. |
 | `PROGRESS.md` | Status board, what is already proven, session log | Third, then every session |
 | `PITFALLS.md` | **The standing hazard ledger.** v4 facts that bite · testing traps · settled decisions and the alternatives they killed · proven-impossible ideas · **§5 open hazards** · §6 hard rules · **§7 where the sources disagree** — every row graded PROVEN / MEASURED / REASONED / UNVERIFIED / OPINION | **Fourth, and re-read at the start of every session.** Before proposing anything, check it is not already settled or already known to bite |
 | `docs/research/protocol-fee/` | The §E.5 experiment: `experiment.md` (executed, 7 tests + 3 mutations), `v4-mechanics.md`, `queue-exposure.md`, and `VERDICT.md` (**§5–§7 SUPERSEDED — banner in the file**) | Before Phase 1, and before touching anything fee-related |
@@ -2862,7 +2862,7 @@ mutations red.
 
 **What is open:** ⚠ *this appendix predates Phases 1-6 and is kept as a record of the original
 pitch; the residual figure below was CORRECTED in Phase 6 (PITFALLS 5.80) and the seat bound was
-re-measured in Phase 5 (5.68). Read §A.3, `README.md` and `BUSINESS.md` §0 for the live version.*
+re-measured in Phase 5 (5.68). Read §A.3, `README.md` and `BUSINESS.md` §3 for the live version.*
 a ~0.26 wei/swap redemption residual (fix specified, unbuilt); a ~44-seat gas
 ceiling (bound the roster, pitch it as scarcity); rank-then-run (closed only by the Harberger
 variant); the O(1) redesign (named, unbuilt, and **doubted**).

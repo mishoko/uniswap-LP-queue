@@ -162,6 +162,26 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .lim h4{margin:0 0 5px;font-size:13px;font-weight:600}
 .lim p{margin:0;font-size:12px;color:var(--tx2);line-height:1.5}
 
+/* ---------------------------------------------------------------- buy-in calculator */
+.sim{display:grid;grid-template-columns:1fr 1.15fr;gap:20px;margin-top:26px}
+@media(max-width:900px){.sim{grid-template-columns:1fr}}
+.sim-box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 18px 14px}
+.ctl-row{display:flex;align-items:center;gap:12px;margin-bottom:11px}
+.ctl-row label{min-width:118px;flex:0 0 118px}
+.ctl-row .val{min-width:108px}
+.presets{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px}
+.ascii{font-family:var(--mono);font-size:11.5px;line-height:1.45;white-space:pre;background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;color:var(--tx2)}
+.ascii b{color:var(--tx);font-weight:500}
+.ascii .pos{color:var(--t1)} .ascii .neg{color:var(--bad)} .ascii .hot{color:var(--hot)}
+.tbl{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;margin-top:8px}
+.tbl th{text-align:right;font-weight:500;color:var(--tx3);font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--line)}
+.tbl th:first-child,.tbl td:first-child{text-align:left}
+.tbl td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:right;color:var(--tx2)}
+.tbl tr.me td{color:var(--hot);background:rgba(255,176,32,.05)}
+.tbl .you{color:var(--hot);font-size:10px;letter-spacing:.08em;margin-left:6px}
+
 /* ---------------------------------------------------------------- connect */
 .conn{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:20px}
 input[type=text]{font-family:var(--mono);font-size:12px;padding:8px 11px;border-radius:7px;
@@ -179,7 +199,7 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 <header>
   <div class="wrap head">
     <div class="logo">QUEUE<span>.</span></div>
-    <div class="tagline">A priced fill queue for Uniswap v4 liquidity</div>
+    <div class="tagline">32 paid chairs. Same Uniswap price. The front pays the back to stand there.</div>
     <div class="pill sim" id="modePill">SIMULATED</div>
   </div>
 </header>
@@ -187,13 +207,15 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 <!-- ================================================================ HERO -->
 <section>
   <div class="wrap">
-    <div class="eyebrow">The decision this challenges</div>
-    <h1>Every Uniswap fills <em style="font-style:normal;color:var(--pro)">pro&#8209;rata</em>.<br>Nobody is first. Nobody is paid to be last.</h1>
+    <div class="eyebrow">Not an order book. Not sandwich protection. A 32-desk membership market.</div>
+    <h1>Every Uniswap fills <em style="font-style:normal;color:var(--pro)">everyone a little</em>.<br>Nobody is first. Nobody is paid to be last.</h1>
     <p class="lede">
-      Inside a tick, every LP is filled in proportion to their size — so two LPs with the same capital
-      at the same price hold <strong>identical assets</strong>, and no amount of money buys a better place
-      in line. That was a choice made in 2018, and in four major versions it has never been compared
-      against anything. <strong>QUEUE is the comparison.</strong>
+      A Uniswap pool is a shared cash register: every trade hits every cash provider, in proportion to
+      size. QUEUE puts a <strong>numbered line</strong> inside that register and <strong>sells the
+      numbers</strong>. Seat&nbsp;1 takes every trade, including the small ones. Seat&nbsp;32 is reached
+      only when a trade has already emptied everyone ahead. The customer still swaps through any Uniswap
+      router, at the same price, at the same trading fee. <strong>The line is among the people putting
+      up the money, not among the customers.</strong>
     </p>
 
     <div class="ctl">
@@ -207,8 +229,8 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
     <div class="compare">
       <div class="pool">
         <div class="pool-hd"><h3 style="color:var(--pro)">PRO&#8209;RATA — every Uniswap pool</h3></div>
-        <div class="pool-sub">One swap arrives. Every LP gives up the same <em>fraction</em> of their stock,
-          whether they wanted this trade or not.</div>
+        <div class="pool-sub">One customer trade. Every cash provider gives up the same <em>fraction</em>
+          of their stock, whether they wanted this trade or not.</div>
         <div id="proBars"></div>
         <div class="readout">
           <div>LPs touched<b id="proTouched">5</b></div>
@@ -218,8 +240,8 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 
       <div class="pool q">
         <div class="pool-hd"><h3>QUEUE — front&#8209;first<span class="badge">THIS HOOK</span></h3></div>
-        <div class="pool-sub">The same swap. It is filled <em>front-first</em> down an ordered roster —
-          rank&nbsp;0 is emptied before rank&nbsp;1 is touched at all.</div>
+        <div class="pool-sub">The same customer, the same price. Filled <em>front-first</em> down 32 paid
+          seats — rank&nbsp;0 is emptied before rank&nbsp;1 is touched at all.</div>
         <div id="qBars"></div>
         <div class="readout">
           <div>Seats swept<b id="qTouched">3</b></div>
@@ -267,16 +289,18 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
           An LP-to-LP transfer — no new party is taxed.</div>
       </div>
       <div class="card">
-        <div class="k">Trader overhead</div>
+        <div class="k">Network cost, not a trading fee</div>
         <div class="v">+36%</div>
-        <div class="n">117,989 gas vs 86,820 on a bare pool. Flat from 1 to 32 seats — a 21-gas spread.
-          A constant a trader can price, not a slope.</div>
+        <div class="n">Same price, same 0.30%. Extra compute on a typical swap: 117,989 vs 86,820.
+          Flat from 1 to 32 seats (21-unit spread). On an L2 this is cents, not 36% of the trade.
+          A walk of the whole line is a different number: 416k.</div>
       </div>
       <div class="card">
         <div class="k">Roster</div>
         <div class="v"><span id="seatCount">5</span> / 32</div>
-        <div class="n">The order is one <span class="mono">uint256</span>, one seat id per byte.
-          32 bytes in a word and 32 seats are the same fact.</div>
+        <div class="n">A franchise, not a public pool. Capital per seat is unbounded; only the numbers
+          in line are scarce. 32 is also one computer word (one seat id per byte) — raising it is a
+          redesign, not a setting.</div>
       </div>
     </div>
 
@@ -291,6 +315,102 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
       contract with <strong>no admin, no upgrade path and no off-chain component</strong>, and its
       viewer does not get to be one either.
     </p>
+  </div>
+</section>
+
+<!-- ================================================================ BUY-IN -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">The missing half of the demo — what you pay vs what you earn</div>
+    <h2>Why would anyone buy a seat? Move the sliders.</h2>
+    <p class="lede">
+      This project is <strong>only the queue</strong>. There is no sandwich shield, no new curve, no
+      fee switch. The whole product is: you put up liquidity, you post a price for your place in line,
+      you pay or receive rent, and you take a different slice of the same pool P&amp;L.
+      <strong>If those numbers do not work for a desk, nothing else in the repo matters.</strong>
+    </p>
+    <p class="small">
+      [ESTIMATE] — a closed-form picture of one $1M five-seat book, the same book as the worked
+      examples. τ&nbsp;=&nbsp;10%/year, fee&nbsp;=&nbsp;0.30%. Not a forecast and not a measurement.
+      Small volume is modeled as two-way and recycles the head; a one-way “small” stream empties
+      the head after one inventory. Rent in the contract is weighted by token0 only; here capital
+      stands in for that weight. The contract does not produce these P&amp;L numbers. A market would.
+    </p>
+
+    <div class="presets">
+      <button id="bkQuiet">Quiet two-way — you are the front</button>
+      <button id="bkEvent">Event day — you are the front</button>
+      <button id="bkBackQ">Quiet — you are the back</button>
+      <button id="bkBackE">Event — you are the back</button>
+      <button id="bkUnder">Under-price the head</button>
+      <button class="danger" id="bkOver">Over-price the head</button>
+    </div>
+
+    <div class="sim">
+      <div class="sim-box">
+        <div class="eyebrow" style="margin-bottom:10px">Your seat</div>
+        <div class="ctl-row">
+          <label for="bkRank">Rank</label>
+          <input type="range" id="bkRank" min="0" max="4" value="0" step="1">
+          <div class="val" id="bkRankV">0 — front</div>
+        </div>
+        <div class="ctl-row">
+          <label for="bkCap">Your liquidity</label>
+          <input type="range" id="bkCap" min="5000" max="530000" value="20000" step="5000">
+          <div class="val" id="bkCapV">$20,000</div>
+        </div>
+        <div class="ctl-row">
+          <label for="bkAsk">Your ask</label>
+          <input type="range" id="bkAsk" min="0" max="2000000" value="50000" step="1000">
+          <div class="val" id="bkAskV">$50,000</div>
+        </div>
+        <div class="eyebrow" style="margin:16px 0 10px">The day</div>
+        <div class="ctl-row">
+          <label for="bkSmall">Head-only volume</label>
+          <input type="range" id="bkSmall" min="0" max="1000000" value="300000" step="10000">
+          <div class="val" id="bkSmallV">$300,000</div>
+        </div>
+        <div class="ctl-row">
+          <label for="bkSweep">Sweep volume</label>
+          <input type="range" id="bkSweep" min="0" max="1000000" value="0" step="10000">
+          <div class="val" id="bkSweepV">$0</div>
+        </div>
+        <div class="ctl-row">
+          <label for="bkMs">Markout · small</label>
+          <input type="range" id="bkMs" min="0" max="150" value="0" step="1">
+          <div class="val" id="bkMsV">0 bps</div>
+        </div>
+        <div class="ctl-row">
+          <label for="bkMw">Markout · sweep</label>
+          <input type="range" id="bkMw" min="0" max="200" value="123" step="1">
+          <div class="val" id="bkMwV">123 bps</div>
+        </div>
+        <p class="small" style="margin:12px 0 0">
+          Other seats keep the example book: $20k / $50k / $100k / $300k / $530k, asking
+          $50k / $20k / $8k / $2k / $500, except the seat you occupy, which you overwrite.
+          Rank 4 here is the stand-in for seat 32: last in line, filled only by a sweep.
+        </p>
+      </div>
+
+      <div>
+        <div class="cards" style="margin-top:0">
+          <div class="card hero">
+            <div class="k">Your net this month vs ordinary Uniswap</div>
+            <div class="v" id="bkDelta">+$0</div>
+            <div class="n" id="bkDeltaN">Fee income, markout and rent, if this day repeats for 30 days.</div>
+          </div>
+          <div class="card">
+            <div class="k">Ask vs a rational cap</div>
+            <div class="v" id="bkFair">—</div>
+            <div class="n" id="bkFairN">At τ = 10%/yr, rent = 10% of your ask. Extra annual P&amp;L / 0.10 is the cap above which you are paying to not be taken.</div>
+          </div>
+        </div>
+        <div class="ascii" id="bkAscii"></div>
+        <div class="verdict ok" id="bkVerdict" style="margin-top:14px"></div>
+      </div>
+    </div>
+
+    <table class="tbl" id="bkTable"></table>
   </div>
 </section>
 
@@ -394,13 +514,15 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
         <p>Under toxic flow every holder declares near zero, no rent flows, and the front is free to take.
           That is the mechanism behaving correctly, and it is also the point at which the price signal is
           censored. Unsolved, and not solvable inside this design.</p></div>
-      <div class="lim"><h4>A trader pays 36% more gas</h4>
-        <p>Measured: 117,989 vs 86,820 on an identical pool with no hook. Walking the queue costs a further
-          8,070 per seat, so a full 32-seat sweep is a 416,053-gas transaction.</p></div>
+      <div class="lim"><h4>A typical swap costs 36% more compute — not 36% more of the trade</h4>
+        <p>Measured: 117,989 vs 86,820 on an identical pool with no hook. That is extra network work, not
+          a worse price and not a higher trading fee. It is the same at 1 seat as at 32 (21-unit spread).
+          Walking the whole line is a different bill: +8,070 per seat, 416,053 for all 32. L2 product.</p></div>
       <div class="lim"><h4>32 seats — a professional venue, not every pool</h4>
-        <p>What actually sets the number is <span class="mono">addToSeat</span> at 2,610,805 gas with 31
-          priced seats ahead of it — it is quadratic in the roster — not the sweep, which is linear
-          and comfortable.</p></div>
+        <p>32 desks can empty the book the way any thin market-maker list can pull quotes. They cannot
+          seize it, pause it, or trap withdrawals — taking money out does not destroy the seat.
+          What binds the number is depositing at 2,610,805 compute with 31 priced seats ahead
+          (quadratic), not the walk, which is linear. 100 or 500 is a different program.</p></div>
       <div class="lim"><h4>One full-range position is thin</h4>
         <p>Roughly 1/200th the depth per dollar of a ±1% concentrated position. It is why the sweep above
           needs a large trade to reach rank 2 at all.</p></div>
@@ -423,8 +545,8 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 <footer>
   <div class="wrap">
     <div>QUEUE — a Uniswap v4 hook. MIT. No mainnet deployment. No off-chain components.</div>
-    <div class="kv"><b>forge test</b> 170 passed, 0 failed &nbsp;·&nbsp;
-      <b>mutations</b> 67, zero survivors &nbsp;·&nbsp;
+    <div class="kv"><b>forge test</b> 172 passed, 0 failed &nbsp;·&nbsp;
+      <b>mutations</b> 68, zero survivors &nbsp;·&nbsp;
       <b>invariants</b> 11 × 256 runs × 64 depth</div>
   </div>
 </footer>
@@ -650,6 +772,190 @@ document.getElementById('paidReset').onclick = () => {
                {who:'Hedger C',       amt:'unpriced',    att:false}];
   renderPaid();
 };
+
+/* ================================================================== buy-in calculator [ESTIMATE]
+   Same $1M five-seat book as BUSINESS.md. τ = 10%/year, fee = 0.30%.
+   Small volume is two-way and recycles the head. Sweep walks the book front-first.
+   Rent paid by each priced seat to the seats behind, weighted by capital (the contract
+   weights token0; capital is the stand-in). Last seat's rent, if it asks, sits unallocated. */
+const BK_TAU = 0.10;
+const BK_FEE = 0.003;
+const BK_CAP0 = [20000, 50000, 100000, 300000, 530000];
+const BK_ASK0 = [50000, 20000, 8000, 2000, 500];
+const BK_NAME = ['front','rank 1','rank 2','rank 3','back (≈ seat 32)'];
+const money = n => (n<0?'−':'') + '$' + Math.abs(n).toLocaleString('en-US',{maximumFractionDigits:0});
+const bar = (n, max, w=22) => {
+  const k = max <= 0 ? 0 : Math.round(Math.abs(n) / max * w);
+  return (n>=0 ? '█' : '░').repeat(Math.max(0,k)).padEnd(w,'·');
+};
+
+function setBk(rank, cap, ask, small, sweep, ms, mw){
+  const set = (id, v) => { document.getElementById(id).value = v; };
+  set('bkRank', rank); set('bkCap', cap); set('bkAsk', ask);
+  set('bkSmall', small); set('bkSweep', sweep); set('bkMs', ms); set('bkMw', mw);
+  renderBuyin();
+}
+
+function renderBuyin(){
+  const rank  = +document.getElementById('bkRank').value;
+  const myCap = +document.getElementById('bkCap').value;
+  const myAsk = +document.getElementById('bkAsk').value;
+  const vS    = +document.getElementById('bkSmall').value;
+  const vW    = +document.getElementById('bkSweep').value;
+  const mS    = +document.getElementById('bkMs').value / 10000;
+  const mW    = +document.getElementById('bkMw').value / 10000;
+  const N = 5;
+
+  document.getElementById('bkRankV').textContent  = rank + ' — ' + BK_NAME[rank];
+  document.getElementById('bkCapV').textContent   = money(myCap);
+  document.getElementById('bkAskV').textContent   = money(myAsk);
+  document.getElementById('bkSmallV').textContent = money(vS) + '/day';
+  document.getElementById('bkSweepV').textContent = money(vW) + '/day';
+  document.getElementById('bkMsV').textContent    = document.getElementById('bkMs').value + ' bps';
+  document.getElementById('bkMwV').textContent    = document.getElementById('bkMw').value + ' bps';
+
+  const cap = BK_CAP0.slice();
+  const ask = BK_ASK0.slice();
+  cap[rank] = myCap;
+  ask[rank] = myAsk;
+  const tot = cap.reduce((a,b)=>a+b,0);
+
+  const feeD = Array(N).fill(0);
+  const mkD  = Array(N).fill(0);
+  feeD[0] += BK_FEE * vS;
+  mkD[0]  += mS * vS;
+  let left = vW;
+  for (let i = 0; i < N && left > 0; i++){
+    const take = Math.min(cap[i], left);
+    feeD[i] += BK_FEE * take;
+    mkD[i]  += mW * take;
+    left -= take;
+  }
+
+  const totFee = feeD.reduce((a,b)=>a+b,0);
+  const totMk  = mkD.reduce((a,b)=>a+b,0);
+  const proFee = cap.map(c => totFee * c / tot);
+  const proMk  = cap.map(c => totMk  * c / tot);
+
+  const rentPayY = ask.map(p => BK_TAU * p);
+  const rentRecvY = Array(N).fill(0);
+  for (let i = 0; i < N; i++){
+    const pot = rentPayY[i];
+    let w = 0;
+    for (let j = i+1; j < N; j++) w += cap[j];
+    if (w === 0) continue;
+    for (let j = i+1; j < N; j++) rentRecvY[j] += pot * cap[j] / w;
+  }
+
+  const M = 30;
+  const qNet = feeD.map((f,i) => (f - mkD[i]) * M + (rentRecvY[i] - rentPayY[i]) / 12);
+  const pNet = proFee.map((f,i) => (f - proMk[i]) * M);
+  const extraM = qNet[rank] - pNet[rank];
+  const extraY = extraM * 12;
+  const fair = extraY > 0 ? extraY / BK_TAU : 0;
+
+  const dEl = document.getElementById('bkDelta');
+  if (extraM < 0) dEl.textContent = '−$' + Math.abs(Math.round(extraM)).toLocaleString('en-US');
+  else dEl.textContent = '+$' + Math.round(extraM).toLocaleString('en-US');
+  dEl.style.color = extraM >= 0 ? 'var(--t1)' : 'var(--bad)';
+  document.getElementById('bkDeltaN').textContent =
+    'QUEUE net ' + money(Math.round(qNet[rank])) + ' vs ordinary Uniswap '
+    + money(Math.round(pNet[rank])) + ' this month, if this day repeats.';
+
+  document.getElementById('bkFair').textContent = extraY > 0 ? money(Math.round(fair)) : 'n/a (liability)';
+  const rel = extraY > 0 ? myAsk / fair : Infinity;
+  let fairLine;
+  if (myAsk === 0) fairLine = 'Unpriced. Anyone may take this seat for free — that is the founding-endowment state, and it is the underprice that ends the product.';
+  else if (extraY <= 0) fairLine = 'This seat is a liability on this day. A rational holder asks near zero (and will, which censors the signal). Rent still billed on a positive ask is money given away.';
+  else if (rel < 0.4) fairLine = 'UNDERPRICED. Rent is cheap relative to the extra P&L. A buyer takes you at your number and keeps the residual.';
+  else if (rel > 2.5) fairLine = 'OVERPRICED. You are paying more rent than this day is worth. Anyone who wants the seat waits; you bleed.';
+  else fairLine = 'Inside a rough band of the extra P&L / τ. Not a valuation — a consistency check on this day only.';
+  document.getElementById('bkFairN').textContent = fairLine;
+
+  const maxAbs = Math.max(...qNet.map(Math.abs), 1);
+  let ascii = 'NET THIS MONTH  (QUEUE, this day × 30)\n';
+  for (let i = 0; i < N; i++){
+    const mark = i===rank ? ' ◀ you' : '';
+    const sign = qNet[i]>=0 ? '+' : '−';
+    ascii += (i===rank ? '> ' : '  ')
+      + ('r'+i).padEnd(4)
+      + bar(qNet[i], maxAbs)
+      + '  ' + sign + '$' + Math.abs(Math.round(qNet[i])).toLocaleString('en-US')
+      + mark + '\n';
+  }
+  ascii += '\nYOUR WATERFALL THIS MONTH\n';
+  const rows = [
+    ['Fee income, QUEUE', feeD[rank]*M],
+    ['Fee income, ordinary Uniswap', proFee[rank]*M],
+    ['Markout, QUEUE', -mkD[rank]*M],
+    ['Markout, ordinary Uniswap', -proMk[rank]*M],
+    ['Rent you pay', -rentPayY[rank]/12],
+    ['Rent you receive', rentRecvY[rank]/12],
+  ];
+  for (const [k,v] of rows){
+    const s = v>=0 ? '+' : '−';
+    ascii += k.padEnd(32) + s + '$' + Math.abs(Math.round(v)).toLocaleString('en-US').padStart(8) + '\n';
+  }
+  if (rank === N-1 && rentPayY[rank] > 0){
+    ascii += '\nThe back has nobody behind it. Rent you pay sits unallocated\nuntil a seat behind you holds token0. Last in line should ask ~0.';
+  }
+  document.getElementById('bkAscii').textContent = ascii;
+
+  let verdict;
+  let cls = 'verdict ';
+  if (rank === 0 && extraM > 0 && mS === 0 && vW === 0){
+    verdict = '<strong>Quiet two-way: the front is an asset.</strong> You took ~all of the small-trade fees on a thin capital base. That 50× multiple is an identity, not a result — and the honest other half is that you also took 100% of any adverse selection on those trades. Today markout is set to 0, so it looks like a money printer. Move “markout · small” or press Event day.';
+    cls += 'ok';
+  } else if (rank === 0 && extraM < 0){
+    verdict = '<strong>The front is a liability on this day.</strong> You paid to be first in line for a beating. A rational holder asks near zero; rent stops; the back is no longer paid. That is the Harberger hole, not a bug.';
+    cls += 'bad';
+  } else if (rank === N-1 && extraM > 0){
+    verdict = '<strong>The back is being paid to wait — on this day.</strong> You forwent most fees and avoided most of the sweep. Rent from the front is the coupon that has to keep showing up on quiet days, or this seat is worse than ordinary Uniswap. Set the day to Quiet and watch the sign flip.';
+    cls += 'ok';
+  } else if (rank === N-1 && extraM < 0){
+    verdict = '<strong>The back is worse than ordinary Uniswap today.</strong> Quiet two-way flow: you sat out a profitable day. That is the hole rent has to fill. If the front asks too little, or asks zero, you are an uncompensated subordinated LP.';
+    cls += 'bad';
+  } else {
+    verdict = '<strong>Middle of the book.</strong> You receive some rent from those ahead, pay some to those behind, and you are reached only by trades that emptied the seats in front of you. Move rank to 0 and to 4 — those two are the product; the middle is a blend.';
+    cls += 'ok';
+  }
+  if (myAsk === 0){
+    verdict += ' <strong>Your ask is 0: the seat is free to take.</strong>';
+    cls = 'verdict bad';
+  } else if (extraY > 0 && myAsk < 0.4 * fair){
+    verdict += ' <strong>Underpriced — you will be bought.</strong>';
+  } else if (extraY > 0 && myAsk > 2.5 * fair){
+    verdict += ' <strong>Overpriced — you are paying to keep it.</strong>';
+    cls = 'verdict bad';
+  }
+  const vbox = document.getElementById('bkVerdict');
+  vbox.className = cls;
+  vbox.innerHTML = verdict;
+
+  let th = '<tr><th>Rank</th><th>Liquidity</th><th>Ask</th><th>Fee · mo</th><th>Markout · mo</th><th>Rent pay · mo</th><th>Rent recv · mo</th><th>QUEUE net</th><th>Ordinary</th><th>Δ</th></tr>';
+  let body = '';
+  for (let i = 0; i < N; i++){
+    const me = i===rank ? ' class="me"' : '';
+    const you = i===rank ? ' <span class="you">YOU</span>' : '';
+    body += `<tr${me}><td>r${i}${you}</td><td>${money(cap[i])}</td><td>${money(ask[i])}</td>`
+      + `<td>${money(Math.round(feeD[i]*M))}</td><td>${money(Math.round(-mkD[i]*M))}</td>`
+      + `<td>${money(Math.round(-rentPayY[i]/12))}</td><td>${money(Math.round(rentRecvY[i]/12))}</td>`
+      + `<td>${money(Math.round(qNet[i]))}</td><td>${money(Math.round(pNet[i]))}</td>`
+      + `<td>${money(Math.round(qNet[i]-pNet[i]))}</td></tr>`;
+  }
+  document.getElementById('bkTable').innerHTML = th + body;
+}
+
+['bkRank','bkCap','bkAsk','bkSmall','bkSweep','bkMs','bkMw'].forEach(id => {
+  document.getElementById(id).addEventListener('input', renderBuyin);
+});
+document.getElementById('bkQuiet').onclick  = () => setBk(0, 20000,  50000, 300000,      0, 0, 123);
+document.getElementById('bkEvent').onclick  = () => setBk(0, 20000,  50000,  30000, 300000, 0, 123);
+document.getElementById('bkBackQ').onclick  = () => setBk(4,530000,    500, 300000,      0, 0, 123);
+document.getElementById('bkBackE').onclick  = () => setBk(4,530000,    500,  30000, 300000, 0, 123);
+document.getElementById('bkUnder').onclick  = () => setBk(0, 20000,   2000, 300000,      0, 0, 123);
+document.getElementById('bkOver').onclick   = () => setBk(0, 20000,2000000, 300000,      0, 0, 123);
+renderBuyin();
 
 /* ================================================================== live reads (read-only) */
 const RPC = 'https://sepolia.unichain.org';

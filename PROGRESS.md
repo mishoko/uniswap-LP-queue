@@ -24,6 +24,54 @@ Newest entry first. Never delete an entry — supersede it.
 
 ---
 
+## 2026-08-31b — Pair-wide vs per-tick, one-sided seats, and a buy-in calculator
+
+**Status: no production code changed.** Frontend gained a pay-vs-earn slider; README / BUSINESS.md gained the pair-wide and Uniswap-adoption answers.
+
+Confirmed from the shipping hook, not from memory:
+
+- **One queue for the whole pair.** One full-range position, `tickLower`/`tickUpper` set once to the usable range. Not per tick.
+- **A seat can hold one token.** `addToSeat` allows a zero leg. In range, `_liquidityForAmounts` takes the min of the two legs, so a zero leg mints **0 L**; the tokens go to float. Rent weights **token0 only** — a token1-only seat earns nothing.
+- **Per-tick / per-seat ranges is the Uniswap-shaped v2, and it is not a config change.** `afterSwap` is one `BalanceDelta`. 32 queues × ticks is not a program. Fastest real v2: concentrate the one blob (`test_1_11`).
+- **The project is only the queue.** The buy-in was missing from the demo. `frontend/index.html` now has rank / liquidity / ask / small volume / sweep / two markouts, with Quiet / Event / Back / Under / Over presets, on the same $1M five-seat book. Labeled ESTIMATE. Rank 4 stands in for seat 32.
+- **Sustainable liquidity, not MEV protection.** Claim the half we earn. Do not also claim sandwiches.
+
+Do not treat the calculator as a measurement. It is the identities with a flow mix the viewer types in.
+
+---
+
+## 2026-08-31 — Pitch rewrite: the docs were written for Uniswap engineers, and that was a miss
+
+**Status: no production code changed. README, BUSINESS.md, frontend copy, and PITFALLS §7 pointers. The 172-test / 68-mutation board is untouched.**
+
+### Why this session existed
+
+The owner asked, bluntly, whether QUEUE is well implemented and interesting *from the Uniswap Foundation / hackathon-judge chair*, and whether a business person who barely knows DeFi could tell: what a queue is, why 32, why not 100, whether +36% is 36% more expensive trades, whether 32 desks cancelling bricks the pool, and whether benefits outweigh. The existing README and BUSINESS.md already had the right *answers* and the wrong *audience*. A CFO hears "pro-rata" and "+36% gas" and files this as a cartel with a 36% tax. A Foundation engineer files it as "order book bolted onto an AMM" and stops listening. Both readings were invited by the prose.
+
+### Verdict from the panel (exploit / economic / state / periphery / triager), not from the pitch
+
+- **Accounting quality is Foundation-grade.** Wei-exact front-first fill, conservation against PoolManager, mutation-driven paired-path closures, three live bugs found after 135 tests. This is not an audit.
+- **The object is a 32-desk specialist venue, not a Uniswap pool and not MEV protection.** Theme fit is the weakest joint (PITFALLS 5.16). Do not reuse the spike's 4.33. Honest rubric this session: Original ~4, Unique Execution ~4–4.5, **Impact ~2–2.5**, Functionality ~4, Presentation *was* ~2.5 and is the thing this session changed.
+- **"+36%" is a constant venue tax on a typical (head-only) swap, flat 1→32 seats (21 units).** It is not 36% of the notional, not a trading fee, not a worse price. A full-line walk is a *different* number (416k). Quote both or you are lying.
+- **"32 cancel and the pool dies" is a category error as a revert, and a real thin-book run as economics.** `withdraw` does not destroy the seat. Empty book: swap no-ops, then v4's own price-limit revert, not QUEUE. 32 desks *can* empty the position. The failure mode the pitch should actually fear: they post `selfPrice = 0`, rent stops, the tail's deal becomes irrational.
+- **32 is packing + quadratic `addToSeat` (2.61M) + scarcity.** 100 or 500 is not a bigger QUEUE. It is a different, currently unexecutable program.
+- **Benefits outweigh only** where professional desks want first fill without more capital *and* passive capital is actually paid rent. In a retail aggregator pool: no.
+
+### What changed in the docs
+
+- `README.md` rewritten as the 15-minute read: 90-second version, when-to-use table, NYSE-seat vs DMV-line, ASCII flows, +36% in dollars, mass-exit translation, pros/cons by role, fear table, architecture picture. Leads with business language. **Diverges from `PLAN.md` §A.3's "say the technical sentence first"** — recorded as PITFALLS 7.11, owner-directed, do not silently revert.
+- `BUSINESS.md` rewritten as the decision memo. Verdict-first. Worked examples, 662-row novelty check, gas table, limitations kept and moved to §14. Native-ETH hole named (it was a comment lie). CFO 90-second script is §16.
+- `frontend/index.html` copy only (selectors untouched): hero, +36% card, 32-seat limit, footer counts 172 / 68. Hygiene `test_7_6` is the interlock.
+- `PITFALLS.md` §7.10 marked partly closed; line-number citations into BUSINESS.md replaced with section refs (they rot; 7.5 already said so).
+
+### What this session did **not** do, on purpose
+
+No production code. No video. No broadcast. No concentrated-range v2. No syndicate wrapper. No audit. The mechanism is what it was yesterday; the claim about who it is for is now the one the panel would actually defend.
+
+**Where to look:** `README.md` first, then `BUSINESS.md` §0 and §2. If those two do not tell a non-engineer what to do, the rewrite failed.
+
+---
+
 ## 2026-08-29 — Phase 7a: the deployment path had never run, and four of our own instruments were wrong
 
 **Status: 172 tests green, 68 mutations with zero survivors, six deployment tests passing against a
