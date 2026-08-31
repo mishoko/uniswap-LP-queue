@@ -798,22 +798,23 @@ like a v3 NFT.                                not a program.
 A swap fills in-range seats first             afterSwap hands the hook ONE
 (price priority, already v4).                 delta, not a per-tick tape.
 Among those currently in range,               Reconstructing who contributed
-rank 0 then rank 1 (the QUEUE half).          is reimplementing Pool.sol's
-                                              tick walk inside the hook.
-Depth of a ±1% book, plus a priced            That is a research project,
-intra-tick order.                             not a Phase-7 afternoon.
+rank 0 then rank 1 (the QUEUE half).          was the riskiest assumption.
+Depth of a ±1% book, plus a priced
+intra-tick order.
 ```
 
-`test_1_11` does **not** prove this. It proves the allocator is orthogonal to the range of **the one custodied position**. Fastest v2 that still helps: **concentrate that one blob** (±1% or ±10%). Restores depth, still one queue, still not per-LP ranges. Do that before per-tick.
+**[MEASURED] 2026-08-31.** `test/spike/PriceThenQueue.t.sol`, 8/8. A SwapMath replay over a three-band ladder (below / at / above, non-overlapping) attributes a crossing swap **to the wei** against a real PoolManager: sum of per-band fills = PM delta net of protocol fees; the untouched wing gets 0. A mutant that smears the same delta by L is red — it credits the wing v4 did not touch. There is no tick-crossing hook flag (`Hooks.ALL_HOOK_MASK` is 14 named bits). Verdict and the build order: `docs/research/price-then-queue/SPIKE.md`.
 
-**Do not build 32 queues per tick.** Gas, state, and the afterSwap information-set all say no.
+`test_1_11` still does **not** prove this. It proves the allocator is orthogonal to the range of **the one custodied position**. Fastest v2: **concentrate that one blob**. Next: the 3-band ladder this spike measured. Arbitrary overlapping per-seat ranges are **UNPROVEN** and are v3, not a config change.
+
+**Do not build 32 queues per tick.** Gas, state, and the afterSwap information-set all say no. **Do not take over the swap with `beforeSwapReturnDelta`.** That would be a new AMM. The spike did not.
 
 ### 16.2 Other combinations worth taking seriously
 
 | Idea | Why Uniswap / a judge would care | Honest cost |
 |---|---|---|
 | **Concentrate the one position** | Fixes the 1/200th-depth hole. Allocator already proven orthogonal. | Out-of-range behaviour, rebalancing, unbuilt. Fastest v2. |
-| **Per-seat ranges** (16.1) | Actual missing half of price–time priority. The Foundation-shaped object. | Reconstruct fill from one `BalanceDelta`. New accounting. |
+| **Per-seat ranges** (16.1) | Actual missing half of price–time priority. The Foundation-shaped object. | Ladder walk **MEASURED** to the wei. Overlapping arbitrary ranges UNPROVEN (v3). |
 | **JIT as a one-block head rental** | Already possible: `buySeat` → harvest → re-ask. Makes the free jump *pay the incumbent*. Demo this; do not redesign for it. | Firm window, buyout capital, rank-then-run for an hour. |
 | **ERC-4626 syndicate vault** | Retail can buy a slice of a seat. "Sustainable liquidity" at more than 32 names. | Recreates the intermediary §4 claimed to delete. Unbuilt. Needed if you ever want non-professional LPs. |
 | **Two-sided rank** (bid queue ≠ ask queue) | Fixes the Ratchet: tail currently accumulates at extremes and has no priority to exit. Premise-review B-2. | Two order words, twice the rent story. Not a hackathon add-on. |

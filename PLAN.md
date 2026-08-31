@@ -2784,6 +2784,7 @@ evidence** — read on demand, do not treat as instructions.
 | `PITFALLS.md` | **The standing hazard ledger.** v4 facts that bite · testing traps · settled decisions and the alternatives they killed · proven-impossible ideas · **§5 open hazards** · §6 hard rules · **§7 where the sources disagree** — every row graded PROVEN / MEASURED / REASONED / UNVERIFIED / OPINION | **Fourth, and re-read at the start of every session.** Before proposing anything, check it is not already settled or already known to bite |
 | `docs/research/protocol-fee/` | The §E.5 experiment: `experiment.md` (executed, 7 tests + 3 mutations), `v4-mechanics.md`, `queue-exposure.md`, and `VERDICT.md` (**§5–§7 SUPERSEDED — banner in the file**) | Before Phase 1, and before touching anything fee-related |
 | `docs/research/premise-review/` | `economics.md` + `fairness.md` — the premise review. ANALYSIS, nothing executed. The Fairness Theorem, the leverage identity, and the full-range capital-efficiency attack live here | Before the pitch, the README or the video; before proposing any "fairness mechanism" |
+| `docs/research/price-then-queue/` | Spike: can a SwapMath replay attribute a crossing swap to the wei from one `afterSwap` delta? **Yes, for a non-overlapping 3-band ladder.** 8/8, two mutants red. Overlapping per-seat ranges UNPROVEN. | Before building v2b. Do not skip to arbitrary ranges. |
 | `README.md` | Ships with the submission | Phase 7 |
 
 ## I.2 The essential archive — read these

@@ -24,6 +24,28 @@ Newest entry first. Never delete an entry — supersede it.
 
 ---
 
+## 2026-08-31c — Spike: price-then-queue is an afterSwap walk, not a new AMM
+
+**Status: 8/8 on `test/spike/PriceThenQueue.t.sol`. No production code. Queue suite untouched.**
+
+The shipping hook is misaligned with Uniswap: it throws ticks away to get a queue. The Uniswap-shaped object is **price then queue**. The riskiest assumption was that `afterSwap`'s one `BalanceDelta` is enough to attribute a crossing swap to the bands the price actually walked.
+
+**It holds.** `SwapMath.computeSwapStep` over a three-band ladder (below / at / above, non-overlapping, 1:4, 18/6, real PoolManager) matches PM net input and output **to the wei**. A small swap stays 100% in the middle band. A crossing zeroForOne credits below and not above; the other direction credits above and not below. There is no tick-crossing hook flag (14 named bits).
+
+**Two mutants, both red, identical fixture:**
+- Smear the aggregate by L: conservation holds, composition is a lie (untouched wing gets a share).
+- Dump the whole fill on the middle band: `slot0` has left the band, mutant still reports the wing at 0.
+
+**A false claim the spike caught in itself:** "concentrated is deeper per unit L." Same L is the same instantaneous depth. The 1/200th figure is same *tokens*, not same L. Replaced with `test_spike_sameLCostsMoreTokensAtFullRange`.
+
+**What this is not:** 32 queues per tick; overlapping v3-style ranges; a shipping feature; protocol-fee-on; exact-out; a gas number.
+
+**Build order, do not skip:** v2a concentrate the blob (`test_1_11`) → v2b 3-band ladder (this spike) reusing `Allocation.sol` → v3 arbitrary overlapping ranges (new spike required). Do not take over the swap with `beforeSwapReturnDelta`.
+
+Verdict: `docs/research/price-then-queue/SPIKE.md`.
+
+---
+
 ## 2026-08-31b — Pair-wide vs per-tick, one-sided seats, and a buy-in calculator
 
 **Status: no production code changed.** Frontend gained a pay-vs-earn slider; README / BUSINESS.md gained the pair-wide and Uniswap-adoption answers.
