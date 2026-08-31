@@ -532,19 +532,17 @@ abstract contract QueueFixture is BaseTest {
         uint128 L = hook.positionLiquidity();
         if (L == 0) return (0, 0);
         (uint160 sqrtP,,,) = poolManager.getSlot0(k.toId());
-        int24 lower = TickMath.minUsableTick(SPACING);
-        int24 upper = TickMath.maxUsableTick(SPACING);
+        // THE POSITION'S OWN TICKS, not the usable floor. Hardcoding min/max usable made this
+        // instrument report a full-range valuation of a concentrated L, which is how INVARIANT F
+        // "broke" the moment `_afterInitialize` started shipping a ±10% band (same L, ~20x the
+        // token value on paper). PITFALLS 5.75 again: the instrument, not the hook.
+        (,, int24 lower, int24 upper) = hook.pool();
         uint160 lo = TickMath.getSqrtPriceAtTick(lower);
         uint160 hi = TickMath.getSqrtPriceAtTick(upper);
 
-        // **CLAMP THE PRICE INTO THE RANGE FIRST, AND "FULL RANGE" DOES NOT MAKE THAT UNNECESSARY.**
-        // `minUsableTick(60)` is -887220 and `MIN_TICK` is -887272, so the pool's price can and does
-        // travel BELOW a "full-range" position's lower tick — a Phase 6 campaign drove it to
-        // `MIN_SQRT_PRICE + 1`. Out of range the position is entirely one token and its value is
-        // `getAmount0Delta(lo, hi, L)`, not `getAmount0Delta(sqrtP, hi, L)`; the unclamped form
-        // OVERSTATED the position by 8.28e18 wei against a real `redeemAll()` and made INVARIANT F
-        // look broken when the ledger was correct to 12 wei. The instrument was wrong, not the hook
-        // (PITFALLS 5.75 — before believing any measurement, ask what the fixture cannot represent).
+        // **CLAMP THE PRICE INTO THE RANGE FIRST.** Out of range the position is entirely one
+        // token. The unclamped form OVERSTATED a full-range position by 8.28e18 wei against a
+        // real `redeemAll()` (PITFALLS 5.75). A concentrated band can be left even more easily.
         uint160 p = sqrtP < lo ? lo : (sqrtP > hi ? hi : sqrtP);
 
         // Release rounds DOWN, matching what `modifyLiquidity(-L)` would actually hand back.

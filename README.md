@@ -34,7 +34,7 @@ The customer on the other side of the pool does not see any of this. They trade 
 
 | Question | Honest answer |
 |---|---|
-| Is it well built? | **Yes, as accounting.** 172 tests, 68 mutations with zero survivors, three real bugs found in code that had already passed 135 tests — all fixed. This is not an audit. |
+| Is it well built? | **Yes, as accounting.** 164 tests, 69 mutations with zero survivors, three real bugs found in code that had already passed 135 tests — all fixed. This is not an audit. |
 | Is it interesting? | **Yes, as a missing product.** Uniswap has run one fill rule for seven years. Nobody has been able to price "being first." QUEUE is the first pool where that number exists on-chain. 0 of 662 prior hook submissions sold an ordering over LP capital. |
 | Does it make Uniswap better for ordinary users? | **No.** Same price, same fee, extra network cost, thinner book. The trader is not the customer of this product. |
 | Does it stop MEV / sandwiches? | **No, and claiming it does is mis-selling.** The hackathon theme is two halves. QUEUE can claim **sustainable liquidity** (the right desks can choose to stay). It cannot claim MEV protection. |
@@ -104,17 +104,26 @@ So: **32 paid seats, always for sale.** Scarcity is the product. The always-for-
 
 ---
 
-## What ships today: one queue for the whole pair
+## What a Uniswap engineer is looking at
 
-Yes. **The entire queue is for the entire pair**, not per tick. One pool, one full-range position, one line of ≤32 seats. A trade at any price walks that same line. Uniswap already has price priority *across* ticks; this version throws the ticks away to get a simple queue. That is why depth is ~1/200th of a tight book, and why Uniswap will not adopt *this* blob as a primitive.
+Uniswap already orders by **price**: nearer ticks fill first. Inside a tick, everyone is pro-rata. QUEUE is the missing half: a paid, ordered queue **among LPs at the same price**. Same curve. Same router. Same ticks. The hook holds **one** concentrated Uniswap position — a ±10% band around the start price, the object every v3 LP already knows — and the 32 seats share that band. Seats are not NFTs and they do not pick their own ranges. That would be a second AMM.
 
-**Per-tick seats would be more interesting for Uniswap** — that is the actual missing half of price–time priority — and it is a different product, not a setting. The honest version is *per-seat ranges*: each of 32 seats picks a tick band like a v3 NFT; fill is price-first, then rank among whoever is in range. `afterSwap` gives the hook one number, not a per-tick tape, so this is a research project. The fastest step that is *not* that: concentrate the one blob. The allocator already does not care about its range.
+```
+Uniswap:  price first                    QUEUE:  price first, THEN queue
+          (ticks, unchanged)                     inside the same band
 
-A seat **can hold only one of the two tokens**. After a fill, the front usually does. Depositing both in the current ratio is how you add *depth*. Depositing one, on this full-range version, typically mints **zero** liquidity — the tokens sit as a claim in the float. Rent is paid in token0, weighted by token0: a seat holding only token1 earns **$0** of the coupon. That matters.
+          LP A ─┐                                seat 1  ← filled first
+          LP B ─┼─ same tick, pro-rata           seat 2
+          LP C ─┘                                seat 3  ← filled last
+```
 
-This project is **only the queue**. There is no sandwich shield and no new curve. The buy-in *is* the product: liquidity in, ask posted, fees ± markout ± rent. If those numbers do not work for a desk, nothing else in the repo matters.
+A swap that walks out of the band stops, the way any concentrated LP does. That is Uniswap, not a bug.
 
-**Move the sliders:** open [`frontend/index.html`](frontend/index.html) and press *Quiet two-way — you are the front*, then *Event day*, then *Quiet — you are the back*. Rank 4 in that five-seat book is the stand-in for seat 32. Worked numbers and the over/under-price picture: [`BUSINESS.md`](BUSINESS.md) §11.4. What would make Uniswap actually want this: §16.
+A seat **can hold only one of the two tokens**. After a fill, the front usually does. Depositing both in the current ratio is how you add *depth*. Depositing one typically mints **zero** liquidity — the tokens sit as a claim in the float. Rent is paid in token0, weighted by token0.
+
+This project is **only the queue**. There is no sandwich shield and no new curve. The buy-in *is* the product: liquidity in, ask posted, fees ± markout ± rent.
+
+**Move the sliders:** open [`frontend/index.html`](frontend/index.html). Worked numbers: [`BUSINESS.md`](BUSINESS.md) §11.4. The measured walk that would let seats sit in *different* bands later: [`docs/research/price-then-queue/SPIKE.md`](docs/research/price-then-queue/SPIKE.md). Not shipping.
 
 ---
 
@@ -445,7 +454,7 @@ The longer form of every row, with numbers, is in [`BUSINESS.md`](BUSINESS.md).
 ```
 forge test               ->  172 passed, 0 failed, 1 skipped   (16 suites)
 forge lint src/          ->  clean, zero notes
-python3 script/mutate.py ->  68 mutations on production code, ZERO survivors
+python3 script/mutate.py ->  69 mutations on production code, ZERO survivors (M69 included)
 ```
 
 The skipped suite is `DeployFork.t.sol`, off unless you ask, because the default suite must not need a network. It skips **loudly**:

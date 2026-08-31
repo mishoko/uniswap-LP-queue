@@ -8,6 +8,7 @@ import {QueueSeats} from "../../src/queue/QueueSeats.sol";
 import {Allocation} from "../../src/queue/libraries/Allocation.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
@@ -813,6 +814,12 @@ contract RankTest is QueueFixture {
         require(address(atk) == atkAddr, "attacker address prediction failed");
 
         _initPool();
+        // This control was written against a full-range blob: almost all of BOB's token1
+        // has to land in the float so the reentrant withdrawal needs no second unlock.
+        // The shipping band would dump the attacker on-ratio into a tight range and the
+        // signed measurement no longer goes negative. The product is the band; this is
+        // the old fixture, restored only here.
+        hook.forceRange(TickMath.minUsableTick(SPACING), TickMath.maxUsableTick(SPACING));
 
         evil.mint(address(atk), 40e18);
         plain.mint(address(atk), 10e18);

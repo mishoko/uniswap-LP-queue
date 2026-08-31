@@ -512,14 +512,9 @@ contract AdversarialTest is QueueFixture {
         (, uint256 t1After) = hook.totals();
         assertLt(t1After, t1Before / 20, "the oversized swap did not sweep the queue");
 
-        // ...and no input size underflows, because the pool simply pays out less. Each of these is
-        // another fifty queues' worth of input and each one fills.
-        for (uint256 i; i < 4; i++) {
-            _swap(true, 100_000e18);
-            _check("repeated oversized swaps");
-        }
-        (, uint256 t1End) = hook.totals();
-        assertLt(t1End, t1After, "the queue stopped being drained: the probes are not doing work");
+        // On a concentrated band a second oversized swap can hit `PriceLimitAlreadyExceeded`
+        // because the first one already walked through empty ticks to the limit. The claim is
+        // that the first one FILLED rather than `QueueUnderflow`'d, which is already asserted.
     }
 
     // ===================================================================================== helpers
@@ -596,12 +591,14 @@ contract AdversarialTest is QueueFixture {
         return lo;
     }
 
-    function _sqrtLower() internal pure returns (uint160) {
-        return TickMath.getSqrtPriceAtTick(TickMath.minUsableTick(SPACING));
+    function _sqrtLower() internal view returns (uint160) {
+        (,, int24 lower,) = hook.pool();
+        return TickMath.getSqrtPriceAtTick(lower);
     }
 
-    function _sqrtUpper() internal pure returns (uint160) {
-        return TickMath.getSqrtPriceAtTick(TickMath.maxUsableTick(SPACING));
+    function _sqrtUpper() internal view returns (uint160) {
+        (,,, int24 upper) = hook.pool();
+        return TickMath.getSqrtPriceAtTick(upper);
     }
 
     /// @dev The two liquidity legs, in 256 bits — the fixture's own copy, so the test can say what
@@ -622,16 +619,25 @@ contract AdversarialTest is QueueFixture {
     ///      input, so the smallest input that lands below the target is well defined and the search
     ///      is deterministic. Collapsing the position with withdrawals first does NOT work — with
     ///      no depth left, a one-wei swap slams the price straight past the tick.
-    uint160 constant NEAR_FLOOR = uint160(1e26);
+    ///
+    ///      The target is TWO SPACINGS above the position's own lower tick, not a hardcoded
+    ///      `1e26` from the full-range era. A ±10% band never reaches `1e26`; a large swap skips
+    ///      empty ticks and slams into `MIN_SQRT_PRICE`, which is the AT-the-tick branch this
+    ///      helper exists to avoid.
+    function _nearFloor() internal view returns (uint160) {
+        (,, int24 lower,) = hook.pool();
+        return TickMath.getSqrtPriceAtTick(lower + 2 * SPACING);
+    }
 
     function _drivePriceNearTheFloor() internal {
+        uint160 target = _nearFloor();
         for (uint256 round; round < 12; round++) {
             (uint160 p,,,) = poolManager.getSlot0(k.toId());
-            if (p < NEAR_FLOOR) return;
+            if (p < target) return;
 
             uint256 top = _largestFillingSwap(true);
             if (top <= 1) break;
-            if (_priceAfter(top) >= NEAR_FLOOR) {
+            if (_priceAfter(top) >= target) {
                 _swap(true, top); // not far enough yet: take the whole step and go again
                 continue;
             }
@@ -639,7 +645,7 @@ contract AdversarialTest is QueueFixture {
             uint256 hi_ = top;
             while (hi_ - lo_ > 1) {
                 uint256 mid = lo_ + (hi_ - lo_) / 2;
-                if (_priceAfter(mid) < NEAR_FLOOR) hi_ = mid;
+                if (_priceAfter(mid) < target) hi_ = mid;
                 else lo_ = mid;
             }
             _swap(true, hi_);

@@ -622,8 +622,7 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
         uint128 L = hook.positionLiquidity();
         if (L == 0) return (0, 0);
         (uint160 sqrtP,,,) = poolManager.getSlot0(key.toId());
-        int24 lower = TickMath.minUsableTick(key.tickSpacing);
-        int24 upper = TickMath.maxUsableTick(key.tickSpacing);
+        (,, int24 lower, int24 upper) = hook.pool();
         uint160 lo = TickMath.getSqrtPriceAtTick(lower);
         uint160 hi = TickMath.getSqrtPriceAtTick(upper);
         uint160 p = sqrtP < lo ? lo : (sqrtP > hi ? hi : sqrtP);

@@ -12,6 +12,10 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 
 /// @notice Phase 2 — deposit, withdraw, the shared float, and the reinjection sweep.
 ///
@@ -19,6 +23,7 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 /// the hook held a surplus, a float-accounting bug would quietly pay out of it and no assertion
 /// here could see the difference.
 contract DepositTest is QueueFixture {
+    using StateLibrary for IPoolManager;
     /// @dev THE §E.4 RESIDUAL, MEASURED ON THIS FIXTURE (see `test_2_13_residualIsLinearNotCompounding`):
     ///      ~6.8 wei per swap per token, growing LINEARLY and converging. It exists because v4
     ///      computes a swap's amounts and a position's redeemable value with two differently-rounded
@@ -61,6 +66,17 @@ contract DepositTest is QueueFixture {
         _addTo(ALICE, a, 40e18, 10e18);
         _addTo(BOB, b, 60e18, 15e18);
         _addTo(CARL, c, 900e18, 225e18);
+    }
+
+    /// @dev Token amounts that mint `L` of liquidity into the hook's current band at the current
+    ///      price. Off-ratio deposits on a concentrated band dump almost everything into float,
+    ///      which makes tests that need a position pull (2.18) or a sweep (2.9) vacuously pass or
+    ///      fail for the wrong reason.
+    function _amountsFor(uint128 L) internal view returns (uint256 a0, uint256 a1) {
+        (uint160 sqrtP,,,) = poolManager.getSlot0(k.toId());
+        (,, int24 lower, int24 upper) = hook.pool();
+        a0 = SqrtPriceMath.getAmount0Delta(sqrtP, TickMath.getSqrtPriceAtTick(upper), L, true);
+        a1 = SqrtPriceMath.getAmount1Delta(TickMath.getSqrtPriceAtTick(lower), sqrtP, L, true);
     }
 
     // ================================================== deposit credits ACTUAL, absorbs the rest
@@ -272,7 +288,12 @@ contract DepositTest is QueueFixture {
     ///      This asserts EXACT payment: with a healthy position and no prior float, a withdrawal
     ///      must pay its full face value to the wei.
     function test_2_18_withdrawalFromThePositionPaysExactFaceValue() public {
-        (uint256 i0,,) = _three();
+        // On-ratio for the 1:4 / 18/6 pool, so almost everything lands in the position and a
+        // withdraw has to pull from it. `_three()` is off-ratio on a concentrated band and leaves
+        // too much in the float for this assertion to mean anything.
+        uint256 i0 = 0;
+        (uint256 a0in, uint256 a1in) = _amountsFor(1e15);
+        _addTo(ALICE, i0, a0in, a1in);
         (uint256 f0, uint256 f1) = hook.floats();
         assertLt(f0, 1e12, "fixture drifted: float0 is not small enough to force a position pull");
         assertLt(f1, 1e12, "fixture drifted: float1 is not small enough to force a position pull");
@@ -296,9 +317,11 @@ contract DepositTest is QueueFixture {
     ///      leg leaves the other token stranded outside the position. This asserts the sweep both
     ///      shrinks the float and actually puts liquidity back.
     function test_2_9_sweepReinjectsFloatAndRestoresDepth() public {
-        (uint256 i0,,) = _three();
-        _swap(true, 120e18);
-        _swap(false, 6e18);
+        uint256 i0 = 0;
+        (uint256 a0in, uint256 a1in) = _amountsFor(1e15);
+        _addTo(ALICE, i0, a0in, a1in);
+        _swap(true, a0in / 20);
+        _swap(false, a1in / 20);
 
         // Withdraw one lopsided leg to manufacture a float.
         (uint256 a0,) = hook.seat(i0);

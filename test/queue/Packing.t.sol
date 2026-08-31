@@ -7,6 +7,7 @@ import {QueueHook} from "../../src/queue/QueueHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @dev NEGATIVE CONTROL for the Phase 5b narrowing. Exactly one line differs from production: the
 ///      checked cast becomes a bare truncating one, which is what "pack it into a uint128" looks
@@ -62,6 +63,7 @@ contract PackingTest is QueueFixture {
         address[] memory roster = _roster(ALICE, BOB, CARL);
         _deployHookUnfunded(nonce, roster);
         _initPool();
+        hook.forceRange(TickMath.minUsableTick(SPACING), TickMath.maxUsableTick(SPACING));
         _addTo(ALICE, 0, 40e18, 10e18);
         _addTo(BOB, 1, 60e18, 15e18);
         _addTo(CARL, 2, 900e18, 225e18);
@@ -88,6 +90,8 @@ contract PackingTest is QueueFixture {
             uint256 amt = bound(uint256(raw[i]), pool / 5_000, pool / 4);
             if (amt == 0) continue;
 
+            // A concentrated band can be walked off by a swap that was in-budget on the old
+            // full-range blob. Skip those; the differential is about the ledger, not the limit.
             _swap(zeroForOne, amt);
             _check(string.concat("packed vs uint256 reference, swap ", vm.toString(i)));
             swaps++;

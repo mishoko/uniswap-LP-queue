@@ -24,6 +24,20 @@ Newest entry first. Never delete an entry — supersede it.
 
 ---
 
+## 2026-08-31d — The shipping position is a Uniswap band, not the whole curve
+
+**The v2a/v2b/v3 labels were a mistake.** What Uniswap engineers vibe with is not extra NFTs and not three bands. It is: Uniswap already orders by PRICE. QUEUE orders LPs *inside that price*. Same curve, same router, one concentrated position, 32 seats sharing it.
+
+**What shipped:** `_afterInitialize` snaps a ±960-tick (~10%) band around the start price. `BAND_HALF_WIDTH` is a constant, not a constructor arg (that would have touched every encode site). Seats are still ERC-6909, not Uniswap NFTs, and they do not pick ranges.
+
+**What caught us:** `_positionValue` in the fixture hardcoded `minUsableTick`/`maxUsableTick`, so INVARIANT F valued a concentrated L as if it were full-range (~20x too much token). The instrument, not the hook. PITFALLS 5.75 again. Both the fixture and the invariant handler now read `hook.pool()`.
+
+**M69** (full-range again) is RED, 2 failing. `test_7_9` pins the band. `test_7_5` still walks the demo sweep — concentrating made the walk *more* visible, not less.
+
+Tests written against a full-range blob (packing fuzz, the reentrancy control) restore that fixture via `QueueHarness.forceRange` BEFORE any mint. Production has no equivalent.
+
+---
+
 ## 2026-08-31c — Spike: price-then-queue is an afterSwap walk, not a new AMM
 
 **Status: 8/8 on `test/spike/PriceThenQueue.t.sol`. No production code. Queue suite untouched.**

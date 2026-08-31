@@ -33,6 +33,16 @@ contract QueueHarness is QueueHook {
         uint256 fw
     ) QueueHook(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
 
+    /// @dev TEST-ONLY. `_afterInitialize` now snaps a ±10% Uniswap band. Tests written against
+    ///      a full-range blob (reentrancy, packing fuzz that walks the whole curve) call this
+    ///      BEFORE any mint to restore that fixture. Production has no equivalent: the band is
+    ///      the product.
+    function forceRange(int24 tl, int24 tu) external {
+        if (liquidity != 0) revert AlreadySeeded();
+        tickLower = tl;
+        tickUpper = tu;
+    }
+
     function seed(PoolKey calldata k, int24 tl, int24 tu, uint128 liq, uint256[] calldata bps)
         external
         returns (uint256 s0, uint256 s1)

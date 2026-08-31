@@ -20,7 +20,7 @@ Nothing in this document is a revenue, TVL, or adoption forecast. There is no ba
 
 ## 0. THE VERDICT A DECISION-MAKER CAN ACT ON
 
-**What you are buying:** a 32-desk professional venue in which cash providers can buy and sell *place in line*. The customer still trades through ordinary Uniswap, at the ordinary price, at the ordinary trading fee.
+**What you are buying:** a 32-desk professional venue in which cash providers can buy and sell *place in line*, **inside a normal Uniswap concentrated position**. The customer still trades through ordinary Uniswap, at the ordinary price, at the ordinary trading fee. The hook does not replace Uniswap's curve or Uniswap's ticks. It orders the LPs who are already at that price.
 
 **What you are not buying:** a public Uniswap pool, sandwich protection, lower LP losses in total, or cheaper execution.
 
@@ -104,7 +104,7 @@ Think **NYSE seat**, not **DMV line**.
 
 ## 2b. WHAT SHIPS TODAY — one queue for the whole pair, not per tick
 
-Yes. **The entire queue is for the entire pair.** There is one Uniswap pool, one full-range position the hook owns, and one ordered list of ≤32 seats. A trade at *any* price is allocated down that same line. There is no per-tick book.
+Yes. **The entire queue is for the entire pair**, sitting **inside one concentrated Uniswap band** (±10% around the start price), not one NFT per seat and not the whole curve. There is one Uniswap pool, one position the hook owns, and one ordered list of ≤32 seats. A trade that stays in the band is allocated down that line. A trade that walks out of the band stops, like any v3 LP. There is no per-tick book and no per-seat range.
 
 ```
 UNISWAP v3/v4 TODAY                         QUEUE TODAY (shipping)

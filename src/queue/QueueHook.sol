@@ -86,6 +86,19 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     int24 internal tickUpper;
     uint128 internal liquidity;
 
+    /// @notice Half-width of the custodied Uniswap position, in ticks.
+    ///
+    ///         Uniswap's product is a RANGE around the current price. QUEUE today was sitting
+    ///         that range at the full usable curve — $0 to infinity — which is not how anyone
+    ///         LPs on Uniswap, and which is why a dollar of QUEUE liquidity quoted ~1/200th
+    ///         the depth of a ±1% v3 position. The hook still holds ONE position (not one NFT
+    ///         per seat). The 32 seats share that band. The queue is who gets filled first
+    ///         *inside the same price Uniswap already uses*.
+    ///
+    ///         960 ticks ≈ 10% in price at v3 tick math. Snapped to the pool's spacing.
+    ///         Chosen because `test_1_11` already ran the allocator over a ±10% band to the wei.
+    int24 public constant BAND_HALF_WIDTH = 960;
+
     /// @dev INVARIANT C (§B.6): for each token X, every seat at index < cursorX holds aX == 0.
     ///      A cursor may LAG (the loop's `continue` handles an empty seat). It must never LEAD —
     ///      leading skips a funded seat, which is silent theft of rank.
@@ -205,6 +218,10 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     error PoolNotBound();
     error AlreadyBound();
     error WrongPool();
+    /// @dev The starting price sat so close to a usable edge that a ±BAND_HALF_WIDTH band
+    ///      could not be formed inside `[minUsable, maxUsable]`. Refused rather than silently
+    ///      opening a full-range blob.
+    error BandOutOfBounds(int24 lo, int24 hi, int24 minU, int24 maxU);
     /// @dev A hook with no seats has no queue; every swap would revert `QueueUnderflow` forever and
     ///      there is no path to add one.
     error EmptyRoster();
@@ -431,7 +448,11 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      guarded one would be a privileged role, which is forbidden. `afterInitialize` can only
     ///      ever be called by PoolManager, and only for a pool whose key already names THIS hook,
     ///      so the binding is authenticated by construction. The second pool is refused.
-    function _afterInitialize(address, PoolKey calldata k, uint160, int24) internal override returns (bytes4) {
+    function _afterInitialize(address, PoolKey calldata k, uint160 sqrtPriceX96, int24)
+        internal
+        override
+        returns (bytes4)
+    {
         if (bound) revert AlreadyBound();
         if (
             Currency.unwrap(k.currency0) != Currency.unwrap(expected0)
@@ -440,9 +461,37 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         ) revert WrongPool();
         bound = true;
         key = k;
-        tickLower = TickMath.minUsableTick(k.tickSpacing);
-        tickUpper = TickMath.maxUsableTick(k.tickSpacing);
+        (tickLower, tickUpper) = _bandAround(sqrtPriceX96, k.tickSpacing);
         return BaseHook.afterInitialize.selector;
+    }
+
+    /// @dev Snap a ±BAND_HALF_WIDTH band around the pool's starting price, to spacing, inside
+    ///      the usable tick range. This is the Uniswap v3 range the hook will custody. The
+    ///      queue does not see it — the allocator sees only realised swap deltas — but the
+    ///      *inventory* does, and that is the whole of the depth question.
+    function _bandAround(uint160 sqrtPriceX96, int24 spacing) internal pure returns (int24 lo, int24 hi) {
+        int24 minU = TickMath.minUsableTick(spacing);
+        int24 maxU = TickMath.maxUsableTick(spacing);
+        int24 tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+        int24 half = _floorToSpacing(BAND_HALF_WIDTH, spacing);
+        if (half < spacing) half = spacing;
+        lo = _floorToSpacing(tick - half, spacing);
+        hi = _floorToSpacing(tick + half, spacing);
+        if (hi <= lo) hi = lo + spacing;
+        if (lo < minU) lo = minU;
+        if (hi > maxU) hi = maxU;
+        // A start price so close to a usable edge that the band collapses is not a pool we
+        // can LP. Fail loud rather than silently falling back to the full-range blob this
+        // function exists to stop shipping.
+        if (hi <= lo || lo < minU || hi > maxU) revert BandOutOfBounds(lo, hi, minU, maxU);
+    }
+
+    /// @dev Uniswap spacing is a floor, including on the negative side: -61 / 60 must be -2,
+    ///      not -1. Solidity division truncates toward zero.
+    function _floorToSpacing(int24 t, int24 spacing) internal pure returns (int24) {
+        int24 c = t / spacing;
+        if (t < 0 && t % spacing != 0) c -= 1;
+        return c * spacing;
     }
 
     /// @dev The premise of every other number in this project: nobody but the hook may add
@@ -1522,7 +1571,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      currencies it holds. Anything wanting the token decimals in order to display a balance
     ///      simply could not. A hook that cannot say what it is attached to is not integrable, and
     ///      every value here is already public: the key is in PoolManager's own event and the ticks
-    ///      are a pure function of `tickSpacing`.
+    ///      are the concentrated band `_afterInitialize` snapped around the starting price.
     ///
     ///      `isBound` is RETURNED rather than left to be inferred from a zero key, because
     ///      `Currency.wrap(address(0))` is native ETH and therefore a legal `currency0` — a caller

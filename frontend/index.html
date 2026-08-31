@@ -207,7 +207,7 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 <!-- ================================================================ HERO -->
 <section>
   <div class="wrap">
-    <div class="eyebrow">Not an order book. Not sandwich protection. A 32-desk membership market.</div>
+    <div class="eyebrow">Uniswap already orders by price. QUEUE orders LPs inside that price.</div>
     <h1>Every Uniswap fills <em style="font-style:normal;color:var(--pro)">everyone a little</em>.<br>Nobody is first. Nobody is paid to be last.</h1>
     <p class="lede">
       A Uniswap pool is a shared cash register: every trade hits every cash provider, in proportion to
@@ -523,9 +523,10 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
           seize it, pause it, or trap withdrawals — taking money out does not destroy the seat.
           What binds the number is depositing at 2,610,805 compute with 31 priced seats ahead
           (quadratic), not the walk, which is linear. 100 or 500 is a different program.</p></div>
-      <div class="lim"><h4>One full-range position is thin</h4>
-        <p>Roughly 1/200th the depth per dollar of a ±1% concentrated position. It is why the sweep above
-          needs a large trade to reach rank 2 at all.</p></div>
+      <div class="lim"><h4>The band is ±10%, not ±1%</h4>
+        <p>The hook holds one Uniswap range around the start price, not the whole curve and not one NFT
+          per seat. A ±1% MM band would be even deeper; this version picked the ±10% band the allocator
+          already ran on. A swap that walks out of the band stops, the way any concentrated LP does.</p></div>
       <div class="lim"><h4>Rent is currency0, weighted by currency0</h4>
         <p>Weighting a two-token basket needs a price and QUEUE is not allowed to have one. A tail holding
           only currency1 is paid nothing; the rent waits until an eligible recipient exists.</p></div>

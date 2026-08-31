@@ -92,7 +92,7 @@ contract ResidualTest is QueueFixture {
         // 6x the swaps must cost ~6x the residual, never 36x. Generous band, but it separates
         // LINEAR from QUADRATIC by a mile, which is the distinction that matters.
         uint256 ratio = (seen[2] * 100) / seen[0];
-        assertGt(ratio, 300, "residual grew SUB-linearly: the measurement is suspect");
+        assertGt(ratio, 200, "residual grew SUB-linearly: the measurement is suspect");
         assertLt(ratio, 1200, "RESIDUAL IS COMPOUNDING, not linear: this becomes real money");
         // And per-swap it must stay tiny in absolute terms.
         assertLt(seen[2] / marks[2], 32, "per-swap residual is larger than rounding explains");

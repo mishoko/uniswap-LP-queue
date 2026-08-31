@@ -236,6 +236,9 @@ MUTS = [
     ("M68", HOOK, "the pool disclosure lies about being bound, so an integrator reads an unbound hook",
      "        return (key, bound, tickLower, tickUpper);",
      "        return (key, false, tickLower, tickUpper);"),
+    ("M69", HOOK, "the custodied position is full-range again, so a dollar of QUEUE is 200x thinner than a v3 LP",
+     "        (tickLower, tickUpper) = _bandAround(sqrtPriceX96, k.tickSpacing);",
+     "        tickLower = TickMath.minUsableTick(k.tickSpacing);\n        tickUpper = TickMath.maxUsableTick(k.tickSpacing);"),
 ]
 
 

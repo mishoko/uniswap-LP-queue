@@ -10,6 +10,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
@@ -32,12 +33,13 @@ contract DeployTest is BaseTest, QueueDeployBase {
     Deployment d;
     /// @dev **THE SWEEP HAS TO BE BIG, AND THAT IS THE MECHANISM, NOT A FIXTURE CONVENIENCE.**
     ///      The queue IS the pool's liquidity, so reaching rank 2 means taking rank 0's and rank
-    ///      1's whole stock of the outgoing token out of a full-range position. On a constant
-    ///      product curve, releasing 60% of a leg needs the price to move 6.25x, which needs ~1.5x
-    ///      the position's own token0. A first draft used 400e18 and touched exactly one seat —
-    ///      not because the allocator was wrong, but because the trade was small. That is exactly
-    ///      the claim the README makes about the back seat ("reached only by trades large enough to
-    ///      sweep the front"), measured here rather than asserted.
+    ///      1's whole stock of the outgoing token out of the custodied band. On a constant-product
+    ///      *full-range* curve, releasing 60% of a leg needs the price to move 6.25x; the shipping
+    ///      band is ±10%, so a sweep this size is how the demo shows rank-2 at all. A first draft
+    ///      used 400e18 and touched exactly one seat — not because the allocator was wrong, but
+    ///      because the trade was small. That is exactly the claim the README makes about the back
+    ///      seat ("reached only by trades large enough to sweep the front"), measured here rather
+    ///      than asserted.
     uint256 constant SWEEP_IN = 2_500e18;
 
     address constant DEPLOYER = address(0xD3907E5);
@@ -154,6 +156,32 @@ contract DeployTest is BaseTest, QueueDeployBase {
             )
         );
         poolManager.initialize(second, d.sqrtPriceX96);
+    }
+
+    /// @dev 7.9 — THE SHIPPING POSITION IS A UNISWAP RANGE, NOT THE WHOLE CURVE.
+    ///      `_afterInitialize` used to set `minUsableTick`/`maxUsableTick` — full-range, ~1/200th
+    ///      the depth of a ±1% v3 LP per dollar. That is not how Uniswap works and it is not how
+    ///      this hook ships. The 32 seats share ONE concentrated band around the starting price.
+    ///      Seats are not NFTs and they do not pick their own ticks. M69 deletes the band and this
+    ///      test is what goes red.
+    function test_7_9_thePositionIsABandAroundTheStartPrice() public {
+        _deploy();
+        (,, int24 lower, int24 upper) = d.hook.pool();
+        int24 minU = TickMath.minUsableTick(SPACING);
+        int24 maxU = TickMath.maxUsableTick(SPACING);
+        assertGt(lower, minU, "low tick is still the usable floor: the blob is full-range");
+        assertLt(upper, maxU, "high tick is still the usable ceiling: the blob is full-range");
+        assertGt(upper, lower, "the band has no width");
+
+        (uint160 sqrtP, int24 startTick,,) = poolManager.getSlot0(d.key.toId());
+        assertEq(sqrtP, d.sqrtPriceX96, "the pool did not open at the demo price");
+        assertTrue(startTick >= lower && startTick < upper, "the starting price is not inside the band");
+        // Width is 2 * BAND_HALF_WIDTH, snapped to spacing. Floor-on-negative can shift one
+        // side by one spacing, so allow ±spacing rather than demanding exact 1920.
+        int24 w = upper - lower;
+        int24 want = int24(2) * d.hook.BAND_HALF_WIDTH();
+        assertGe(w, want - SPACING, "band is narrower than BAND_HALF_WIDTH");
+        assertLe(w, want + SPACING, "band is wider than BAND_HALF_WIDTH");
     }
 
     /// @dev 7.8 — **THE VIEWER DECODES `pool()` BY BYTE OFFSET, SO THE LAYOUT IS PINNED HERE.**
