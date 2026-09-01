@@ -13,12 +13,28 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 /// @dev Exposes the pure library so it can be fuzzed with no pool at all (§C.1 1.12).
 contract AllocationHarness {
+    /// @dev No curve: prices at the swap average. This is a LIVE production branch, not a legacy
+    ///      one — `_allocate` takes it whenever the band holds no liquidity to read a price from.
     function allocate(uint256[] memory balances, uint256 start, uint256 amtIn, uint256 amtOut)
         external
         pure
         returns (Allocation.Fill[] memory fills)
     {
-        return Allocation.allocate(balances, start, amtIn, amtOut);
+        return Allocation.allocate(balances, start, amtIn, amtOut, new uint256[](0), 0);
+    }
+
+    /// @dev The marginal-pricing branch, driven by a caller-supplied curve. Conservation is a
+    ///      property of the CUMULATIVE FORM, not of the particular curve the hook happens to
+    ///      build, so a fuzzer must be able to hand it an arbitrary monotone sequence.
+    function allocateCurve(
+        uint256[] memory balances,
+        uint256 start,
+        uint256 amtIn,
+        uint256 amtOut,
+        uint256[] memory cumW,
+        uint256 wTotal
+    ) external pure returns (Allocation.Fill[] memory fills) {
+        return Allocation.allocate(balances, start, amtIn, amtOut, cumW, wTotal);
     }
 }
 
@@ -317,6 +333,55 @@ contract AllocatorTest is QueueFixture {
         }
         assertEq(sumTake, amtOut, "sum(take) != amtOut: a wei was lost or invented");
         assertEq(sumGive, amtIn, "sum(give) != amtIn: a wei was lost or invented");
+    }
+
+    /// @dev **THE SAME CLAIM, WITH A PRICE CURVE UNDER IT.** The fuzz above exercises the
+    ///      average-price branch; production almost always takes the OTHER one, and exactness there
+    ///      rests on a different argument — that `give` is the DIFFERENCE of two cumulative
+    ///      allocations rather than a rounded share of its own.
+    ///
+    ///      That argument does not depend on the curve being the hook's, so this hands it an
+    ///      arbitrary non-decreasing one. If conservation held only for well-shaped curves it would
+    ///      be an accident of the band arithmetic rather than a property of `Allocation.step`, and
+    ///      the first pool with an unusual band would find out.
+    function testFuzz_curvePricingNeverLosesAWei(
+        uint256[8] memory rawBalances,
+        uint256[8] memory rawSteps,
+        uint256 rawIn,
+        uint256 rawOut
+    ) public view {
+        uint256[] memory balances = new uint256[](8);
+        uint256 total;
+        for (uint256 i; i < 8; i++) {
+            balances[i] = bound(rawBalances[i], 0, 1e30);
+            total += balances[i];
+        }
+        vm.assume(total > 0);
+
+        // Any NON-DECREASING sequence is a legal curve. Built by accumulating bounded steps, so
+        // the fuzzer explores flat stretches (a seat that absorbed no price move) as well as jumps.
+        uint256[] memory cumW = new uint256[](8);
+        uint256 acc;
+        for (uint256 i; i < 8; i++) {
+            acc += bound(rawSteps[i], 0, 1e24);
+            cumW[i] = acc;
+        }
+        uint256 wTotal = acc == 0 ? 0 : acc + bound(rawIn, 0, 1e24);
+
+        uint256 amtOut = bound(rawOut, 1, total);
+        uint256 amtIn = bound(rawIn, 1, 1e36);
+
+        Allocation.Fill[] memory fills = harness.allocateCurve(balances, 0, amtIn, amtOut, cumW, wTotal);
+
+        uint256 sumTake;
+        uint256 sumGive;
+        for (uint256 f; f < fills.length; f++) {
+            sumTake += fills[f].take;
+            sumGive += fills[f].give;
+            assertLe(fills[f].take, balances[fills[f].index], "fill exceeds the seat's balance");
+        }
+        assertEq(sumTake, amtOut, "sum(take) != amtOut under a curve");
+        assertEq(sumGive, amtIn, "sum(give) != amtIn under a curve: the cumulative form does not close");
     }
 
     /// @dev INVARIANT C for the cursor0 branch specifically.

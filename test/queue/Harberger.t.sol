@@ -90,7 +90,7 @@ contract RentPaidAheadHook is QueueHarness {
             uint256 id = idAtRank(i);
             uint256 bal = q[id].a0;
             if (bal == 0) continue;
-            (, uint256 give) = Allocation.step(st, bal);
+            (, uint256 give) = Allocation.step(st, bal, 0, 0); // rent is pro-rata, never priced
             lease[id].escrow += give;
         }
         escrowTotal = escrowTotal - amount + pot;

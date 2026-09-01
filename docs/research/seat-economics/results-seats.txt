@@ -1,0 +1,40 @@
+====================================================================================================
+PER-SEAT RETURN, %/yr WHILE IN BAND.  32 equal seats of $31,250 on a $1M book, 60 price paths.
+====================================================================================================
+                                  BENIGN          NORMAL           TOXIC
+  in-band life (days)               63.7            18.5             1.3
+  ordinary pro-rata LP            +21.2%          -31.8%         -752.6%
+
+  --- AVERAGE pricing (old) ---
+  seat 1  (head)                 +934.0%         +675.3%         -439.9%
+  seat 5                           -9.9%          -85.6%        -1278.4%
+  seat 10                         -13.3%          -82.1%        -1133.2%
+  seat 15                          -7.9%          -71.8%         -900.5%
+  seat 20                          -9.6%          -50.4%         -670.5%
+  seat 32 (tail)                   +0.0%           -0.0%           -2.4%
+  seats beating pro-rata              1/32              9/32             16/32
+  HEAD beats pro-rata?               YES             YES             YES
+
+  --- MARGINAL pricing (new) ---
+  seat 1  (head)                 +911.0%         +566.1%         -796.2%
+  seat 5                           -8.3%          -76.8%        -1267.1%
+  seat 10                         -12.9%          -79.9%        -1123.0%
+  seat 15                          -7.6%          -70.2%         -888.2%
+  seat 20                          -9.3%          -49.1%         -659.9%
+  seat 32 (tail)                   +0.0%           +0.0%           -2.3%
+  seats beating pro-rata              1/32             10/32             15/32
+  HEAD beats pro-rata?               YES             YES              no
+
+====================================================================================================
+THE TAIL'S ACTUAL INCOME IS RENT, NOT FLOW. What Harberger can move backward, by tau.
+====================================================================================================
+  head's advantage over an ordinary LP position (NORMAL, marginal): $186,852/yr
+  tail capital (seats 2..32): $968,750
+
+     tau    theta=tau/(tau+k)   self-price A/(tau+k)    rent $/yr  tail coupon
+    10%                 33%                622,839       62,284        6.4%
+    25%                 56%                415,226      103,807       10.7%
+    50%                 71%                266,931      133,466       13.8%
+   100%                 83%                155,710      155,710       16.1%
+
+  k = 20%/yr discount rate. tau is a CONSTRUCTOR ARGUMENT; the deploy script ships 10%.

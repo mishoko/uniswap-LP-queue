@@ -185,6 +185,14 @@ A seat **can hold only one of the two tokens**. After a fill, the front usually 
 
 This project is **only the queue**. There is no sandwich shield and no new curve. The buy-in *is* the product: liquidity in, ask posted, fees ± markout ± rent.
 
+### Being first is a trade-off, not a gift
+
+A swap does not execute at one price — it sweeps a **range** of them. Being first in line means being filled first, and the first fills happen at the **stalest** end of that range. QUEUE credits each seat the price segment it actually absorbed, so the head systematically fills *worse* than the swap's own average and the seats behind it fill *better*, in both directions. It is asserted, not asserted-about: `test/queue/Marginal.t.sol`.
+
+This is the one place the mechanism changed late, and it changed for a reason worth stating. The hook used to credit every seat the swap's **average** price, which handed the head all of the volume *and* the same price as the seats behind it. Simulated across benign, normal and toxic pools, that made the head beat an ordinary Uniswap LP **in every state of the world** — including the toxic one that exists precisely to punish whoever is first into a stale price. A position that wins in every state is not a market position, it is a subsidy paid by the rest of the book. Under segment pricing the head loses to an ordinary LP in the toxic regime, which is what makes the rent it pays defensible rather than extracted. Evidence and the simulation: [`docs/research/seat-economics/`](docs/research/seat-economics/).
+
+It is close to free where it matters: a swap the head absorbs alone — almost every trade — never builds a price curve at all and pays **+223 gas**. Only a trade large enough to walk several seats pays for the walk.
+
 **Move the sliders:** open [`frontend/index.html`](frontend/index.html). Worked numbers: [`BUSINESS.md`](BUSINESS.md) §11.4. The measured walk that would let seats sit in *different* bands later: [`docs/research/price-then-queue/SPIKE.md`](docs/research/price-then-queue/SPIKE.md). Not shipping.
 
 ---
@@ -444,8 +452,8 @@ Yes. These are the fears, tagged.
 │                                                                          │
 │  3. Walks the line front-first:                                          │
 │        take what seat 1 can sell                                         │
-│        pay it the incoming token at THIS SWAP's average price            │
-│        if seat 1 is empty, walk to seat 2                                │
+│        pay it for the SLICE OF THE PRICE MOVE IT ACTUALLY ABSORBED       │
+│        if seat 1 is empty, walk to seat 2 — at a better price            │
 │        last seat filled gets the leftover wei so the sum is exact        │
 │                                                                          │
 │  4. Rent: prepaid meter, paid to seats behind you, in elapsed time.      │

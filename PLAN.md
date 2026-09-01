@@ -130,10 +130,15 @@ around the start price) that it owns itself. Overlapping that band is refused �
 lane. Disjoint ranges are ordinary Uniswap and may be minted through PositionManager. On every swap,
 in `afterSwap`, the hook clips PoolManager's realised `BalanceDelta` to the in-band fill (identity
 when the swap stayed in the band; one `SwapMath.computeSwapStep` when it left) and therefore knows
-the swap's **realised average price**, a number the hook did not choose. It allocates that fill
-**front-first** rather than pro-rata: the head seat surrenders as much of the outgoing token as it
-holds and receives the incoming token at that realised average price; the fill walks to the next seat
-only when the head is exhausted. Rank transfers move the seat's *position in the queue*; the capital
+the whole shape of the swap's realised price path, a shape the hook did not choose. It allocates
+that fill **front-first** rather than pro-rata: the head seat surrenders as much of the outgoing
+token as it holds and receives the incoming token **at the price segment its own inventory actually
+traded at**; the fill walks to the next seat only when the head is exhausted, and that seat is
+credited the *next* segment, which is nearer the post-move price. **AMENDED 2026-09-01 — this said
+"the swap's realised average price" for six phases and shipping that was a mistake** (PITFALLS
+5.103): the average handed the head all of the volume and none of the price risk, which simulated
+out to the head beating an ordinary LP in every state of the world. Being filled first now means
+being filled at the stalest end of the move. Rank transfers move the seat's *position in the queue*; the capital
 stays with the person who deposited it.
 
 **Paragraph three — why it is worth building.** Adverse selection — the cost of being the LP holding
@@ -625,31 +630,68 @@ sole LP. That is correct and it is why the queue's fee accrual needs no separate
 it is exactly true only when the protocol fee is zero.** See §E.5; this is a real, **MEASURED** hazard
 and Phase 1 must test it.
 
-The ratio `amtIn / amtOut` **is the swap's realised average price.** It is the only price in the
-entire mechanism.
+The ratio `amtIn / amtOut` is the swap's realised **average** price, and it is the only price the
+hook is *given*. It is not the price any single seat gets. **A swap sweeps a RANGE of prices**, and
+because `L` is constant across one band the hook can reconstruct that range exactly from the entry
+`sqrtPrice` and the cumulative outgoing amount — see Step 3. The average remains the fallback for
+the degenerate case where there is no span to price against (`liquidity == 0`).
 
-### Step 3 — allocate front-first
+### Step 3 — allocate front-first, **at each seat's own price segment**
+
+**AMENDED 2026-09-01.** The `else` branch used to read
+`give := FullMath.mulDiv(amtIn, take, amtOut)` — the swap's average, the same number for every seat.
+That was the head's free lane and it is gone; PITFALLS 5.103 has the evidence and
+`docs/research/seat-economics/` has the simulation. The remainder line is untouched.
+
+**The curve.** `L` is constant across one band, so the input the band absorbs while paying out its
+first `T` of the outgoing token is exact and cheap to evaluate:
+
+```
+W(T) := token-in the band absorbs walking from the ENTRY sqrtPrice until it has paid out T
+        (v4's own SqrtPriceMath; clamped at the band edge so it is TOTAL and cannot revert
+         inside afterSwap, which would brick the pool rather than fail a sum)
+```
+
+Entry is where the swap MET the band — `sqrtBefore` clamped into `[tickLower, tickUpper]` — not
+`sqrtBefore` itself; pricing the head from outside the band would credit it a move that happened in
+somebody else's wing.
 
 ```
 remaining   := amtOut          // still to be taken out of the queue
 assignedIn  := 0               // incoming token already assigned
+wTotal      := 0               // the curve at the FULL amtOut; 0 also means "no curve yet"
 
 for i from cursor(outgoing token) upward, while remaining > 0:
     bal := (outIsOne ? q[i].a1 : q[i].a0)
     if bal == 0: continue
+
+    wCum := 0
+    if bal < remaining:                      // this seat will NOT finish the swap on its own
+        if wTotal == 0: wTotal := W(amtOut)  // built LAZILY: a head-only swap never builds one
+        if wTotal != 0: wCum := W(amtOut - remaining + bal)   // cumulative through THIS segment
+
     take := min(bal, remaining)
     remaining -= take
 
     if remaining == 0:                       // THIS IS THE LAST FILLED SEAT
         give := amtIn - assignedIn           // <<<< THE REMAINDER LINE. See below.
+    else if wTotal == 0:                     // no span to price against (liquidity == 0)
+        give := FullMath.mulDiv(amtIn, take, amtOut)     // the average, as the honest fallback
     else:
-        give := FullMath.mulDiv(amtIn, take, amtOut)     // floored
+        give := FullMath.mulDiv(amtIn, wCum, wTotal) - assignedIn   // <<<< CUMULATIVE DIFFERENCE
 
     assignedIn += give
     apply(i, take, give)                     // seat loses `take` of out-token, gains `give` of in-token
 
 if remaining != 0: revert QueueUnderflow(remaining)
 ```
+
+**Why the cumulative difference and not a per-seat share.** `give` is the difference of two
+cumulative allocations of the *same* `amtIn`, so successive `mulDiv`s telescope and the parts cannot
+drift from the whole **whatever shape the curve has**. A per-seat rounded share would not telescope
+and would push an error that grows with the number of seats filled onto the remainder line.
+`testFuzz_curvePricingNeverLosesAWei` fuzzes arbitrary monotone curves precisely because
+conservation must not depend on this curve being the band's.
 
 `apply`:
 ```solidity
@@ -659,8 +701,8 @@ else          { q[i].a0 -= take; q[i].a1 += give; }
 
 ### Step 4 — **the remainder line, and why it is the whole thing**
 
-> Each seat's incoming share is `FullMath.mulDiv(amtIn, take, amtOut)`, **floored** — **except the
-> last filled seat, which is assigned `amtIn − assignedSoFar`.**
+> Each seat's incoming share is a **floored** function of the curve — **except the last filled seat,
+> which is assigned `amtIn − assignedSoFar`.**
 
 Every floored share loses up to one wei. Summed over `k` filled seats, the queue would be short by up
 to `k−1` wei of the incoming token on **every swap**, forever, and the shortfall compounds. The
@@ -696,8 +738,10 @@ queue total token1             445000573750774563494
 PoolManager-measured token1    445000573750774563494      <- equal, to the wei
 ```
 
-**Front-first allocation at the swap's realised average price conserves both tokens exactly, to the
-wei, at a non-unit price.** Measured on **PoolManager's own ERC20 balances**, never on the hook's
+**Front-first allocation conserves both tokens exactly, to the wei, at a non-unit price** — under
+the average price as measured here, and equally under the segment pricing that superseded it, because
+exactness comes from the CUMULATIVE FORM plus the remainder line rather than from the shape of the
+price curve (`testFuzz_curvePricingNeverLosesAWei` fuzzes arbitrary monotone curves).** Measured on **PoolManager's own ERC20 balances**, never on the hook's
 bookkeeping.
 
 ## B.6 Cursors — **DESIGN, and the spike does not have this**
@@ -1540,7 +1584,7 @@ not save it for the end. The invariant handler written early catches things unit
 | **Sit at the back and free-ride on the front's depth** | Impossible: depth is your own capital, and the back is filled on exactly the trades that hurt most. | free-lane audit |
 | **Dust the head to grief it** | Impossible: rank cannot be granted by deposit. Assert the revert. | §B.8 |
 | **Flash-loan the whole queue** and trade against yourself | Zero-sum minus gas. | §1.6 of the source doc |
-| **Manipulate the allocation price** | **Nothing to push** — the price is the swap's own realised average from `PoolManager`. Assert that no hook-controlled input enters it. | §E.11 |
+| **Manipulate the allocation price** | **Nothing to push** — every input is `PoolManager`'s: the realised delta, the pre-swap `sqrtPrice` from `beforeSwap`, and the band's own `liquidity`. The hook chooses no price and no parameter enters the curve. Assert that no hook-controlled input enters it. | §E.11 |
 | **Rank-then-run** | **Open** under plain rank; **closed** under Harberger. Test both, assert both. | §E.13 |
 | **Reentrant token** on deposit / withdraw / buyout | No double-spend, no double-credit | standard |
 | **Zero-amount and one-wei swaps** | No revert, no drift beyond the stated residual | edge cases |
@@ -2349,7 +2393,7 @@ call.
 
 ## E.11 There is nothing to push — protect that property
 
-The allocation price is the swap's **own realised average**, taken from `PoolManager`'s returned
+The allocation price is derived entirely from the swap's **own realised execution**, taken from `PoolManager`'s returned
 `BalanceDelta`. It is not a mark, not an oracle, not a TWAP, and not a quantity the hook chooses.
 **There is nothing an attacker can manipulate.** This is the single biggest structural advantage
 QUEUE has over every mark-to-market design in this repo — and every mark-to-market design in this
@@ -2857,7 +2901,7 @@ regex over it is the method. Print the regex next to the count, as every prior p
 **What:** a Uniswap v4 hook that replaces pro-rata fills with a **priced, front-first fill queue**
 (*not* price–time priority — the roster is closed and rank goes to willingness to pay, see §A.3). The hook is
 the pool's sole LP; it holds an ordered roster of seats; every swap fills **front-first** at the
-swap's own realised average price; the seat is an ERC-6909 token you can hold, transfer and price.
+price segment its own inventory traded at; the seat is an ERC-6909 token you can hold, transfer and price.
 
 **Why it is new:** every concentrated AMM is a pro-rata market. Every real electronic market already
 prices queue position — implicitly, in latency spend burnt on infrastructure. **Uniswap has never had
@@ -2865,7 +2909,7 @@ a queue, so it has never had a price for one — which did not make ordering wor
 unpriceable INSIDE the pool and therefore captured OUTSIDE it.** See §A.3 for why the older,
 weaker phrasing was dropped.
 
-**What is proven:** front-first allocation at the realised average price conserves both tokens
+**What is proven:** front-first allocation at each seat's own realised price segment conserves both tokens
 **exactly, to the wei, at a non-unit price**, measured on PoolManager's own balances, with three
 mutations red.
 

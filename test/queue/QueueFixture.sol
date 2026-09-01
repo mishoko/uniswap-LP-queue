@@ -80,6 +80,10 @@ abstract contract QueueFixture is BaseTest {
     Currency c1;
     QueueHarness hook;
     PoolKey k;
+    /// @dev The witness's anchor for the price curve: spot and band liquidity as they were when
+    ///      the swap began. Written by `_swapFrom` before it routes, read by `_refCurve`.
+    uint160 refSqrtP0;
+    uint128 refLiq0;
 
     uint8 dec0 = 18;
     uint8 dec1 = 18;
@@ -219,6 +223,15 @@ abstract contract QueueFixture is BaseTest {
         uint256[] memory before = _snapshot(zeroForOne);
         (uint256 lt0, uint256 lt1) = hook.totals();
 
+        // The price curve is anchored where the swap STARTED, so the witness has to read it before
+        // the swap, from PoolManager, exactly as `_beforeSwap` does. Liquidity is read here too: a
+        // swap never changes it, but a deposit inside the same test would, and reading it after
+        // would then price the fill against a band that did not exist while it happened.
+        // Held in storage, not on the stack: `_swapFrom` is already at the stack limit without
+        // `via_ir`, and two more locals here is what tips it over.
+        (refSqrtP0,,,) = poolManager.getSlot0(k.toId());
+        refLiq0 = hook.positionLiquidity();
+
         _routeSwap(who, zeroForOne, amountIn);
 
         uint256 n0 = _pmBal(c0);
@@ -291,7 +304,10 @@ abstract contract QueueFixture is BaseTest {
 
             uint256 t = have >= owed ? owed : have;
             owed -= t;
-            uint256 g = (owed == 0) ? (amtIn - handed) : FullMath.mulDiv(amtIn, t, amtOut);
+            // §B.5 as amended: a seat is credited the input the band absorbs over the PRICE
+            // SEGMENT its own take spans. Expressed cumulatively -- G(T) = amtIn * W(T)/W(amtOut),
+            // this seat gets G(T_i) - G(T_{i-1}) -- and the last filled seat takes the remainder.
+            uint256 g = _refGive(outIsOne, amtIn, amtOut, owed, t, handed);
             handed += g;
 
             if (outIsOne) {
@@ -317,6 +333,69 @@ abstract contract QueueFixture is BaseTest {
                 if (begin < refC1) refC1 = begin;
             }
         }
+    }
+
+    /// @dev What one seat is credited. Split out of `_refAllocate` only because that function is at
+    ///      the stack limit; the rule is §B.5's, unchanged.
+    ///
+    ///      `amtOut - owed` is the outgoing token sourced through the END of this seat's segment,
+    ///      so `G(amtOut - owed) - handed` is exactly the segment this seat absorbed.
+    function _refGive(bool outIsOne, uint256 amtIn, uint256 amtOut, uint256 owed, uint256 t, uint256 handed)
+        internal
+        view
+        returns (uint256)
+    {
+        if (owed == 0) return amtIn - handed; // the last filled seat closes the sum to the wei
+        uint256 wTot = _refCurve(outIsOne, amtOut);
+        // No curve to read (an empty band): §B.5's stated fallback is the swap's average price.
+        if (wTot == 0) return FullMath.mulDiv(amtIn, t, amtOut);
+        return FullMath.mulDiv(amtIn, _refCurve(outIsOne, amtOut - owed), wTot) - handed;
+    }
+
+    /// @dev The witness's own price curve: input the band absorbs over its first `outAmt` of output.
+    ///
+    ///      **WHAT THIS IS AND IS NOT AN INDEPENDENT WITNESS OF, stated plainly so nobody later
+    ///      claims more from it than it gives.** The ALLOCATION RULE is independent — the cumulative
+    ///      form, the remainder line, the cursors, and the band clamp are written here from §B.5's
+    ///      prose and are composed differently from `_allocate`. The FIXED-POINT PRIMITIVES are not:
+    ///      this calls v4's `SqrtPriceMath`, the same library the hook calls, for the same reason
+    ///      the witness has always called v4's `FullMath` rather than re-deriving 512-bit division.
+    ///      A rounding bug inside `SqrtPriceMath` would therefore be invisible to BOTH — but that
+    ///      is v4's own audited arithmetic, it is not the thing under test, and conservation against
+    ///      PoolManager's balances still binds regardless of what this function returns.
+    ///
+    ///      What it DOES catch, and what nothing else in the suite would: the hook walking from the
+    ///      wrong anchor, clamping to the wrong edge, reading the curve in the wrong direction, or
+    ///      pricing a seat at a segment that is not its own. Those are the ways this can be wrong.
+    function _refCurve(bool outIsOne, uint256 outAmt) internal view returns (uint256) {
+        (uint160 sqrtP0, uint128 liq) = (refSqrtP0, refLiq0);
+        if (liq == 0 || outAmt == 0) return 0;
+        (,, int24 lower, int24 upper) = hook.pool();
+        uint160 lo = TickMath.getSqrtPriceAtTick(lower);
+        uint160 hi = TickMath.getSqrtPriceAtTick(upper);
+
+        // Where the swap met the band, and which edge it is walking toward.
+        uint160 from = outIsOne ? (sqrtP0 < hi ? sqrtP0 : hi) : (sqrtP0 > lo ? sqrtP0 : lo);
+        uint160 edge = outIsOne ? lo : hi;
+        if (outIsOne ? from <= edge : from >= edge) return 0;
+
+        uint256 room = outIsOne
+            ? SqrtPriceMath.getAmount1Delta(edge, from, liq, false)
+            : SqrtPriceMath.getAmount0Delta(from, edge, liq, false);
+
+        uint160 to;
+        if (outAmt >= room) {
+            to = edge;
+        } else {
+            to = outIsOne
+                ? SqrtPriceMath.getNextSqrtPriceFromAmount1RoundingDown(from, liq, outAmt, false)
+                : SqrtPriceMath.getNextSqrtPriceFromAmount0RoundingUp(from, liq, outAmt, false);
+            if (outIsOne ? to < edge : to > edge) to = edge;
+        }
+
+        return outIsOne
+            ? SqrtPriceMath.getAmount0Delta(to, from, liq, false)
+            : SqrtPriceMath.getAmount1Delta(from, to, liq, false);
     }
 
     // ------------------------------------------------------------------------------- assertions

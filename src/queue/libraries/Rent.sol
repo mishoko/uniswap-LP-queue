@@ -55,10 +55,15 @@ library Rent {
         }
         if (total == 0 || amount == 0) return credits;
 
+        // **`(0, 0)` PRICES AT THE AVERAGE, AND THAT IS THE POINT HERE.** A swap gets a price
+        // curve because a swap sweeps a range of prices and the seats it reaches did not all trade
+        // at the same one. Rent has no price and no range: it is one number split pro-rata by
+        // weight, so every weight must be worth the same. Handing this a curve would silently make
+        // rent depend on queue position twice — once through the split and once through the curve.
         Allocation.State memory st = Allocation.init(amount, total);
         for (uint256 i; i < weights.length && st.remaining > 0; i++) {
             if (weights[i] == 0) continue;
-            (, uint256 give) = Allocation.step(st, weights[i]);
+            (, uint256 give) = Allocation.step(st, weights[i], 0, 0);
             credits[i] = give;
         }
     }

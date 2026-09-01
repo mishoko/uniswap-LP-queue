@@ -1,0 +1,18 @@
+==============================================================================================
+DOES SIZING THE HEAD REMOVE THE MIDDLE-OF-BOOK TRAP?  marginal pricing, 60 paths
+==============================================================================================
+
+  ---- BENIGN ----
+  32 equal ($31k each)     pro-rata    +21.2% | head    +911.0% | worst of seats 2-21     -14.2% | seats>=pro-rata  1/32
+  head $300k + 31x$22.6k   pro-rata    +21.2% | head     +87.3% | worst of seats 2-21     -12.3% | seats>=pro-rata  1/32
+  head $600k + 31x$12.9k   pro-rata    +21.2% | head     +38.6% | worst of seats 2-21     -10.6% | seats>=pro-rata  1/32
+
+  ---- NORMAL ----
+  32 equal ($31k each)     pro-rata    -31.8% | head    +566.1% | worst of seats 2-21    -109.6% | seats>=pro-rata 10/32
+  head $300k + 31x$22.6k   pro-rata    -31.8% | head     -12.1% | worst of seats 2-21     -82.6% | seats>=pro-rata 13/32
+  head $600k + 31x$12.9k   pro-rata    -31.8% | head     -38.4% | worst of seats 2-21     -49.9% | seats>=pro-rata 21/32
+
+  ---- TOXIC ----
+  32 equal ($31k each)     pro-rata   -752.6% | head    -796.2% | worst of seats 2-21   -1310.5% | seats>=pro-rata 15/32
+  head $300k + 31x$22.6k   pro-rata   -752.6% | head   -1177.2% | worst of seats 2-21   -1104.7% | seats>=pro-rata 20/32
+  head $600k + 31x$12.9k   pro-rata   -752.6% | head   -1034.2% | worst of seats 2-21    -664.5% | seats>=pro-rata 31/32

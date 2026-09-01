@@ -19,6 +19,7 @@ import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SwapMath} from "@uniswap/v4-core/src/libraries/SwapMath.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {ProtocolFeeLibrary} from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
 import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
@@ -762,11 +763,9 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // (via_ir is off on this project).
         int256 remaining = params.amountSpecified;
         bool zfo = params.zeroForOne;
-        uint160 lo = TickMath.getSqrtPriceAtTick(tickLower);
-        uint160 hi = TickMath.getSqrtPriceAtTick(tickUpper);
-        uint160 start = sqrtBefore;
-        uint160 fromP = zfo ? (start < hi ? start : hi) : (start > lo ? start : lo);
-        uint160 toP = zfo ? (end > lo ? end : lo) : (end < hi ? end : hi);
+        // The SAME anchor the price curve is built from. See `_bandEntry`.
+        (uint160 fromP, uint160 edge) = _bandEntry(zfo);
+        uint160 toP = zfo ? (end > edge ? end : edge) : (end < edge ? end : edge);
         if (zfo ? fromP <= toP : fromP >= toP) return (0, 0, 0);
         if (liquidity == 0) return (0, 0, 0);
 
@@ -787,6 +786,112 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         uint256 stepIn;
         (, stepIn, outAmt, feeAmt) = SwapMath.computeSwapStep(fromP, toP, liquidity, remaining, swapFee);
         gross = stepIn + feeAmt;
+    }
+
+    /// @dev One swap's price curve, carried as a MEMORY STRUCT rather than four stack slots.
+    ///      `via_ir` is off on this project and `_allocate` is already the deepest frame in the
+    ///      contract; this is the difference between compiling and "stack too deep".
+    ///      `total == 0` means "no curve" and selects average pricing — see `Allocation.step`.
+    struct Curve {
+        uint160 entry; // where the swap entered the band: where the price walk starts
+        uint160 edge; // the band edge it is walking toward; the walk is clamped here
+        uint128 liq; // the band's liquidity, constant across one position
+        uint256 room; // outgoing token the band can still pay before it reaches `edge`
+        uint256 total; // the curve at the FULL `amtOut`; doubles as the initialised flag
+    }
+
+    /// @notice THE PRICE CURVE. Input the band absorbs while paying out its first `outAmt` of the
+    ///         outgoing token, measured from `sqrtStart`. This is what makes a seat's fill price
+    ///         depend on WHERE IN THE SWAP it sat.
+    ///
+    /// @dev Non-decreasing in `outAmt`, and TOTAL — it never reverts and never leaves the band.
+    ///      Both properties are load-bearing:
+    ///
+    ///      * non-decreasing is what makes every `Allocation.step` share non-negative. It holds
+    ///        because moving further through a swap can only move the price further in one
+    ///        direction, and `getAmountXDelta` over a widening span can only grow;
+    ///      * total, because this runs inside `afterSwap`. A revert here is not a failed
+    ///        computation, it is a REVERTED SWAP — the hook would brick the pool for everyone on
+    ///        an arithmetic edge that has nothing to do with the swapper. v4's
+    ///        `getNextSqrtPriceFrom...` helpers revert when the amount would exhaust the position,
+    ///        so the capacity to the band edge is measured FIRST and the walk is clamped there.
+    ///
+    ///      `outAmt` cannot legitimately exceed that capacity — `_queueShare` has already clipped
+    ///      the swap to this band, and no other liquidity may exist inside it (`_beforeAddLiquidity`
+    ///      forbids an overlapping add, and the band never moves). The clamp covers the one wei the
+    ///      identity path is allowed to carry, and any future path that widens the input.
+    ///
+    ///      Rounding is DOWN on every leg. The result is a weight, not a payment: it is only ever
+    ///      used as a ratio against `wTotal` computed the same way, and the wei that rounding
+    ///      leaves over is handed to the last filled seat by the remainder line.
+    function _segmentIn(Curve memory cv, bool outIsOne, uint256 outAmt) internal pure returns (uint256) {
+        (uint160 sqrtStart, uint160 edge, uint128 liq) = (cv.entry, cv.edge, cv.liq);
+        if (liq == 0 || outAmt == 0) return 0;
+
+        uint160 next;
+        // `cv.room` — how much of the outgoing token the band can pay before the price reaches
+        // `edge` — is a property of the SWAP, not of the seat, so it is measured once in
+        // `_initCurve`. It has to be measured at all because v4's `getNextSqrtPriceFrom...` helpers
+        // REVERT rather than saturate once the amount would exhaust the position, and this runs
+        // inside `afterSwap` where a revert is a bricked pool rather than a failed sum.
+        if (outAmt >= cv.room) {
+            next = edge;
+        } else {
+            next = outIsOne
+                ? SqrtPriceMath.getNextSqrtPriceFromAmount1RoundingDown(sqrtStart, liq, outAmt, false)
+                : SqrtPriceMath.getNextSqrtPriceFromAmount0RoundingUp(sqrtStart, liq, outAmt, false);
+            // Rounding inside those helpers can step a wei past the edge; the walk must not leave
+            // the band, or the span handed to `getAmountXDelta` below stops being the band's.
+            if (outIsOne ? next < edge : next > edge) next = edge;
+        }
+
+        return outIsOne
+            ? SqrtPriceMath.getAmount0Delta(next, sqrtStart, liq, false)
+            : SqrtPriceMath.getAmount1Delta(sqrtStart, next, liq, false);
+    }
+
+    /// @dev Where the swap ENTERED the band, which is where the price curve starts. A swap that
+    ///      began outside the band did not trade against the queue until it arrived at the edge,
+    ///      so pricing its first seat from `sqrtBefore` would credit the head a price move that
+    ///      happened in someone else's wing. Same clamp `_bandStep` uses, kept in one place.
+    /// @dev Where a swap MEETS the band, and the edge it is walking toward.
+    ///
+    ///      **ONE DEFINITION, USED BY BOTH `_bandStep` AND `_initCurve`, AND IT MUST STAY THAT
+    ///      WAY.** The two had this expression written out separately for exactly one commit, which
+    ///      is the shape of PITFALLS 5.37 / 5.50 / 5.52 — a rule kept in two places has been wrong
+    ///      in one of them four times on this project. Here the divergence would be SILENT: the
+    ///      in-band fill would be replayed from one anchor and PRICED from another, every seat
+    ///      would be credited a segment of a swap that did not happen, and conservation would still
+    ///      tie out to the wei because `wTotal` normalises the total away.
+    ///
+    ///      `outIsOne` IS `zeroForOne`: token0 in means token1 out. Taken from the swap params by
+    ///      `_afterSwap`, never inferred from the sign of a delta (a dust swap reads backwards).
+    function _bandEntry(bool zeroForOne) internal view returns (uint160 entry, uint160 edge) {
+        uint160 lo = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 hi = TickMath.getSqrtPriceAtTick(tickUpper);
+        uint160 start = sqrtBefore;
+        return zeroForOne ? (start < hi ? start : hi, lo) : (start > lo ? start : lo, hi);
+    }
+
+    function _initCurve(Curve memory cv, bool outIsOne, uint256 amtOut) internal view {
+        (cv.entry, cv.edge) = _bandEntry(outIsOne);
+        cv.liq = liquidity;
+        // A swap that met the band exactly at the edge it is walking toward has no span to price
+        // against. `total` stays 0, which `Allocation.step` reads as "no curve": the average.
+        if (cv.liq == 0 || (outIsOne ? cv.entry <= cv.edge : cv.entry >= cv.edge)) return;
+        cv.room = outIsOne
+            ? SqrtPriceMath.getAmount1Delta(cv.edge, cv.entry, cv.liq, false)
+            : SqrtPriceMath.getAmount0Delta(cv.entry, cv.edge, cv.liq, false);
+        // **A ZERO `room` MUST FALL BACK TO THE AVERAGE, NOT BE PRICED.** `_segmentIn` answers
+        // `outAmt >= room` by clamping to the edge, so with `room == 0` it returns the SAME value
+        // for every argument — a constant curve. `wCum` would then equal `wTotal` at the first
+        // seat, and that seat would be handed the entire input while every seat behind it got
+        // nothing. Believed unreachable (a span too thin to hold one wei of the outgoing token can
+        // only have produced `amtOut <= 1`, which the remainder line absorbs before the curve is
+        // ever consulted), so it is written as a guard rather than a test: this is the third of
+        // §3b's honest answers, not the first.
+        if (cv.room == 0) return;
+        cv.total = _segmentIn(cv, outIsOne, amtOut);
     }
 
     // ------------------------------------------------------------------------------- the allocator
@@ -811,12 +916,31 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // seat, not the whole roster. (An earlier draft of this function loaded every seat into a
         // memory array first, which read the entire queue on every swap and silently threw the
         // cursor optimisation away.)
+        // THE PRICE CURVE, INITIALISED LAZILY AND DELIBERATELY SO. A swap the head absorbs on its
+        // own hits `Allocation.step`'s remainder line on the first seat and never consults the
+        // curve, so it must not pay to build one. `wTotal == 0` until something actually needs it,
+        // and `wTotal == 0` is also the honest average-price fallback when there is no curve to
+        // read — the two meanings coincide, which is why the flag and the value are the same word.
+        Curve memory cv;
+
         for (uint256 i = start; i < n && st.remaining > 0; i++) {
             Seat storage seat_ = q[_idAt(ord, i)];
             uint256 bal = outIsOne ? seat_.a1 : seat_.a0;
             if (bal == 0) continue;
 
-            (uint256 take, uint256 give) = Allocation.step(st, bal);
+            // Build the curve at the LAST possible moment: only once a seat has been found that
+            // will NOT, on its own, finish the swap. `bal < st.remaining` is exactly that test, and
+            // it is why a head-only swap pays nothing at all for marginal pricing.
+            uint256 wCum;
+            if (bal < st.remaining) {
+                if (cv.total == 0) _initCurve(cv, outIsOne, amtOut);
+                // `amtOut - st.remaining` is the outgoing token sourced BEFORE this seat; adding
+                // `bal` gives the cumulative position of this seat's segment end. Derived rather
+                // than tracked in its own local, again for the stack.
+                if (cv.total != 0) wCum = _segmentIn(cv, outIsOne, amtOut - st.remaining + bal);
+            }
+
+            (uint256 take, uint256 give) = Allocation.step(st, bal, wCum, cv.total);
 
             if (outIsOne) {
                 seat_.a1 = _u128(bal - take);
@@ -1495,7 +1619,8 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             uint256 id = _idAt(ord, i);
             uint256 bal = q[id].a0;
             if (bal == 0) continue;
-            (, uint256 give) = Allocation.step(st, bal);
+            // `(0, 0)` — rent is split pro-rata by balance and has no price curve. See `Rent`.
+            (, uint256 give) = Allocation.step(st, bal, 0, 0);
             lease[id].escrow += give;
         }
 

@@ -104,7 +104,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 /* ---------------------------------------------------------------- the book */
 .book{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;
   margin-top:26px}
-.book-hd,.row{display:grid;grid-template-columns:52px 46px 118px 1fr 1fr 116px 96px;gap:14px;
+.book-hd,.row{display:grid;grid-template-columns:52px 46px 112px 1fr 1fr 104px 104px 96px;gap:12px;
   align-items:center;padding:11px 18px}
 .book-hd{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;
   color:var(--tx3);border-bottom:1px solid var(--line);background:var(--panel2)}
@@ -263,8 +263,11 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
       contract's own arithmetic" and quoted a wei-level agreement with <span class="mono">test_7_5</span>
       — but those figures were measured when the hook held a <em>full-range</em> position, and were
       never re-taken after it moved to a band. Rather than restate a stale agreement we have removed
-      the claim. The allocator shown here (front-first, and the whole-trade average price to every
-      seat it reaches) is exactly what <span class="mono">_allocate</span> does.
+      the claim. The allocator shown here is the shape of <span class="mono">_allocate</span>:
+      front-first through the book, and each seat credited the <strong>price segment it actually
+      absorbed</strong> rather than the whole trade's average. That is why the <em>Fill price</em>
+      column below reads worse at rank 0 than at the back &mdash; being filled first means being
+      filled at the stalest prices of the move.
     </p>
 
     <pre class="ascii" style="margin-top:28px">CHEAPER ◄──────────── today's price ────────────► MORE EXPENSIVE
@@ -602,10 +605,9 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
     <h3 style="margin-top:22px">What would make this strong &mdash; none of it built</h3>
     <table class="tbl">
       <tbody>
-        <tr><td><strong>Marginal pricing instead of average</strong></td><td>Today every seat a trade reaches gets that trade's <em>average</em> price, so the tail gets no price advantage &mdash; only the option to sit out. Credit each seat the <em>segment it actually absorbed</em> and the tail systematically fills nearer the post-move price. This is what makes the tail a genuine senior tranche. <strong>A different allocator, not a parameter.</strong></td></tr>
         <tr><td><strong>A correct <span class="mono">recenter()</span></strong></td><td>Worth ~20&times; on the tail's coupon by ending the fixed term. Attempted and <strong>not shipped</strong>: eight targeted tests passed, the invariant campaign did not.</td></tr>
-        <tr><td><strong>&tau; at 25&ndash;50%, not 10%</strong></td><td>Raises &theta; from 29% to 51&ndash;81%. Already a constructor argument.</td></tr>
-        <tr><td><strong>A big book</strong></td><td>The trap is a fixed ~$90k: 9% of a $1M book, 0.9% of a $10M one. Dilution is the only lever on it.</td></tr>
+        <tr><td><strong>&tau; at 25&ndash;50%, not 10%</strong></td><td>Raises the tail's coupon from 6.4%/yr to 10.7&ndash;13.8%. Already a constructor argument, so this is a deployment decision &mdash; but nothing has been tested at those values.</td></tr>
+        <tr><td><strong>A big book</strong></td><td>The middle of the book is a fixed <em>depth range</em>, not a fixed fraction. Diluting it across a larger book is the only lever that does not cost the head.</td></tr>
       </tbody>
     </table>
   </div>
@@ -820,6 +822,35 @@ function allocQueue(stock, out){
   return give;
 }
 
+/* MARGINAL PRICING — each seat is credited the price SEGMENT IT ABSORBED, not the swap average.
+   This is the curve `_allocate` builds. L is constant across the band, so the cumulative token0 a
+   swap takes in while releasing `T` of token1 is L*(1/(sp - T/L) - 1/sp), grossed up by the fee. A
+   seat's credit is the DIFFERENCE of two cumulative amounts — the same telescoping form the
+   contract uses, which is what keeps the parts summing to the whole.
+
+   Being filled FIRST means being filled at the STALEST prices, so rank 0 gets the worst rate here
+   and the back of the book the best. Under the average pricing this hook used to ship, every row
+   below would read the same number, and the head would have taken all the volume at no price
+   disadvantage at all. */
+function allocCredits(give, b){
+  const credits = give.map(() => 0);
+  if (!b) return credits;
+  const cumIn = T => {
+    let sp2 = b.sp - T / b.L;
+    if (sp2 < b.spa) sp2 = b.spa;            // clamped at the band edge, as `_segmentIn` clamps
+    return b.L * (1/sp2 - 1/b.sp) / (1 - FEE);
+  };
+  let cum = 0, prev = 0;
+  for (let i = 0; i < give.length; i++){
+    if (give[i] <= 1e-12) continue;
+    cum += give[i];
+    const g = cumIn(cum);
+    credits[i] = g - prev;
+    prev = g;
+  }
+  return credits;
+}
+
 /* Pro-rata: everyone gives the same fraction. This is every Uniswap ever shipped. */
 function allocPro(stock, out){
   const tot = stock.reduce((a,b) => a+b, 0);
@@ -891,12 +922,25 @@ function renderCompare(){
   document.getElementById('qCursor').textContent =
     cursor >= stock.length ? 'exhausted' : 'rank ' + cursor;
 
-  renderBook(q);
+  renderBook(q, bandState(t0, t1), out, amtIn);
+}
+
+/* One seat's realised rate this swap, against the swap's own average. Green = filled better than
+   the average (further through the move), red = worse (first in line, stalest prices). */
+function fillCell(credits, g, r, avgPx){
+  if (!credits || g <= 1e-9 || !avgPx) return '<span class="unpriced">&mdash;</span>';
+  const px = credits[r] / g;
+  const bps = ((px - avgPx) / avgPx) * 10000;
+  const col = bps >= 0 ? 'var(--t1)' : 'var(--bad)';
+  const sign = bps >= 0 ? '+' : '';
+  return `${fmt(px,4)}<br><span style="color:${col};font-size:11px">${sign}${fmt(bps,0)} bps</span>`;
 }
 
 /* ================================================================== the book */
-function renderBook(give){
+function renderBook(give, band, out, amtIn){
   const seats = STATE.seats;
+  const credits = give ? allocCredits(give, band) : null;
+  const avgPx = (out > 1e-12 && amtIn > 0) ? amtIn / out : 0;
   const maxA = Math.max(...seats.map(s => s.a0), 1);
   const maxB = Math.max(...seats.map(s => s.a1), 1);
   const eps = 1e-9;
@@ -904,6 +948,7 @@ function renderBook(give){
   const hd = `<div class="book-hd">
     <div>Rank</div><div>Seat</div><div>Holder</div>
     <div>Capital · currency0</div><div>Capital · currency1</div>
+    <div style="text-align:right">Fill price</div>
     <div style="text-align:right">Self-price</div><div style="text-align:center">This swap</div></div>`;
 
   const rows = seats.map((s, r) => {
@@ -920,6 +965,7 @@ function renderBook(give){
            <div class="barnum">${fmt(s.a0,0)}</div></div>
       <div><div class="bar b"><i style="width:${(remain/maxB)*100}%"></i></div>
            <div class="barnum">${fmt(remain,0)}${g>eps?' &nbsp;<span style="color:var(--bad)">−'+fmt(g,0)+'</span>':''}</div></div>
+      <div class="price">${fillCell(credits, g, r, avgPx)}</div>
       <div class="price ${s.price?'':'unpriced'}">${s.price ? fmt(s.price,2) : 'unpriced'}</div>
       ${tag}</div>`;
   }).join('');

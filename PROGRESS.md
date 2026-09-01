@@ -18,9 +18,148 @@ Newest entry first. Never delete an entry — supersede it.
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
-| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-01** | **PARTLY** — 198 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **Broadcast and video still outstanding.** |
+| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-01** | **PARTLY** — 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## 2026-09-01 (second session) — The head was winning in every state of the world. That is not a market.
+
+**State on exit: `forge test` → 205 passed, 0 failed, 1 skipped. `forge lint src/` clean. Full
+mutation campaign: see the bottom of this entry.**
+
+### It opened with a live security hole that was nobody's design decision
+
+`test_4_19_onlyTheHolderMayDrainTheMeter` was RED. `withdrawRent` had **no seat-ownership check** —
+anyone could drain any seat's escrow. It was not a regression anybody wrote: the previous session's
+`mutate.py` campaign was SIGKILLed, its `finally` never ran, and it left the mutant on disk. The
+suite had been failing against it ever since, and the handoff note said "199 passed, 0 failed"
+because that was measured before the campaign started.
+
+Restored, and then **fixed at the mechanism level rather than by writing the rule down again**
+(PITFALLS 5.100 → CLOSED). `mutate.py` now tracks what it last wrote to each file; the `finally`
+restores only over its own content and REFUSES over anything else, saving the pre-campaign original
+to `<file>.mutate-backup` and printing what to check. The per-mutation loop raises rather than
+racing an editor. Separately, `mutate.py --help` used to **launch the full campaign** — unknown
+flags were discarded silently — which is how the hazard was rediscovered mid-session (5.107).
+
+### The real work: average pricing was a subsidy, and no test could see it
+
+The question put to this session was whether anyone would buy seat 5, 15 or 30. Answering it
+honestly meant simulating the mechanism **as the contract executes it** — constant-liquidity band,
+seats holding `(a0, a1)`, front-first drain from a cursor, seats emptied and skipped until the flow
+reverses. `BUSINESS.md` §0.5's numbers came from a model with no inventory and no cursors, which
+let the head refill for free on every trade, and the error ran the head's way every time (5.104).
+
+Rebuilt, it found something the test suite could not:
+
+```
+                                    BENIGN      NORMAL       TOXIC
+  ordinary pro-rata LP              +21.2%      -31.8%     -752.6%
+  seat 1, AVERAGE pricing          +934.0%     +675.3%     -439.9%   beats an LP in ALL THREE
+  seat 1, MARGINAL pricing         +911.0%     +566.1%     -796.2%   loses in the toxic regime
+```
+
+Every seat a swap reached was credited the swap's **average** price, so the head took all of the
+volume *and* the same price as the seats behind it. It beat an ordinary LP in every state of the
+world, including the toxic regime that exists precisely to punish whoever is first into a stale
+price. That is AGENTS.md §5's **free lane** — the failure that has killed seven mechanisms here —
+and it was invisible to 199 tests, 74 mutations and the invariant campaign, because average pricing
+**conserves perfectly**. It hands the wrong seat the money, and conservation cannot see that.
+
+**Fixed at the mechanism.** A swap sweeps a RANGE of prices; being filled first means being filled
+at the stalest end of it. `Allocation.step` now takes a price curve (`wCum`, `wTotal`) and credits
+each seat the segment it actually absorbed. The head fills worse than the swap average, the seats
+behind it better, in both directions — asserted in `test/queue/Marginal.t.sol`, measured at ~400 bps
+of spread across the book. Total return is unchanged to the wei: this moved value, it did not
+create any.
+
+Design notes worth keeping:
+
+* **The cumulative form is what makes it exact.** `give` is the DIFFERENCE of two cumulative
+  allocations, so successive `mulDiv`s against a non-decreasing curve telescope and the parts
+  cannot drift from the whole whatever shape the curve has. Fuzzed against arbitrary monotone
+  curves, not just the one the hook builds.
+* **The curve is built lazily**, at the first seat that will not finish the swap on its own. A
+  head-only swap — almost every trade — never builds one: **128,625 → 128,848 gas, +223**.
+* **`_segmentIn` is TOTAL.** It runs inside `afterSwap`, where a revert is a bricked pool rather
+  than a failed sum, and v4's `getNextSqrtPriceFrom...` helpers revert rather than saturate once
+  the amount would exhaust the position. Capacity to the band edge is measured first and the walk
+  is clamped there. M80 confirms the clamp is load-bearing.
+
+### Two of this session's own instruments were wrong, and both were caught
+
+* **N4 began dying for the wrong reason.** The `Controls.t.sol` mutant still priced at the average
+  while production priced by segment, so it differed from production in TWO places and died of the
+  one it was not testing. Caught only because the control asserts the **exact revert reason**
+  (LAW 2); `reason.length > 0` would have stayed green (5.105).
+* **`test_8_3` passed under a mutant that deleted marginal pricing.** It asserted
+  `head < average < tail`, which is *still true* under average pricing for a pure rounding reason —
+  floored shares land a wei low, the remainder line puts the last seat a wei high. 5.53's rule in
+  new code: a bound in the right direction is not a correctness assertion. Now requires ≥10 bps
+  (5.106). **It was only visible because the mutation was applied to the hook AND the witness
+  together**; mutating the hook alone dies on the fixture's own comparison and hides whether the
+  new assertions have teeth.
+
+### The gas budget moved, and `MAX_SEATS` deliberately did not
+
+Queue walk 8,070 → **9,945 per seat**; queue-attributable cost at 32 seats 278,140 → **342,365**,
+over the stated 300k. `MAX_SEATS = 32` is the 32 bytes of the packed `order` word, not a gas choice,
+so the budget was raised to 400,000 **with the reason recorded in the test**, and the constraint
+that actually binds is asserted separately and did not move: a full cold 32-seat sweep is 826,799
+against an 850,000 ceiling (5.108).
+
+### The product answer, which is less comfortable than the pitch was
+
+**QUEUE redistributes one Uniswap position's return; it does not create return.** Against its own
+pro-rata benchmark the book is zero-sum, so **there is no configuration in which all 32 seats beat
+an ordinary LP, and there cannot be one.** Simulated, 32 equal seats:
+
+* **Seat 1** — equity-like. Enormous in benign and normal, genuinely loses in toxic. A real
+  position with a real risk, now that the free lane is shut.
+* **Seats 5–20** — lose under **every** condition (−8% benign, −77% normal, −1267% toxic). Reached
+  often enough to absorb the large toxic trades, not often enough to earn the small profitable
+  ones. Marginal pricing improves them and they stay negative.
+* **Seat 32** — ~0%, and that is not a coupon, it is capital the flow never reached. Still a **win**
+  where an ordinary LP returns −31.8%. Bond-like, and should be sold as one.
+* **The tail's real income is rent**, and the shipped **τ = 10% gives a 6.4% coupon**; 25–50% gives
+  10.7–13.8%. τ is already a constructor argument, so this is a deployment decision.
+
+Sizing the head compresses the middle (worst of seats 2–21: −109.6% → −49.9%) and doubles the seats
+that beat an LP — while collapsing the head from +566% to −38%. **They are the same money.** The
+design honestly supports **two** positions, one head and a deep tail, with the middle left unfunded.
+Seat capital is chosen by holders, so the contract already supports this and **no code change
+follows** — but the pitch had to change, and `BUSINESS.md` §0.5 was rewritten around it.
+
+Evidence, both models and the reproduction scripts: `docs/research/seat-economics/`.
+
+### Two more defects, both found by reading rather than by a test
+
+* **The band-entry rule got duplicated into a second function** — `_bandStep` replays the in-band
+  fill, `_initCurve` prices it, and each wrote out the same clamp. Fifth instance of one-rule-two-
+  places here, and the worst of them: the fill would be replayed from one anchor and PRICED from
+  another, and **conservation would still tie out to the wei** because `wTotal` normalises the
+  total away. Extracted to `_bandEntry`; M77/M78 now catch 74 and 118 tests where the duplicated
+  pair caught 60 and 64 — the extraction is measurably more load-bearing (5.109).
+* **`room == 0` produces a CONSTANT curve**, which hands the first non-finishing seat the entire
+  input and every seat behind it nothing. Guarded to fall back to the average. Believed
+  unreachable and **written down rather than tested** — §3b's third honest answer (5.110).
+
+### The mutation campaign, and one stale instrument
+
+Full campaign: **79 RED, 0 SURVIVED, 0 NO-COMPILE, 1 BAD-PATTERN.** The BAD-PATTERN is the finding:
+changing `Allocation.step` to an if/else silently turned M59 into `0 matches`, so that defect was
+not tested on that run while the summary still read "0 SURVIVED". **`BAD-PATTERN` is a failure, not
+a status** (5.111). M59 retired in favour of M76 — the same defect against the current source — with
+the reason recorded in `mutate.py` rather than deleted. The 7 new price-curve mutations (M74–M80)
+are all red, re-run after the refactor.
+
+### Not done
+
+**Broadcast to Unichain Sepolia and the video.** Both are submission gates, neither is code, and
+neither moved this session. `recenter()` v2 is still unshipped and still campaign-red
+(`docs/wip/recenter-v2/`).
 
 ---
 

@@ -192,9 +192,12 @@ MUTS = [
     # without it every floored share loses up to a wei and the shortfall compounds forever. It is
     # ONE implementation shared by the swap allocator and the rent distribution, so one mutation
     # reaches both.
-    ("M59", ALLOC, "the remainder line is gone: every share is floored and the queue is short",
-     "        give = st.remaining == 0 ? st.amtIn - st.assigned : FullMath.mulDiv(st.amtIn, take, st.amtOut);",
-     "        give = FullMath.mulDiv(st.amtIn, take, st.amtOut);"),
+    # M59 RETIRED 2026-09-01 and SUPERSEDED BY M76, which is the same defect against the current
+    # source. It targeted the one-line ternary `give = st.remaining == 0 ? ... : ...`, which no
+    # longer exists: `Allocation.step` became an if/else when it started taking a price curve.
+    # It is recorded here rather than deleted because a BAD-PATTERN is how the campaign REPORTED
+    # the staleness, and that report is the only reason anyone noticed the mutation had stopped
+    # testing anything. Do not re-add it without checking M76 first.
     ("M60", ALLOC, "the fill takes the whole balance even when less is needed",
      "        take = bal < st.remaining ? bal : st.remaining;", "        take = bal;"),
     # M61 was "the array form's cursor advances past a partially filled seat". It SURVIVED, and
@@ -251,6 +254,38 @@ MUTS = [
     ("M73", HOOK, "a band narrower than one spacing is accepted, so the position has zero width",
      "        if (bandHalfWidth < tickSpacing || bandHalfWidth > TickMath.MAX_TICK / 2) {\n            revert BadBandWidth(bandHalfWidth, tickSpacing);\n        }",
      "        // MUT"),
+
+    # ------------------------------------------------------- marginal pricing (the price curve)
+    ("M74", ALLOC, "the price curve is ignored: every seat is credited the swap's AVERAGE price, "
+                   "which is the head's free lane restored",
+     "        } else if (wTotal == 0) {\n            give = FullMath.mulDiv(st.amtIn, take, st.amtOut);\n        } else {",
+     "        } else if (true) {\n            give = FullMath.mulDiv(st.amtIn, take, st.amtOut);\n        } else {"),
+    ("M75", ALLOC, "the cumulative form is broken into per-seat rounded shares, so the parts stop "
+                   "summing to the whole",
+     "            uint256 g = FullMath.mulDiv(st.amtIn, wCum, wTotal);",
+     "            uint256 g = st.assigned + FullMath.mulDiv(st.amtIn, wCum, wTotal) / 2;"),
+    ("M76", ALLOC, "the remainder line is deleted, so the last filled seat is short",
+     "        if (st.remaining == 0) {\n            give = st.amtIn - st.assigned;",
+     "        if (false) {\n            give = st.amtIn - st.assigned;"),
+    # M77/M78 target `_bandEntry`, which is the SINGLE definition of where a swap meets the band.
+    # Mutating it moves BOTH the in-band replay and the price curve, which is the point: the whole
+    # reason it is one function is that the two must never disagree.
+    ("M77", HOOK, "the swap is anchored at the far band edge instead of where it entered, so the "
+                  "head is credited a price move that happened in someone else's wing",
+     "        return zeroForOne ? (start < hi ? start : hi, lo) : (start > lo ? start : lo, hi);",
+     "        return zeroForOne ? (hi, lo) : (lo, hi);"),
+    ("M78", HOOK, "the band walk heads for the WRONG edge, reversing which end of the book is "
+                  "priced better",
+     "        return zeroForOne ? (start < hi ? start : hi, lo) : (start > lo ? start : lo, hi);",
+     "        return zeroForOne ? (start < hi ? start : hi, hi) : (start > lo ? start : lo, lo);"),
+    ("M79", HOOK, "the curve is evaluated at the seat's own take instead of the CUMULATIVE take, so "
+                  "every seat is priced as if it were the head",
+     "                if (cv.total != 0) wCum = _segmentIn(cv, outIsOne, amtOut - st.remaining + bal);",
+     "                if (cv.total != 0) wCum = _segmentIn(cv, outIsOne, bal);"),
+    ("M80", HOOK, "the band-edge clamp is removed from the price walk, so a swap that exhausts the "
+                  "band reverts inside afterSwap and bricks the pool",
+     "        if (outAmt >= cv.room) {\n            next = edge;",
+     "        if (false) {\n            next = edge;"),
 ]
 
 
@@ -271,42 +306,82 @@ def failing_invariants(out):
 
 def run(ids, campaign=False):
     src = {HOOK: open(HOOK).read(), RENT: open(RENT).read(), ALLOC: open(ALLOC).read()}
+    # What THIS PROCESS believes it last wrote to each file. Anything else on disk is somebody
+    # else's edit and must never be overwritten -- see the `finally` below.
+    disk = dict(src)
     os.makedirs(os.path.dirname(MARKER), exist_ok=True)
     with open(MARKER, "w") as f:
         f.write(f"pid {os.getpid()} started {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
     try:
-        return _run(src, ids, campaign)
+        return _run(src, disk, ids, campaign)
     finally:
         if os.path.exists(MARKER):
             os.remove(MARKER)
-        # **THIS `finally` IS LOAD-BEARING AND IT WAS PAID FOR.** This harness edits PRODUCTION
-        # SOURCE in place. An earlier version restored the file only on the happy path, so a
-        # Ctrl-C — or any interrupt from the tool driving it — left a MUTANT on disk, and the next
-        # run read that mutant as its baseline. It happened: the `p == lo` guard in
-        # `_liquidityToCover` was silently absent for a whole campaign, which showed up only as a
-        # BAD-PATTERN on the mutation that targets it. A mutation harness that can leave the
-        # repository broken is worse than no mutation harness (PITFALLS 5.79).
+        # **THIS `finally` IS LOAD-BEARING AND IT WAS PAID FOR TWICE.** This harness edits
+        # PRODUCTION SOURCE in place.
+        #
+        # ROUND ONE (PITFALLS 5.79): an earlier version restored the file only on the happy path,
+        # so a Ctrl-C left a MUTANT on disk and the next run read that mutant as its baseline. It
+        # happened: the `p == lo` guard in `_liquidityToCover` was silently absent for a whole
+        # campaign, visible only as a BAD-PATTERN on the mutation that targets it.
+        #
+        # ROUND TWO (PITFALLS 5.100), which is what the `disk` bookkeeping below is for: the fix
+        # for round one restored the snapshot whenever the file differed from it -- INCLUDING when
+        # the difference was somebody else's work. An agent editing `src/` while a campaign ran in
+        # the background lost ~200 lines, and the only symptom was a compiler error pointing at the
+        # caller of a function that no longer existed. A restore is only safe over content THIS
+        # PROCESS put there; over anything else it is data loss, so it refuses and says so.
         for path, original in src.items():
-            if open(path).read() != original:
-                open(path, "w").write(original)
-                print(f"restored {os.path.relpath(path, ROOT)}", flush=True)
+            now = open(path).read()
+            if now == original:
+                continue
+            if now != disk[path]:
+                rel = os.path.relpath(path, ROOT)
+                bak = path + ".mutate-backup"
+                with open(bak, "w") as f:
+                    f.write(original)
+                print(
+                    f"\n!! REFUSING TO RESTORE {rel} !!\n"
+                    f"   It is not what this campaign last wrote, so something else edited it while\n"
+                    f"   the campaign was running. Overwriting it would destroy that work.\n"
+                    f"   The pre-campaign original has been written to {os.path.relpath(bak, ROOT)}.\n"
+                    f"   Check `git diff {rel}` before doing anything else; a MUTANT may still be on\n"
+                    f"   disk, or your own edit may be intact. Do not trust any test run until you\n"
+                    f"   have looked.",
+                    flush=True,
+                )
+                continue
+            open(path, "w").write(original)
+            disk[path] = original
+            print(f"restored {os.path.relpath(path, ROOT)}", flush=True)
 
 
-def _run(src, ids, campaign):
+def _run(src, disk, ids, campaign):
     results = []
     todo = [m for m in MUTS if not ids or m[0] in ids]
     for mid, path, desc, find, repl in todo:
         original = src[path]
+        # Before touching the file, confirm it is still what we last left there. If it is not,
+        # somebody is editing `src/` right now and continuing would overwrite their work on the
+        # next mutation. Stop the whole run rather than race them.
+        if open(path).read() != disk[path]:
+            raise RuntimeError(
+                f"{os.path.relpath(path, ROOT)} changed underneath this campaign. "
+                f"Stopping so the edit is not overwritten. Check `git diff src/`."
+            )
         if original.count(find) != 1:
             results.append((mid, "BAD-PATTERN", desc, original.count(find)))
             print(f"{mid:5} BAD-PATTERN ({original.count(find)} matches)  {desc}", flush=True)
             continue
-        open(path, "w").write(original.replace(find, repl))
+        mutated = original.replace(find, repl)
+        open(path, "w").write(mutated)
+        disk[path] = mutated
         env = dict(os.environ, QUEUE_MUTATION_RUN="1")
         p = subprocess.run(
             CAMPAIGN if campaign else ["forge", "test"], cwd=ROOT, capture_output=True, text=True, env=env
         )
         open(path, "w").write(original)
+        disk[path] = original
         out = p.stdout + p.stderr
         if "Compiler run failed" in out or "Error (" in out:
             verdict = "NO-COMPILE"
@@ -336,5 +411,24 @@ if __name__ == "__main__":
     # `--campaign` runs each mutation against the Phase 6 INVARIANT SUITE ONLY and names the
     # invariant that caught it. That is a different claim from "the full suite goes red" — §D.8 V3
     # requires the CAMPAIGN to be the thing that catches it.
+    #
+    # **UNKNOWN FLAGS ARE REFUSED, and that is not pedantry.** Every flag used to be discarded
+    # silently, so `mutate.py --help` did not print help — it launched the FULL campaign, held a
+    # mutant in `src/` for the duration, and locked the repository against `forge test`. A tool
+    # that edits production source must not do anything at all on a typo.
+    KNOWN = {"--campaign"}
+    unknown = {a for a in args if a.startswith("-")} - KNOWN
+    if unknown or "-h" in args or "--help" in args:
+        if unknown - {"-h", "--help"}:
+            print(f"unknown option(s): {' '.join(sorted(unknown - {'-h', '--help'}))}\n")
+        print(
+            "usage: python3 script/mutate.py [--campaign] [MID ...]\n\n"
+            "  Edits src/ IN PLACE, one mutation at a time, and restores it in a `finally`.\n"
+            "  NOTHING ELSE MAY TOUCH src/ OR RUN forge WHILE THIS IS RUNNING.\n\n"
+            "  --campaign   run each mutation against test/queue/Invariant.t.sol alone and name\n"
+            "               the invariant that caught it (§D.8 V3). Default is the full suite.\n"
+            "  MID ...      run only these mutation ids (e.g. M75 M76). Default is all of them.\n"
+        )
+        sys.exit(0 if not (unknown - {"-h", "--help"}) else 2)
     camp = "--campaign" in args
     sys.exit(run({a for a in args if not a.startswith("--")}, campaign=camp))

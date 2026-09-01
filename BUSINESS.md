@@ -41,12 +41,33 @@ Nothing in this document is a revenue, TVL, or adoption forecast. There is no ba
 ## 0.5 WHO BUYS WHICH SEAT, AND WHEN THEY LOSE
 
 The product is the seats. If no seat pays, there is no product. This section is the arithmetic, per
-seat, with the conditions written next to it.
+seat, with the conditions written next to it — and it is deliberately the least flattering section
+in this document.
 
-**One caveat that governs every number below.** The band is **fixed for the life of the pool**, and
-on a 45%-vol pair that life is **~16 days** before the price leaves it. So every annual rate here is
-a rate *while in band*. QUEUE is a **rolling fixed-term instrument** — like rolling 2-week paper, not
-a perpetual venue. You get the rate if you redeploy; you get ~1/20th of it if you don't.
+**[SIMULATED] — and read this before quoting any number below.** Every figure here comes from
+`docs/research/seat-economics/`, a simulation of the mechanism **as the contract actually executes
+it**: one constant-liquidity band, seats holding `(a0, a1)`, the outgoing token drained front-first
+from a cursor, seats emptied and skipped until the flow reverses. It is not a measurement of a live
+pool and there is no live pool to measure. It replaces an earlier model that let the head refill
+for free on every trade, which overstated the head and understated everything behind it; the
+conclusions changed enough that the old numbers are not reproduced here.
+
+**One caveat governs everything.** The band is fixed for the life of the pool. On a 45%-vol pair
+that life is **~18 days** before the price leaves it. Every annual rate below is a rate *while in
+band*. QUEUE is a **rolling fixed-term instrument** — like rolling three-week paper, not a
+perpetual venue.
+
+### The one sentence that governs the whole section
+
+> **QUEUE does not create return. It redistributes the return of one ordinary Uniswap position.**
+
+The band earns exactly what the same band would earn with no hook on it. Front-first ordering
+decides *who gets which part*. So the seats are, against each other, **zero-sum**: if the head beats
+an ordinary pro-rata LP by 500 points, the rest of the book is behind by 500 points in total.
+Nothing in the design can change that, and any pitch that implies otherwise is wrong.
+
+What the mechanism *can* do — and what it now does — is make the split reflect a real economic
+difference rather than an arbitrary one.
 
 ### Where the money comes from
 
@@ -57,130 +78,155 @@ a perpetual venue. You get the rate if you redeploy; you get ~1/20th of it if yo
   Uniswap sets the PRICE (unchanged: same curve, same 0.30% fee, any router)
        |
        v
-  QUEUE decides WHOSE MONEY FILLS IT, in seat order
+  QUEUE decides WHOSE MONEY FILLS IT, in seat order, AND AT WHICH PRICE
        |
-       +--> seat 1 empties first ------> then seat 2 ------> ... ------> seat 32
-       |
+       +--> seat 1 fills first, at the STALEST prices of the move
+       |    then seat 2, at slightly better prices
+       |    ... then seat 32, nearest the post-move price
        v
   small trades  reach seat 1 only
   large trades  reach deep into the book
 
   RETAIL / noise flow  = many small trades   -> PROFITABLE to fill (fees > markout)
   ARBITRAGE flow       = few large trades    -> LOSS-MAKING to fill (markout > fees)
-
-  ==> Sitting at the FRONT buys the retail flow. Sitting at the BACK declines
-      the arbitrage flow. There is no third thing being sold here.
 ```
 
-An ordinary Uniswap dollar takes **both halves and cannot decline either**:
+An ordinary Uniswap dollar takes **both halves and cannot decline either**. Sitting at the front
+buys the retail flow. Sitting at the back declines the arbitrage flow. **That is the entire product.**
+
+### What marginal pricing changed, and why it was not optional
+
+Until this build, every seat a swap reached was credited the swap's **average** price. The head
+therefore took all of the volume *and* the same price as the seats behind it. Simulated across three
+regimes, that made the head strictly better than an ordinary LP **in every state of the world**:
 
 ```
-  ONE PRO-RATA DOLLAR, PER YEAR IN BAND
-    retail flow     109.5 turns x 0.30%              = +32.85%
-    arbitrage flow   73.0 turns x (0.30% - markout)  = -21.90%   <-- undeclinable
-                                                       -------
-    net                                              = +10.95%
+                                    BENIGN      NORMAL       TOXIC
+  ordinary pro-rata LP              +21.2%      -31.8%     -752.6%
+  ------------------------------------------------------------------
+  seat 1, AVERAGE pricing (old)    +934.0%     +675.3%     -439.9%   beats an LP in ALL THREE
+  seat 1, MARGINAL pricing (new)   +911.0%     +566.1%     -796.2%   loses in the toxic regime
 ```
 
-**That is the whole product: QUEUE is the first AMM position where capital can choose which half of
-the flow it takes.** Nothing else about it is new.
+A position that wins in every state of the world is not a market position, it is a subsidy paid by
+the rest of the book — the "free lane" failure that has killed seven mechanisms in this project's
+history. Marginal pricing closes it: the head is filled first, so it eats the **stalest** prices of
+every move it is first into, and it now underperforms an ordinary LP exactly when being first is
+supposed to hurt. Being first became a trade-off instead of a gift.
 
-### The book, and where the trap is
+It did **not** make the book more profitable. Total return is unchanged to the wei. It moved value
+from the head to the seats immediately behind it, and made the head's risk honest.
 
-```
-  y_net(depth) = fees from trades bigger than you - toxicity from trades bigger than you
-                 ^ dies at the biggest RETAIL trade   ^ dies at the biggest ARBITRAGE trade
-                                                        ...which is LARGER.
+### The book, per seat, and where it is bad
 
-  $1M book, $500k/day, 0.30% fee, arb markout 60bps       per $1 per year   vs pro-rata
-  -------------------------------------------------------------------------------------
-  depth $0    - $1k     every trade reaches you             +$177.39          +1,620x
-  depth $1k   - $10k    all but the smallest                 +$13.14           +120x
-  depth $10k  - $50k    ONLY arbitrage reaches you            -$3.29            -30x  <-- TRAP
-  depth $50k  - $100k   only the largest arbitrage            -$1.09            -10x  <-- TRAP
-  depth $100k - $1M     nothing reaches you                    $0.00              0x
-                                                             -------
-  pool net                                                   +$0.1095        (+10.95%)
-```
-
-**There is a dead zone between the biggest retail trade and the biggest arbitrage trade that takes
-all of the toxicity and none of the fees.** It is $90k of capital destroying $186k/year — 1.7x the
-pool's entire profit. It cannot be left empty (the queue is contiguous), only **assigned**.
-
-### The four positions
-
-| | **HEAD** (seat 1) | **MIDDLE** (the trap) | **TAIL** (the deep seats) | ordinary LP |
-|---|---|---|---|---|
-| What you are | buying the retail flow | nobody | declining the arb flow | taking both |
-| Capital should be | = biggest routine **arbitrage** trade | **none — do not create these seats** | whatever you have idle | anything |
-| You earn | fees on huge turnover | fees on almost nothing | **rent only**, plus zero LVR | the blend |
-| You pay | rent to everyone behind | rent, for nothing | nothing | nothing |
-| **You profit when** | you can hedge the inventory | **never** | the pool is toxic, or you were going to hold the tokens anyway | the pool is benign |
-| **You lose when** | arb markout > ~126 bps | **always** | you had a better use for the capital | the pool is toxic |
-
-**Answer to "should seats have the same capital": no, and equal seats are the mistake that creates
-the trap.** Size the head to the largest routine *arbitrage* trade — not the largest retail trade,
-which maximises the head's rate but manufactures the dead zone. Then the head absorbs the trap as
-part of a profitable bundle and **no middle seat exists**. What remains is **two products, not 32**:
-one head, and an undifferentiated tail. `MAX_SEATS = 32` is room for *participants*, not 32 things
-to sell.
-
-### Simulation: the same book under three conditions
-
-Head sized correctly ($100k). Tail = $900k. Rates are per year *in band*.
+Per year while in band. 32 equal seats of $31,250 on a $1M book, marginal pricing, 60 price paths.
 
 ```
-                          BENIGN            NORMAL            TOXIC
-  arb markout             0 bps             60 bps            100 bps
-  pool net (pro-rata)     +54.8%            +11.0%            -18.3%
-  -----------------------------------------------------------------------
-  HEAD  (seat 1)          +109.5%           +109.5%           -12.0%
-        vs pro-rata       +54.7 pts         +98.5 pts         +6.3 pts
-        verdict           BUY               BUY, strongly     marginal
-
-  TAIL  (seats 2..n)      +16.6%            +6.8%             +2.7%
-        vs pro-rata       -38.2 pts         -4.2 pts          +21.0 pts
-        vs A WALLET       +16.6 pts         +6.8 pts          +2.7 pts
-        verdict           LP instead        close             BUY
+                        BENIGN        NORMAL         TOXIC
+  in-band life          63.7 d        18.5 d         1.3 d
+  ordinary LP           +21.2%        -31.8%       -752.6%
+  --------------------------------------------------------
+  seat 1   (head)      +911.0%       +566.1%       -796.2%
+  seat 5                 -8.3%        -76.8%      -1267.1%   <-- TRAP
+  seat 10               -12.9%        -79.9%      -1123.0%   <-- TRAP
+  seat 15                -7.6%        -70.2%       -888.2%   <-- TRAP
+  seat 20                -9.3%        -49.1%       -659.9%   <-- TRAP
+  seat 32  (tail)        +0.0%         +0.0%         -2.3%
+  --------------------------------------------------------
+  seats beating an LP     1/32         10/32         15/32
 ```
 
-**The tail's benchmark is the question the whole product turns on.** Against an ordinary LP position
-it only wins in a toxic pool. Against **tokens sitting idle in a treasury it wins every time**, and
-that is the honest customer: capital that was never going to LP, being paid a coupon to sit in a
-place where it also provides depth and takes almost none of the arbitrage loss.
+Three things in that table, and none of them are comfortable:
 
-**The crossover, testable against a real pool with no model of ours:**
+1. **The middle of the book loses under every condition.** Seats 5–20 are reached often enough to
+   absorb the large, toxic trades but not often enough to earn the small, profitable ones. This is
+   not a pricing artefact — marginal pricing *improves* these seats and they are still negative.
+2. **The deep tail is not "paid to wait", it is UNTOUCHED.** Seat 32's ~0% is not a coupon, it is
+   the return of capital that the flow never reached. Its P&L is the P&L of holding the tokens.
+3. **In a benign pool only ONE seat beats an ordinary LP.** If the pool is healthy, the honest
+   advice to everyone except the head is: do not buy a seat, just LP.
 
-> **Buy the tail when your pool loses more to arbitrageurs than ~89% of what it collects in fees.**
-> Stop above ~168% — past that the head stops paying rent and holding the tokens in a wallet wins.
-> Measure it from the pool's own history: mark inventory at t+5min on every swap, sum the signed
-> P&L, divide by fees. A subgraph query. Stablecoin pairs: never. Volatile/long-tail pairs: common.
+### So why would anyone take seat 32?
+
+Because ~0% is a *good* number in the pools QUEUE is for. An ordinary LP in the normal regime
+returns **−31.8%**; the deep tail returns ~0% plus rent. The tail is not buying upside, it is
+declining a loss — a **bond-like** claim against an **equity-like** one.
+
+Its income is **rent**, and rent is the only reason the deep book is worth funding at all. The head's
+advantage is competed into its self-price by Harberger, and θ = τ/(τ+k) of that flows backward:
+
+```
+  head's advantage over an ordinary LP (NORMAL, marginal):  $186,852/yr
+  tail capital (seats 2..32):                                $968,750
+
+    tau     theta    head's self-price     rent/yr     TAIL COUPON
+    10%      33%              622,839      62,284           6.4%     <-- what the script ships
+    25%      56%              415,226     103,807          10.7%
+    50%      71%              266,931     133,466          13.8%
+   100%      83%              155,710     155,710          16.1%
+```
+
+**τ is a constructor argument and the deployed 10% is the least defensible number in the project.**
+It hands the tail a 6.4% coupon against a head earning six figures. 25–50% is the honest range, and
+nothing but a deployment decision stands in the way.
+
+### The answer to "should all 32 seats hold the same capital"
+
+**No, and equal seats are what manufactures the trap.** Simulated, sizing the head to swallow the
+routine arbitrage compresses the middle and roughly doubles the number of seats that beat an LP:
+
+```
+  NORMAL regime            pro-rata    head     worst of seats 2-21   seats >= LP
+  32 equal   ($31k each)     -31.8%   +566.1%        -109.6%              10/32
+  head $300k + 31 x $22.6k   -31.8%    -12.1%         -82.6%              13/32
+  head $600k + 31 x $12.9k   -31.8%    -38.4%         -49.9%              21/32
+```
+
+But note what it costs: the head's return collapses from +566% to −38%. **You cannot have both a
+spectacular head and a survivable middle** — they are the same money. The design honestly supports
+exactly **two** positions, and the contract already lets holders choose their own capital, so
+nothing needs to change in the code:
+
+| | **HEAD** — one seat | **TAIL** — the deep seats | **MIDDLE** |
+|---|---|---|---|
+| What it is | equity-like market making | bond-like rent coupon | nothing |
+| Capital | sized to the routine arbitrage trade | whatever is idle | **do not fund it** |
+| Income | fees on huge turnover, minus stale fills | rent, plus ~0 flow P&L | fees on almost nothing |
+| Benchmark | an ordinary LP | a wallet, or an LP in a toxic pool | — |
+| Wins when | the pool is benign or normal | the pool loses to arbitrage | **never** |
+| Loses when | the pool is toxic | the pool is benign | **always** |
+
+`MAX_SEATS = 32` is room for *participants*, not 32 things to sell.
+
+### The crossover, testable against a real pool with no model of ours
+
+> **Buy the tail when your pool loses more to arbitrageurs than it collects in fees.** Measure it
+> from the pool's own history: mark inventory at t+5min on every swap, sum the signed P&L, divide by
+> fees. A subgraph query, no model required. Stablecoin pairs: never. Volatile and long-tail pairs:
+> common.
 
 ### What is honestly wrong with this
 
-1. **The pools where the tail pays are the pools rational LPs are already leaving.** The addressable
+1. **It is zero-sum against its own benchmark.** Every point the head gains, the book loses. The
+   only external gain is that capital which would otherwise sit in a wallet now provides depth.
+2. **The pools where the tail pays are the pools rational LPs are already leaving.** The addressable
    market is people who have concluded LPing there loses money and want the exposure anyway — and
    there are at most 31 of them, because the roster is capped.
-2. **Routing viability and seat value are anti-correlated.** QUEUE is routed only where it is the
+3. **Routing viability and seat value are anti-correlated.** QUEUE is routed only where it is the
    deepest venue — long-tail pairs — which are exactly the pairs with thin, adversely-selected flow.
    That, not the +48% gas, is the sharpest objection, and no engineering closes it.
-3. **The tail's protection fails in the event it most cares about.** It is untouched by every move
-   that does not reach it, and reaching it means the price is at the band edge. Protected against
-   what it does not mind, exposed to what it does. (Measured: the traversal costs the tail 0.25% of
-   capital against a pro-rata LP's 2.42% — a tenth — but it is one event, not a stream.)
-4. **The rent can never make the tail whole.** Only `θ = τ/(τ+k) = 29%` of the head's advantage moves
-   backward; the rest is capitalised into the seat price. θ→1 only as τ→∞. Rent is a *discipline*
-   device, not the tail's income — the income is the avoided arbitrage loss.
-5. **A QUEUE LP cannot re-mint around the price**, which every ordinary v4 LP can. Fixed-term, roll it.
+4. **The middle of the book has no buyer at any price**, and the roster is contiguous, so it cannot
+   be left out — only left unfunded. A seat with no capital still holds rank.
+5. **A QUEUE LP cannot re-mint around the price**, which every ordinary v4 LP can. Fixed-term, roll
+   it. See §5 in `README.md`.
 
-### What would make this a strong product, none of it built
+### What would make this stronger, none of it built
 
 | | why |
 |---|---|
-| **Marginal pricing instead of average** | Today every seat a trade reaches gets that trade's *average* price, so the tail gets no price advantage — only the option to sit out. Credit each seat the *segment it actually absorbed* and the tail systematically fills nearer the post-move price. This is the change that makes the tail a genuine senior tranche. **A different allocator, not a parameter.** |
-| **A correct `recenter()`** | Worth ~20x on the tail's coupon by ending the fixed term. Attempted this session; unit-green, campaign-red, not shipped (`docs/wip/recenter-v2/`). |
-| **τ at 25–50%, not 10%** | Raises θ from 29% to 51–81%. Already a constructor argument. |
-| **A big book** | The trap is a fixed ~$90k: 9% of a $1M book, 0.9% of a $10M one. Dilution is the only lever on it. |
+| **τ at 25–50%, not 10%** | Raises the tail's coupon from 6.4% to 10.7–13.8%. Already a constructor argument: a deployment decision, not a code change. Nothing has been tested at those values. |
+| **A correct `recenter()`** | Ends the fixed term, which is worth more than any pricing change: it is the difference between an 18-day instrument and a perpetual one. Attempted twice; unit-green, campaign-red, not shipped (`docs/wip/recenter-v2/`). |
+| **A big book** | The trap is a fixed *depth range*, not a fixed fraction. Diluting it across a larger book is the only lever that does not cost the head. |
 
 ---
 

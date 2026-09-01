@@ -26,6 +26,9 @@ contract MutantQueueHook is QueueHarness {
     uint8 public constant OFF_BY_ONE = 2;
     uint8 public constant FLOOR_ONLY = 3;
     uint8 public constant NO_CURSOR_PULLBACK = 4;
+    /// @dev N6 — the price curve, ignored. Every seat a swap reaches is credited the swap's
+    ///      AVERAGE price, which is what this hook did before marginal pricing landed.
+    uint8 public constant AVERAGE_PRICE = 5;
 
     uint8 public immutable mode;
 
@@ -79,21 +82,23 @@ contract MutantQueueHook is QueueHarness {
 
         uint256 remaining = amtOut;
         uint256 assigned;
-        uint256 lastIdx;
-        bool any;
+        uint256 lastIdx = type(uint256).max; // also the "nothing was touched" sentinel
+        // The PRICE CURVE, built exactly as production builds it. A control that priced at the
+        // swap average while production prices by segment would differ from production in TWO
+        // places, and would then die of the difference it was not testing — which is precisely
+        // what happened when marginal pricing landed, and is what LAW 2 exists to catch.
+        Curve memory cv;
         for (uint256 i = start; i < n && remaining > 0; i++) {
             uint256 bal = outIsOne ? q[idAtRank(i)].a1 : q[idAtRank(i)].a0;
             if (bal == 0) continue;
             uint256 take = bal < remaining ? bal : remaining;
+            uint256 give = _mutGive(cv, outIsOne, amtIn, amtOut, remaining, bal, assigned);
             remaining -= take;
-            // N3 — the remainder line, deleted. Every share floored.
-            uint256 give =
-                (remaining == 0 && mode != FLOOR_ONLY) ? amtIn - assigned : FullMath.mulDiv(amtIn, take, amtOut);
             assigned += give;
             _apply(idAtRank(i), outIsOne, take, give);
             lastIdx = i;
-            any = true;
         }
+        bool any = lastIdx != type(uint256).max;
         if (remaining != 0) revert Allocation.QueueUnderflow(remaining);
 
         if (any) {
@@ -108,6 +113,32 @@ contract MutantQueueHook is QueueHarness {
                 if (mode != NO_CURSOR_PULLBACK && start < cursor1) cursor1 = start;
             }
         }
+    }
+
+    /// @dev One seat's credit. Split out only because `_allocate` is at the stack limit without
+    ///      `via_ir`; the logic is production's, with N3 as the single deviation.
+    function _mutGive(
+        Curve memory cv,
+        bool outIsOne,
+        uint256 amtIn,
+        uint256 amtOut,
+        uint256 remaining,
+        uint256 bal,
+        uint256 assigned
+    ) private view returns (uint256) {
+        uint256 take = bal < remaining ? bal : remaining;
+        if (remaining - take == 0) {
+            // N3 — the remainder line, deleted. The last seat gets a floored share like every
+            // other, so the parts no longer sum to the whole.
+            return mode == FLOOR_ONLY ? FullMath.mulDiv(amtIn, take, amtOut) : amtIn - assigned;
+        }
+        // N6 — never build the curve, so every seat falls through to the swap average.
+        if (cv.total == 0 && mode != AVERAGE_PRICE) _initCurve(cv, outIsOne, amtOut);
+        if (cv.total == 0) return FullMath.mulDiv(amtIn, take, amtOut);
+        uint256 g = FullMath.mulDiv(amtIn, _segmentIn(cv, outIsOne, amtOut - remaining + bal), cv.total);
+        if (g < assigned) g = assigned;
+        if (g > amtIn) g = amtIn;
+        return g - assigned;
     }
 
     function _apply(uint256 i, bool outIsOne, uint256 take, uint256 give) private {
@@ -239,6 +270,7 @@ contract ControlsTest is QueueFixture {
     uint8 constant OFF_BY_ONE = 2;
     uint8 constant FLOOR_ONLY = 3;
     uint8 constant NO_CURSOR_PULLBACK = 4;
+    uint8 constant AVERAGE_PRICE = 5;
 
     function setUp() public {
         deployArtifactsAndLabel();
@@ -378,6 +410,32 @@ contract ControlsTest is QueueFixture {
             0x3004,
             "a LEADING cursor passed an out-back-out sequence",
             "swap3: INVARIANT C cursor1 leads"
+        );
+    }
+
+    /// @dev **N6 — THE HEAD'S FREE LANE, RESTORED, AND THE SUITE MUST NOTICE.**
+    ///
+    ///      This is the control for the mechanism change itself. The mutant credits every seat a
+    ///      swap reaches with the swap's AVERAGE price — exactly what this hook shipped before —
+    ///      instead of the price segment each seat actually absorbed.
+    ///
+    ///      It matters that this is a CONTROL and not just a property test. Marginal pricing was
+    ///      added to `_allocate` AND to the fixture's independent witness in the same session; if
+    ///      the witness had been the only thing checking it, the two could have been changed to
+    ///      agree with each other while both being wrong, and 199 green tests would have said
+    ///      nothing at all. This asserts the suite can still tell the difference.
+    ///
+    ///      It dies at swap 2 on the seat ledger, not on conservation, and that is correct: average
+    ///      pricing conserves perfectly — the parts still sum to the whole — it just hands the
+    ///      wrong seat the money. A one-wei misallocation is invisible in the aggregate and only
+    ///      shows up seat by seat, which is the whole reason the witness compares per seat
+    ///      (PITFALLS 5.29).
+    function test_N6_averagePricingGoesRed() public {
+        _expectRed(
+            AVERAGE_PRICE,
+            0x3006,
+            "pricing every seat at the swap average passed the seat-by-seat witness",
+            "swap2: seat a0"
         );
     }
 
