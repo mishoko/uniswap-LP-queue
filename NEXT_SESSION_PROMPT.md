@@ -1,39 +1,57 @@
 # NEXT SESSION — start here
 
-Read `AGENTS.md` → `PLAN.md` → `PROGRESS.md` (top entry) → `PITFALLS.md` (§5.92–5.102 are new). This
-file tells you what to do; those tell you why.
+Read `AGENTS.md` → `PLAN.md` → `PROGRESS.md` (top entry) → `PITFALLS.md` (§5.103–5.111 are new).
+This file tells you what to do; those tell you why.
 
-**State: `forge test` → 199 passed, 0 failed, 1 skipped. `forge lint src/` clean. Nothing is broken.**
-
----
-
-## 1. The one rule that cost this session two hours
-
-**`src/` IS READ-ONLY WHILE `script/mutate.py` RUNS — INCLUDING FOR YOU.** The 5.86 interlock stops a
-concurrent `forge test`. It does **nothing** about a concurrent *write*: the campaign restores the
-original file in a `finally`, so every edit made while it runs is silently reverted. It ate ~200 lines
-and the only symptom was a compiler error pointing at the caller of a function that no longer existed.
-Either wait for it, or fix `mutate.py` to checksum its backup and refuse to restore over a changed
-file (PITFALLS 5.100 — worth doing, ~10 lines).
+**State: `forge test` → 205 passed, 0 failed, 1 skipped. `forge lint src/` clean. Full mutation
+campaign 79 RED, 0 survivors, 0 NO-COMPILE, 0 BAD-PATTERN. Nothing is broken.**
 
 ---
 
-## 2. What is actually left, in priority order
+## 0. Two things that will bite you, and one that no longer will
 
-### PRIORITY 1 — the submission gates. Neither is optional and neither is code.
+* **`BAD-PATTERN` in a mutation summary is a FAILURE, not a status.** It means that mutation matched
+  nothing and tested nothing, while the line everybody quotes still reads "0 SURVIVED". If you edit
+  a line a mutation targets, re-run that mutation in the same commit (PITFALLS 5.111).
+* **Do not run `forge test` while `script/mutate.py` is running.** The 5.86 interlock will stop you
+  with a loud message; that is the marker doing its job, not a bug.
+* **`src/` is no longer silently clobbered by a background campaign.** `mutate.py` now tracks what
+  it wrote and REFUSES to restore over anything else, saving the original to `<file>.mutate-backup`
+  and telling you what to check. It also refuses to run on an unknown flag — `--help` used to launch
+  the full campaign. You still should not edit `src/` during a run, but a mistake is now loud
+  (PITFALLS 5.100, CLOSED).
+
+---
+
+## 1. What is actually left, in priority order
+
+### PRIORITY 1 — the two submission gates. Neither is optional and neither is code.
 
 1. **Broadcast to Unichain Sepolia.** Needs a funded key. Everything it will do is already asserted
    against a fork of that chain (`QUEUE_FORK=true forge test`), so the risk is operational, not
    technical. One command, in the README. **There is no deployed address anywhere yet**, which means
-   `frontend/index.html`'s header pill can never leave `SIMULATED` and its `hookAddr` box has nothing
-   to paste.
-2. **The video, under five minutes, human voice.** The shot plan already exists. The demo is the
-   0:00–0:30 shot: open `frontend/index.html`, drag the swap-size slider, watch the front bar empty
-   while the others do not.
+   `frontend/index.html`'s header pill can never leave `SIMULATED` and its `hookAddr` box has
+   nothing to paste.
+2. **The video, under five minutes, human voice.** The shot plan already exists.
 
-Functionality is 15% of the rubric and the hook is done. **Presentation is 10% and is currently zero.**
+   **The demo now has a much better opening shot than the one the old plan describes.** Open
+   `frontend/index.html`, drag the swap-size slider, and watch the **Fill price** column: rank 0
+   fills *worse* than the swap's own average and the seats behind it fill *better*, in basis points,
+   live. That is the whole mechanism in one column — "being first means being filled at the stalest
+   price" — and it is the thing that makes QUEUE a market rather than a subsidy. Lead with it.
 
-### PRIORITY 2 — `recenter()` v2. Unit-green, campaign-red, cause unlocated.
+**Functionality is 15% of the rubric and the hook is done. Presentation is 10% and is still zero.**
+
+### PRIORITY 2 — τ. A deployment decision, not a code change, and it is currently indefensible.
+
+`script/QueueDeployBase.sol` ships `RENT_BPS = 1_000` — τ = 10%/yr. Simulated, that gives the tail a
+**6.4%/yr coupon** against a head earning six figures. 25–50% gives 10.7–13.8%. τ is already a
+constructor argument, so this costs nothing to change — **but nothing has ever been tested at those
+values**, and `Rent.MAX_BPS` caps it at one whole period. Before changing it: run the Harberger
+suite at 2_500 and 5_000 and see what moves. This is the cheapest available improvement to the
+product and it is sitting behind a constant.
+
+### PRIORITY 3 — `recenter()` v2. Unit-green, campaign-red, cause unlocated.
 
 Everything is in **`docs/wip/recenter-v2/`**: the implementation, its eight passing tests, the
 bisection evidence and three ranked suspects. Do not start from scratch — the three v1 defects are
@@ -49,60 +67,82 @@ where a deposit can only be absorbed on one side.
 
 Note `_solvent`'s over-backing branch is deliberately still `require(backing == owed)`. It is an
 *asymmetry*, not a stronger claim (PITFALLS 5.102); if you ship a band move you must apply the same
-bound to both signs — and be aware that doing so is what let the campaign find the large divergences,
-so a strict assertion had been hiding a bigger defect behind a smaller one.
+bound to both signs — and be aware that doing so is what let the campaign find the large
+divergences, so a strict assertion had been hiding a bigger defect behind a smaller one.
 
-### PRIORITY 3 — the product. This is the one that decides whether it is worth anything.
-
-The economics are now settled and written up in `BUSINESS.md` §0.5 and the matching demo section.
-**Read §0.5 before touching the pitch.** The short version:
-
-- QUEUE is the first AMM position where capital can choose *which half of the flow it takes*
-  (retail +32.85%/yr, arbitrage −21.90%/yr, and an ordinary LP dollar must take both).
-- The **head** buys the retail flow and is a strong instrument. The **tail** declines the arbitrage
-  flow and beats a wallet always, an ordinary LP only when the pool loses more to arbitrageurs than
-  ~89% of its fee income. The **middle of the book is a trap that loses under every condition** —
-  it takes all the toxicity and none of the fees.
-- Therefore: **two products, not 32 seats.** Size the head to the largest routine *arbitrage* trade
-  and no middle seat exists. Equal seats are the mistake.
-
-**The single highest-value unbuilt thing is MARGINAL PRICING.** Today `Allocation.init(amtIn, amtOut)`
-gives every seat a trade reaches that trade's *average* price, so the tail gets no price advantage —
-only the option to sit out. Credit each seat the **segment of the trade it actually absorbed** and the
-tail systematically fills nearer the post-move price, which is strictly better for an LP in both
-directions. That is what turns the tail from "idle capital collecting a small coupon" into a genuine
-senior tranche. **It is a different allocator, not a parameter.** Scope it before building it.
-
-Second: **τ is 10% and is set against every seat but the front.** θ = τ/(τ+k) = 29% of the head's
-advantage moves backward; τ = 25–50% gets 51–81%. It is already a constructor argument, so this is a
-deployment decision, not a code change — but nothing has tested the mechanism's behaviour at those
-values.
+**One new thing to check first:** `recenter()` moves `(tickLower, tickUpper)`, and the price curve is
+anchored at the band via `_bandEntry`. Any band move must keep the replay and the pricing reading
+the same band — that is why they share one function now (5.109).
 
 ---
 
-## 3. Things that are true and that you should not re-derive
+## 2. Things that are true and that you should not re-derive
 
-- **`BAND_HALF_WIDTH` is now a deployment parameter**, not a constant. It is the main economic dial:
-  in-band life scales as `w²` while depth scales as `1/w`, so doubling the band quadruples the pool's
-  life and only halves its depth. **The shipped ±10% is sized for a demo, not a deployment.**
-- **The band never moves** (no `recenter()`), which is what makes `_beforeAddLiquidity`'s add-time
-  disjointness test a *complete* guard rather than a snapshot of a moving target. The honest cost is
-  that a QUEUE LP cannot re-mint around the price the way every ordinary v4 LP can: it is a
-  **rolling fixed-term instrument**, ~16 days of in-band life on a 45%-vol pair.
-- **Gas is re-measured on the production band.** Head-only 128,625 vs 87,039 hookless = **+48%**,
-  flat in roster depth. Full 32-seat sweep is **764,200**, not the 426,470 this project published —
-  the old figure came from a fixture where the "sweep" could not actually reach the back of the book.
-- **A green mutation campaign is not evidence of correctness** (PITFALLS 5.92). It ran 74/74 RED while
-  a panel reading the same source found four real defects that sailed straight through, because the
-  mutations were written against the same mental model as the tests. Attack the code, not the suite.
+* **Each seat is credited the PRICE SEGMENT it absorbed, not the swap average.** The head fills worse
+  than the swap's own average and the tail better, in both directions, by ~400 bps across the book
+  in the test fixture. Asserted in `test/queue/Marginal.t.sol`; N6 in `Controls.t.sol` restores
+  average pricing and the suite goes red at swap 2 on the seat ledger.
+* **This closed a free lane, and that is why it was worth the gas.** Under average pricing the head
+  beat an ordinary pro-rata LP in benign, normal AND toxic regimes. It now loses in toxic. Total
+  return is unchanged to the wei — value moved, none was created. `docs/research/seat-economics/`.
+* **Exactness does not depend on the curve.** `give` is the difference of two cumulative allocations,
+  so it telescopes; `testFuzz_curvePricingNeverLosesAWei` fuzzes arbitrary monotone curves.
+* **Marginal pricing is free on the path that matters.** Head-only swap 128,625 → **128,848**
+  (+223), because the curve is built lazily and a one-claimant fill never builds one. A multi-seat
+  walk costs **9,945/seat**, up from 8,070.
+* **The gas budget is 400,000 now, deliberately.** `MAX_SEATS = 32` is the 32 bytes of the packed
+  `order` word, not a gas choice, so the budget moved rather than the roster. The constraint that
+  actually binds is `test_5_3c`: a full cold 32-seat sweep at **826,799** against an 850,000 ceiling.
+* **`BAND_HALF_WIDTH` is a deployment parameter.** In-band life scales as `w²` while depth scales as
+  `1/w`, so doubling the band quadruples the pool's life and only halves its depth. The shipped
+  ±10% is sized for a demo, not a deployment.
+* **The band never moves**, which is what makes `_beforeAddLiquidity`'s add-time disjointness test a
+  *complete* guard. The honest cost is that a QUEUE LP cannot re-mint around the price: it is a
+  **rolling fixed-term instrument**, ~18 days of in-band life on a 45%-vol pair.
+* **A green mutation campaign is not evidence of correctness** (PITFALLS 5.92). It ran 74/74 RED
+  while a panel reading the same source found four real defects. It has now happened again in a
+  different shape: 199 tests, 74 mutations and the invariant campaign were all green over a pricing
+  rule that handed the head a subsidy, because **average pricing conserves perfectly**. Conservation
+  cannot see who got the money. Attack the code, not the suite.
+
+---
+
+## 3. The product, stated honestly — read this before touching the pitch
+
+`BUSINESS.md` §0.5 was rewritten this session against a mechanism-faithful simulation. The short
+version, and it is less comfortable than the old one:
+
+> **QUEUE redistributes one Uniswap position's return. It does not create return.** Against its own
+> pro-rata benchmark the book is zero-sum, so **there is no configuration in which all 32 seats beat
+> an ordinary LP, and there cannot be one.**
+
+* **Seat 1** — equity-like. Enormous in benign and normal, genuinely loses in toxic now that the
+  free lane is shut. A real position with a real risk.
+* **Seats 5–20** — lose under **every** condition (−8% benign, −77% normal, −1267% toxic). Reached
+  often enough to absorb the large toxic trades, not often enough to earn the small profitable ones.
+  Marginal pricing improves them and they stay negative.
+* **Seat 32** — ~0%, and that is **not a coupon, it is capital the flow never reached**. Still a win
+  where an ordinary LP returns −31.8%. Bond-like, and should be sold as one.
+* **Two products, not 32.** Sizing the head compresses the middle (worst of seats 2–21: −109.6% →
+  −49.9%) while collapsing the head from +566% to −38%. They are the same money. Seat capital is
+  chosen by holders, so **the contract already supports this and no code change follows** — but the
+  demo's default of 32 equal seats is the configuration that manufactures the trap.
+
+---
 
 ## 4. Do not
 
-- Do not claim the tail is "paid to wait" without showing the coverage ratio (rent covers ~30% of the
-  fee income it forgoes; the demo's own example is **8.6 bps/yr**).
-- Do not write that a pro-rata LP "holds a slice of the poisoned middle." **It does not** — the depth
+* Do not say a seat is credited "the swap's average price". That was the old design and it was the
+  head's free lane. Six places in `PLAN.md` said it and were corrected on 2026-09-01.
+* Do not claim the tail is "paid to wait" without showing the coverage ratio — at the shipped
+  τ = 10% the coupon is **6.4%/yr**, and the tail's real protection is *not being reached*, not
+  being paid.
+* Do not write that a pro-rata LP "holds a slice of the poisoned middle". **It does not** — the depth
   coordinate is *created* by front-first ordering, not revealed by it, and a microstructure reader
   will catch it.
-- Do not use `extra P&L / τ` as a fair-ask rule. It is the zero-discount-rate limit and overstates by
+* Do not use `extra P&L / τ` as a fair-ask rule. It is the zero-discount-rate limit and overstates by
   3.4×. The correct form is `A/(τ + k)`.
-- Do not re-add a `recenter()` without the invariant campaign green.
+* Do not re-add a `recenter()` without the invariant campaign green.
+* Do not add a mutation for `_initCurve`'s `room == 0` guard. It is believed unreachable and written
+  down as such (PITFALLS 5.110, §3b's third honest answer); a mutation there would survive by
+  construction and break the zero-survivor gate for no information.
