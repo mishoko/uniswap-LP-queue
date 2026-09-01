@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# Refuse to commit while `script/mutate.py` is holding a mutant on disk.
+#
+# A mutant COMPILES AND PASSES — it is a mutation of working code, and the suite that would catch it
+# is the one you are forbidden to run during a campaign. So nothing else in the toolchain can notice.
+# This is the only place that can.
+root=$(git rev-parse --show-toplevel)
+if [ -f "$root/.forge-snapshots/MUTATION_IN_PROGRESS" ]; then
+    echo "REFUSED: script/mutate.py is running and is holding a mutant in src/." >&2
+    echo "Committing now snapshots MUTATED PRODUCTION CODE. This has happened (PITFALLS 5.121)." >&2
+    echo "Wait for the campaign to finish, then verify with: git diff <last-good> -- src/" >&2
+    exit 1
+fi

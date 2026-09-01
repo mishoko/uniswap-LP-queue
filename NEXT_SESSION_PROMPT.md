@@ -2,9 +2,16 @@
 
 Read this file first, then `AGENTS.md` → `PLAN.md` → `PROGRESS.md` (top entry) → `PITFALLS.md`.
 
-**State: `forge test` → 223 passed, 0 failed, 1 skipped. `forge lint src/` clean, `forge fmt` clean.
-The 7 new Phase-7 mutations are all RED with 0 survivors. The full 86-mutation campaign result is
-in `PROGRESS.md`; if it is not, it did not finish and you must run it (`python3 script/mutate.py`).**
+**State: `forge test` → 224 passed, 0 failed, 1 skipped. `forge lint src/` clean, `forge fmt` clean.
+The 7 new Phase-7 mutations (M81–M87) are all RED with 0 survivors.**
+
+**THE FULL 86-MUTATION CAMPAIGN HAS NOT BEEN RUN AGAINST THIS TREE. Run it first:
+`python3 script/mutate.py`.** It was started and interrupted at 14/86 — all RED, no survivors, no
+BAD-PATTERNs — so the existing mutations that target lines Phase 7 edited are UNVERIFIED. That is the
+`BAD-PATTERN` risk PITFALLS 5.111 names: `_allocate`'s loop body, the seat-balance writes and the
+degenerate fill were all touched, and a mutation whose pattern has gone stale reports `BAD-PATTERN`
+in a column nobody reads while the summary still says "0 SURVIVED". Before that, run
+`sh script/install-hooks.sh`.
 
 ---
 
@@ -210,4 +217,8 @@ because 32 is the 32 bytes of the packed `order` word.
 * Do not widen a tolerance to absorb a premium rounding difference. `test_7_2` compares the residual
   against a live φ = 0 control instead, and it reads 3 wei on both — which is what proves the
   residual is the pre-existing `_positionValue()` instrument and not the premium.
-* Do not run `forge test`, `forge fmt` or anything else while `script/mutate.py` is running.
+* Do not run `forge test`, `forge fmt` **or `git commit`** while `script/mutate.py` is running. The
+  commit case is not hypothetical: it happened twice in one session, snapshotting a mutant into
+  `src/` under a message saying "no production code changed" (PITFALLS 5.121). **Run
+  `sh script/install-hooks.sh` once in your clone** — the pre-commit hook now refuses while the
+  campaign marker is present. A mutant compiles and passes, so nothing else can catch it.
