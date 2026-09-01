@@ -18,9 +18,124 @@ Newest entry first. Never delete an entry — supersede it.
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
-| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-01** | **PARTLY** — 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
+| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-01** | **PARTLY** — 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## 2026-09-01 (fourth session) — the head out-earns on VOLUME, not price. Rotation rejected; the priority premium shipped.
+
+**`forge test` → 223 passed, 0 failed, 1 skipped. `forge lint src/` clean, `forge fmt` clean. Seven
+new Phase-7 mutations, all RED, 0 survivors.** Production code changed: `src/queue/QueueHook.sol`.
+
+### The trigger
+
+The owner asked, before anything was built, whether this hook is still interesting — specifically
+whether seats 1, 5, 10 … 32 all have a reason to fund. A four-lens adversarial panel was commissioned
+against the previous session's ROTATION decision. **It returned, and it broke the decision.**
+
+### What was refuted (all three numbers rotation rested on)
+
+1. **"0/32 seats negative" is SEED-SELECTED.** Same code, same cells, fresh seed ranges, on the
+   *shipping* configuration (±30%, 45% vol): seeds 100–129 give **2/32** negative and seeds
+   1000–1029 give **6/32**, with the pool PROFITABLE in both. `range(30)` was the lucky draw.
+2. **"+0.0000% zero-sum, now proven rather than argued" is a TAUTOLOGY.** `_fill` was replaced with
+   an allocator crediting 100% of every swap's input to the head — the maximal free lane — and it
+   scored `+0.000000%` too. It is a conservation check reported as an economics result, and it is
+   blind to every split.
+3. **"No seat loses money" counts ENSEMBLE MEANS.** Per (path, seat) cell on the shipping
+   configuration: **27% of outcomes lose money; 25 of 30 futures contain a losing seat.**
+
+Also found in that document: the TOXIC lock table is described as inverting so the longest lock is
+worst, while its own numbers show lock3 worse than lock4; and every annualised figure extrapolates a
+position that has already died (TOXIC's −602.9% is ≈ −6% realised × 100).
+
+### The measurement that replaced it
+
+Per-rank decomposition of return into fee income vs inventory — new, and it is what the previous
+sessions were missing. Benign flow, ±10% band, static rank, 30 paths:
+
+```
+      rank    fee %/yr   inventory   net %/yr   turnover %/yr
+         0    +1240.1%    -328.3%    +911.8%       +411,877%
+         1      +66.9%     -54.8%     +12.0%        +22,186%
+         7       +5.7%     -26.2%     -20.5%         +1,903%
+        31       +0.1%      -0.0%      +0.1%            +34%
+```
+
+**The head's advantage is a QUANTITY, not a price.** Marginal pricing already makes it fill at the
+stalest end of every move; it out-earns anyway because it does four orders of magnitude more
+turnover and keeps the whole fee on it. That rules out a price tweak (cannot reach a quantity) and
+Harberger rent on an assessed value (~6%/yr against a 20–160%/yr inventory drag). Only a share of
+FEE FLOW is denominated in the same thing the advantage is.
+
+**The "29/32 seats lose" diagnosis was measured with the compensation channel switched off.**
+
+### What was built — the priority premium (§B.13)
+
+`PREMIUM_BPS` (φ), immutable. A filled seat keeps `(10000−φ)/10000` of the fee it earned; the rest is
+paid to the seats still standing in the line it jumped, **weighted by the OPPOSITE token** — you are
+paid, in the token the swapper brought, for the token you did not get to sell. A seat drained to zero
+carries no weight and collects nothing from the pot it generated. Lazy accumulator (`premGrowth0/1`,
+X64 in 128 bits) with a per-seat mark, so the swap path stays O(seats walked).
+
+φ = 0 reduces **exactly** to the pre-Phase-7 contract, and is the null control every suite but the
+gas one runs at.
+
+**φ = 8,500 is measured, not chosen.** Across four independent seed ranges on ±30%/25%-vol, φ ≈ 0.85
+is the only setting giving 0/32 negative on **all four**, spread 10–15 points. Honest limit: on a
+45%-vol pair it leaves 0–4 negative depending on the draw, and the best φ per configuration ranges
+0.55–0.90 — which is why φ is per-deployment and the sweep is checked in rather than a constant.
+
+### Three defects found on the way, all fixed
+
+* **A THIRD hand-written copy of the constructor argument list**, in `script/QueueDeployBase.sol`.
+  `abi.encode` is untyped, so a ten-argument payload against an eleven-argument constructor
+  **compiled, deployed, and decoded φ out of the roster's tail bytes.** The pool came up with a
+  garbage economic parameter; the only symptom was `test_7_5` reporting the demo's seller short by
+  2.4e15 wei. `Controls.t.sol` had the same duplication and it is now deleted rather than extended.
+  (PITFALLS 5.115)
+* **`Controls.t.sol`'s INVARIANT C check fed a RANK to a view indexed by SEAT ID** — the exact
+  indirection the mutant allocator twenty lines above it says must not be left out. Latent (those
+  controls never foreclose) and would have gone green against a leading cursor. (PITFALLS 5.116)
+* **`seat()` under-reported what a holder owns.** `withdraw` settles first, so the view promised less
+  than the contract pays. It now reports the settled value and the claim formula lives in one place
+  both callers read. (PITFALLS 5.117)
+
+### Costs, measured, and one published number corrected
+
+```
+    plain v4 pool                  69,970
+    QUEUE, phi = 0                131,821    +88%
+    QUEUE, phi = 8,500            162,766   +133%
+```
+
+Both sides in **steady state** (one swap through each pool in `setUp()`). **QUEUE's overhead was
+never the +48% this project published** — that figure compared against a plain pool that had never
+traded, so the control was paying its own one-time fee-growth writes. Per-seat sweep cost 9,945 →
+14,777, exactly one cold slot for the accumulator mark; `BUDGET` moved 400k → 550k rather than
+`MAX_SEATS`, because 32 is the 32 bytes of the packed `order` word. (PITFALLS 5.118)
+
+### Two of this session's own tests were blind when written, both caught by mutation
+
+`test_7_8` compared `seat()` against `seat()` — and `seat()` already includes the pending claim, so
+both sides moved together (PITFALLS 5.34's tautological witness, again). The N7 control could not
+enter the branch it mutated, because a `zeroForOne` swap advances only one accumulator. Both are
+recorded rather than quietly fixed, because the first version of each would have been evidence that
+a load-bearing rule was unnecessary.
+
+### What is NOT done, and it matters
+
+* **The reference allocator does not model the premium.** At φ > 0 the seat-by-seat composition
+  check is unavailable, so the per-seat SPLIT rests on `Premium.t.sol`'s controls rather than on the
+  independent witness. **This is the top item in the handoff.**
+* **The invariant campaign has never run at φ > 0.**
+* **The band/term constructor guard was decided by the owner and is not built.** Blocked on
+  converting the constructor to a parameter struct — it is at eleven arguments and the ABI decoder
+  ran out of stack at twelve.
+* `README.md` and `BUSINESS.md` still describe the pre-premium product and still quote the +48% gas
+  figure.
 
 ---
 

@@ -286,6 +286,38 @@ MUTS = [
                   "band reverts inside afterSwap and bricks the pool",
      "        if (outAmt >= cv.room) {\n            next = edge;",
      "        if (false) {\n            next = edge;"),
+
+    # ---- PHASE 7: the priority premium. Every load-bearing line of it.
+    ("M81", HOOK, "the premium is withheld from the seats but NOT deducted from the fill, so the "
+                  "ledger credits the whole input AND accrues a pot: the queue claims more than the "
+                  "position holds",
+     "        Allocation.State memory st = Allocation.init(amtIn - _premiumOn(amtIn), amtOut);",
+     "        Allocation.State memory st = Allocation.init(amtIn, amtOut);"),
+    ("M82", HOOK, "the premium is accrued BEFORE the fill instead of after, so the seat the swap is "
+                  "about to drain still carries weight and is handed back the pot it just generated",
+     "        _accruePremium(outIsOne, amtIn - st.amtIn);",
+     "        _accruePremium(outIsOne, 0);"),
+    ("M83", HOOK, "a seat's mark is only advanced when its claim was non-zero, so a claim that "
+                  "floored away leaves the interval claimable AGAIN later against a bigger balance",
+     "        s.snap0 = premGrowth0;\n        s.snap1 = premGrowth1;",
+     "        if (owed0 != 0) s.snap0 = premGrowth0;\n        if (owed1 != 0) s.snap1 = premGrowth1;"),
+    ("M84", HOOK, "the settled premium is not added to `standing`, so the accumulator's denominator "
+                  "drifts below the ledger it is supposed to weigh",
+     "            standing0 += owed0;",
+     "            standing0 += 0;"),
+    ("M85", HOOK, "the allocator tests a seat for empty BEFORE settling it, so a seat holding "
+                  "nothing but an unsettled premium is skipped — silent theft of rank",
+     "            uint256 bal = _syncBal(seat_, outIsOne);\n            if (bal == 0) continue;",
+     "            uint256 bal = outIsOne ? seat_.a1 : seat_.a0;\n            if (bal == 0) continue;\n"
+     "            _syncBal(seat_, outIsOne);"),
+    ("M86", HOOK, "the token1 claim is weighted by the balance AFTER the token0 claim landed, so the "
+                  "two settlements compound and pay out more than was ever accrued",
+     "        uint256 w0 = s.a0;\n        uint256 w1 = s.a1;",
+     "        uint256 w1 = s.a1;\n        uint256 w0 = uint256(s.a0)\n            + (w1 == 0 ? 0 : FullMath.mulDiv(w1, premGrowth0 - s.snap0, PREMIUM_Q));"),
+    ("M87", HOOK, "a pot with nobody standing is DROPPED rather than held, so the wei leaves the "
+                  "allocation and is never credited to anybody",
+     "                premiumHeld0 = total;\n                premiumOwed0 += pot;\n                return;",
+     "                premiumOwed0 += pot;\n                return;"),
 ]
 
 

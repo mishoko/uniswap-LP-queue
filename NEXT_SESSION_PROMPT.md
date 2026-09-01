@@ -1,243 +1,213 @@
-# NEXT SESSION — build rotation. Everything you need is here.
+# NEXT SESSION — finish the priority premium. Everything you need is here.
 
-Read this file first, then `AGENTS.md` → `docs/research/seat-economics/ROTATION.md` → `PLAN.md` →
-`PROGRESS.md` (top entry) → `PITFALLS.md` (§5.103–5.112 are new).
+Read this file first, then `AGENTS.md` → `PLAN.md` → `PROGRESS.md` (top entry) → `PITFALLS.md`.
 
-**State: `forge test` → 205 passed, 0 failed, 1 skipped. `forge lint src/` clean. Full mutation
-campaign 79 RED, 0 survivors, 0 NO-COMPILE, 0 BAD-PATTERN. Nothing is broken. The hook works. Its
-ECONOMICS do not, and that is the whole job.**
-
----
-
-## 1. The problem you are solving, in one table
-
-Per-seat return, %/yr while in band, mechanism-faithful simulation, 30 price paths, shipped ±10%
-band, PERMANENT rank (what the contract does today):
-
-```
-                BENIGN     NORMAL
-  pool          +19.5%     -18.6%
-  seat 1       +911.8%    +576.0%
-  worst seat    -20.5%     -90.8%
-  seats < 0      29/32      28/32
-```
-
-**29 of 32 positions lose money.** A product where 28 of 32 positions are unbuyable is not a
-product. That is the finding that triggered this work, and the owner is right that it cannot ship.
-
-## 2. The constraint you cannot design around — it is PROVEN, not argued
-
-Front-first ordering vs ONE undivided pro-rata LP, same capital, same flow, same seeds:
-
-```
-  BENIGN  volume  queue $ 24.5M  pro-rata $ 24.5M   diff +0.0000%
-  BENIGN  P&L     queue +4.79%   pro-rata +4.79%    diff +0.0000 pts
-  NORMAL  volume  queue $ 10.9M  pro-rata $ 10.9M   diff +0.0000%
-  NORMAL  P&L     queue +0.55%   pro-rata +0.55%    diff +0.0000 pts
-```
-
-Zero to four decimal places. **QUEUE redistributes one Uniswap position's return and cannot create
-any.** So no ordering scheme makes all 32 seats *beat* a pro-rata LP. The best achievable is all 32
-*equal* to it. Do not go looking for a scheme that beats it; the search is closed.
-
-(The inventory-recycling hypothesis — that front-first serves more volume per dollar because the
-head is emptied and refilled by reversing flow — is dead. Availability is identical: the cursor only
-advances past EMPTY seats, so the inventory reachable behind it never changes.)
-
-## 3. The decision
-
-**Ship deterministic time-rotation of rank.**
-
-```
-rank(seat i) = (i + floor((block.timestamp - genesis) / EPOCH)) mod N
-```
-
-A pure function of time. No stored rotation, no transaction, no keeper, no randomness, no oracle,
-zero storage cost for the rotation itself. Over one cycle every seat occupies every rank once.
-
-Measured, ±10% band, BENIGN pool (+19.5%): static gives a 932-point spread with 29/32 negative;
-**rotation gives a 13–18 point spread with 0/32 negative.** Per-seat mean equals the pro-rata
-benchmark exactly, which is what conservation demands.
-
-**Round-robin, NOT random, and this is not a preference.** On-chain randomness is a block hash, a
-block hash is chosen by whoever builds the block, and a head slot worth several hundred percent a
-year is worth grinding for. A VRF is an external dependency (AGENTS.md §6 — ask first). Round-robin
-is unmanipulable, costs nothing, and equalises *exactly* rather than in expectation.
-
-### Three things that come with it
-
-1. **The cycle must complete inside the band's life.** At 24h epochs a 32-seat cycle is 32 days; the
-   ±10% band on a 45%-vol pair lives ~18. The cycle never completes and rotation cannot equalise.
-   **Epochs are hours, not days.** 4h → 5.3-day cycle. 1h and 4h perform the same; prefer 4h.
-2. **BAND WIDTH MATTERS MORE THAN THE QUEUE DOES.** This is the most important number in the file:
-
-   ```
-         band    vol   exited      pool     worst      best   seats<0
-        +-10%   0.45    30/30    -18.6%    -47.8%    +23.6%     24/32
-        +-30%   0.45    27/30    +14.9%     +2.8%    +27.7%      0/32
-   ```
-
-   A ±10% band on a 45%-vol pair is a losing LP position **whatever the hook does** — it dies in ~18
-   days and the terminal traversal is one lumpy loss landing on whoever is at the front. Rotation
-   equalises the *flow* and cannot equalise a single terminal event. `BAND_HALF_WIDTH` is already a
-   constructor argument; the shipped 960 ticks was sized for a demo. **Size it to the pair.**
-3. **Lock-weighted priority is the differentiator, and it is a DIAL, not the default.** Head-time
-   share proportional to committed lock length. Shipping config (±30%, 4h, tiers 4:3:2:1):
-
-   ```
-     BENIGN  pool +32.8%   lock4 +56.1%  lock3 +40.0%  lock2 +24.7%  lock1 +10.5%   negative  0/32
-     NORMAL  pool +14.9%   lock4 +31.5%  lock3 +23.8%  lock2  +8.1%  lock1  -3.8%   negative  6/32
-   ```
-
-   A monotone duration curve; tier mean equals the pool return, so the split is still conserved —
-   **only its AXIS changed, from "which seat number you bought" to "how long you commit".** This is
-   what the pitch is: *pay for sticky liquidity with fill priority instead of token emissions.*
-   Uniswap cannot price how long you will stay; this can.
-
-   **Ship uniform as the default** (all weights equal reduces exactly to uniform) so the 0/32
-   guarantee holds out of the box, and make weighting opt-in. Note the honest cost: lock-weighting
-   re-introduces a below-average tier (`lock1` −3.8% in NORMAL where uniform had nobody negative),
-   and **front-time is leverage on the pool's own outcome** — the curve inverts in a losing pool.
-
-Evidence, both models, all tables and the reproduction scripts: **`docs/research/seat-economics/`**
-(`ROTATION.md` is the decision, `report_rotation.py` regenerates every number).
+**State: `forge test` → 223 passed, 0 failed, 1 skipped. `forge lint src/` clean, `forge fmt` clean.
+The 7 new Phase-7 mutations are all RED with 0 survivors. The full 86-mutation campaign result is
+in `PROGRESS.md`; if it is not, it did not finish and you must run it (`python3 script/mutate.py`).**
 
 ---
 
-## 4. Implementation plan — in this order, and validate the riskiest thing FIRST
+## 1. What changed, and why the last plan was thrown away
 
-**The riskiest assumption is not the economics (simulated) — it is that CURSORS SURVIVE ROTATION.**
-Test that before writing anything else.
+**The previous session's decision was ROTATION. It is dead.** Its case rested on three numbers and
+an adversarial pass broke all three — seed-selected guarantee, a tautological "zero-sum proof", and
+an ensemble-mean that hid 27% losing outcomes. The full autopsy is the banner at the top of
+`docs/research/seat-economics/ROTATION.md`. **Do not re-open it without reading that banner.**
 
-### Step 0 — the cursor question, before any other code
+What replaced it came from one new measurement. Per rank, 30 paths, static rank, no premium:
 
-`cursor0`/`cursor1` are **RANKS**, and INVARIANT C says every seat at rank < cursorX holds
-`aX == 0`. If the rank→seat map rotates under them, that is violated immediately and a cursor can
-**LEAD a funded seat, which is silent theft of rank** — the exact defect N2 and N4 exist to catch.
+```
+      rank    fee %/yr   inventory   net %/yr   turnover %/yr
+         0    +1240.1%    -328.3%    +911.8%       +411,877%
+         1      +66.9%     -54.8%     +12.0%        +22,186%
+         7       +5.7%     -26.2%     -20.5%         +1,903%
+        31       +0.1%      -0.0%      +0.1%            +34%
+```
 
-Proposed fix, **UNVERIFIED, prove or refute it first**: store `lastEpoch`; on the first swap of a
-new epoch reset both cursors to 0. A lagging cursor costs gas but never money, so 0 is always safe.
-One SSTORE per epoch, not per swap. Cases to check explicitly:
-- a swap that straddles an epoch boundary (`beforeSwap` in one epoch, `afterSwap` in the next);
-- two swaps in the same block either side of a boundary;
-- the `amtOut == 0` degenerate-fill path, which also writes cursors (`_afterSwap` Step 2c);
-- foreclosure, which permutes `order` and pulls cursors back — does it compose with a derived rank?
+**The head does not out-earn the book on PRICE — marginal pricing already makes it fill at the
+stalest end of every move. It out-earns on VOLUME**, four orders of magnitude of it, and keeps the
+whole fee on it. That single fact rules out both instruments this project reached for first: a price
+tweak cannot touch a quantity difference, and a Harberger rent on an assessed value is ~6%/yr against
+a 20–160%/yr inventory drag. Only a share of **fee flow** is denominated in the same thing the
+advantage is.
 
-### Step 1 — rank derivation composed with `order`
+So: **`PREMIUM_BPS` (φ). A filled seat keeps `(10000−φ)/10000` of the fee it earned; the rest goes to
+the seats still standing in the line it jumped, weighted by the OPPOSITE token.** You are paid, in
+the token the swapper brought, for the token you did not get to sell. A seat drained to zero carries
+no weight and collects nothing from the pot it generated — the payer does not pay itself.
 
-Keep the packed `order` word as the BASE permutation (foreclosure still mutates it) and compose the
-epoch offset on top: effective rank = `_idAt(order, (i + epoch) mod n)`. Verify it composes with
-`buySeat`, `transfer`, and demotion.
-
-### Step 2 — the lock, on EVERY path
-
-Capital must not be able to leave before one full cycle, or a holder deposits before their turn and
-withdraws after — which captures head-time without bearing tail-time and is fatal.
-
-**Enumerate every path that moves capital OR rank before writing the check.** At minimum:
-`withdraw`, `buySeat` (a Harberger buyout evacuates the SELLER's capital), `transfer` AND
-`transferFrom` **separately**, foreclosure/demotion, and any pending-withdrawal path.
-
-> A rule implemented in one of two paired paths is this project's single most repeated bug —
-> PITFALLS 5.37, 5.50, 5.52 (twice) and 5.105 this week. Removing the ownership check from
-> `transfer` alone once survived all 71 tests. **Mutate each path separately.**
-
-Also decide what happens when the band dies while capital is locked — a lock with no exit is a DoS,
-and an exit that is too easy is the JIT attack back again.
-
-### Step 3 — does Harberger survive?
-
-With rotation every seat has an identical schedule, so "the seats behind you" changes every epoch
-and **rent looks like a wash over a cycle**. But something must still force an IDLE seat to be
-reallocated: an empty seat holds one of 32 slots for free, and the allocator simply skips it. Decide
-the minimal mechanism that does that, and delete whatever no longer earns its place. This is a
-design decision that changes the economics — **ask the owner before deleting the lease** (AGENTS.md
-§4). 47 of the 205 tests are Harberger's.
-
-### Step 4 — timestamp safety
-
-Rank derived from `block.timestamp` on an OP-stack chain. Quantify the sequencer drift that is
-possible and what one epoch of drift buys a seat holder. If it is material, derive the epoch from
-block number instead and state the chain-portability cost.
-
-### Step 5 — the tests that must exist before you believe any of it
-
-- **A negative control that deletes rotation** (rank stays static) and asserts the EXACT revert
-  reason. Bare `vm.expectRevert()` is not acceptable — v4 wraps a hook's own error in
-  `CustomRevert.WrappedError`, which is how two LAW 2 violations survived six phases (5.83, 5.84).
-- **A property test that every seat occupies every rank exactly once per cycle**, asserted on the
-  contract's own view, not on the fixture's expectation.
-- **An invariant-campaign run**, not just unit tests. `recenter()` v2 was unit-green and
-  campaign-red and that is why it never shipped.
-- **Mutate the cursor reset, the epoch derivation, and each lock enforcement point separately.**
+φ = 0 reduces **exactly** to the pre-Phase-7 contract. That is the null control every suite except
+the gas one runs at, which is what makes "this is a strict extension" checked rather than hoped.
 
 ---
 
-## 5. Things that are true and that you should not re-derive
+## 2. Do these three things, in this order
 
-* **Each seat is credited the PRICE SEGMENT it absorbed, not the swap average.** Shipped this
-  session. The head fills worse than the swap's own average and the tail better, ~400 bps across the
-  book in the fixture. `test/queue/Marginal.t.sol`; N6 in `Controls.t.sol` restores average pricing
-  and the suite goes red at swap 2. This closed a **free lane**: under average pricing the head beat
-  an ordinary LP in benign, normal AND toxic. **Rotation does not replace it** — it still decides
-  who bears the stale end of each move, and rotation only decides who stands there.
-* **Marginal pricing is free on the path that matters**: head-only swap 128,625 → **128,848**
-  (+223), because the curve is built lazily. A multi-seat walk costs **9,945/seat**.
-* **The gas budget is 400,000, deliberately.** `MAX_SEATS = 32` is the 32 bytes of the packed
-  `order` word, not a gas choice, so the budget moved rather than the roster. The binding constraint
-  is `test_5_3c`: a full cold 32-seat sweep at **826,799** against an 850,000 ceiling.
-* **`_bandEntry` is the SINGLE definition of where a swap meets the band**, used by both the in-band
-  replay and the price curve. They were separate for one commit; that divergence would have been
-  silent, because `wTotal` normalises the total away (5.109). Keep it single.
-* **`BAD-PATTERN` in a mutation summary is a FAILURE, not a status** (5.111). If you edit a line a
-  mutation targets, re-run that mutation in the same commit.
-* **`mutate.py` now refuses to restore over a file it did not write** and refuses to run on an
-  unknown flag (`--help` used to launch the full campaign). `src/` is still read-only during a run,
-  but a mistake is now loud (5.100, CLOSED).
-* **A green mutation campaign is not evidence of correctness** (5.92). 199 tests, 74 mutations and
-  the invariant campaign were all green over a pricing rule that handed the head a subsidy, because
-  **average pricing conserves perfectly**. Conservation cannot see who got the money.
+### Step 1 — TEACH THE REFERENCE ALLOCATOR THE PREMIUM. This is the biggest hole.
 
-## 6. Still outstanding, and both are submission gates
+`QueueFixture._refAllocate` is the project's independent witness — written from `PLAN.md`'s prose,
+not from `src/` — and it does **not** model the premium. So at φ > 0 the seat-by-seat composition
+check `_check()` is unavailable, and **no test currently asserts the per-seat SPLIT against an
+independent source.** `Premium.t.sol` works around it with quantities that do not need the witness
+(PoolManager balances, INVARIANT F, the two independently-maintained totals, a live φ = 0 control
+pool), and its two negative controls are real — but that is a weaker instrument than the witness and
+you should not leave it that way.
 
-1. **Broadcast to Unichain Sepolia.** Needs a funded key. Already fork-asserted
-   (`QUEUE_FORK=true forge test`), so the risk is operational. **There is no deployed address
-   anywhere yet.**
-2. **The video, under five minutes, human voice.** The demo's **Fill price** column is the opening
-   shot: drag the swap-size slider and watch rank 0 fill worse than the swap average while the seats
-   behind it fill better, live, in basis points.
+The right shape, and it keeps the witness independent: the contract distributes LAZILY through an
+accumulator; **make the witness distribute IMMEDIATELY and exactly, O(n) per swap, straight from the
+spec.** Two completely different shapes for one rule cannot be wrong in the same way. They will
+differ by rounding (the accumulator floors once at settle, the witness floors every swap), so either
+bound that divergence and say so, or make the witness mirror the flooring and admit it is no longer
+independent on that axis. **Do not widen a tolerance until it passes** (PITFALLS 5.53).
 
-`recenter()` v2 remains unshipped and campaign-red (`docs/wip/recenter-v2/`). Note it interacts with
-rotation: it moves the band, and the price curve is anchored to the band via `_bandEntry`.
+### Step 2 — RUN THE PREMIUM THROUGH THE INVARIANT CAMPAIGN AT φ > 0.
 
-## 7. Do not
+`test/queue/Invariant.t.sol` and `handlers/QueueHandler.sol` currently run at φ = 0, so the campaign
+has never seen the premium. On this project the campaign found **three real bugs** in code that had
+already passed 135 tests and 61 mutations. Add a φ > 0 subclass of the invariant suite. INVARIANT F
+already carries the `premiumOwed` term it needs.
 
-* Do not look for a scheme that makes all 32 seats **beat** a pro-rata LP. Proven impossible
-  (+0.0000% total difference). All 32 **equal** to it is the ceiling, and rotation reaches it.
-* Do not use randomness for the rotation. It is a block hash and the builder chooses it.
-* Do not say a seat is credited "the swap's average price". That was the old design and it was the
-  head's free lane.
-* Do not claim the tail is "paid to wait" — at τ = 10% the coupon is 6.4%/yr, and under rotation
-  rent is close to a wash anyway.
-* Do not ship lock-weighting as the default. Uniform is what carries the 0/32 guarantee.
-* Do not add a mutation for `_initCurve`'s `room == 0` guard — believed unreachable and written down
-  as such (5.110); it would survive by construction and break the zero-survivor gate.
-* Do not re-add `recenter()` without the invariant campaign green.
+Specifically hunt: a seat settling across a foreclosure/demotion; `sweepFloatIntoPosition` while a
+pot is held; `standing0/standing1` against `totals()` after long interleaved sequences (that is
+`test_7_1`'s claim, but only over four swaps).
 
-## 8. One honest note about how this decision was reached
+### Step 3 — THE BAND / TERM CONSTRUCTOR GUARD. Decided by the owner, not yet built.
 
-The economics here are **SIMULATED, not measured on a live pool**, and there is no live pool to
-measure. The simulator reproduces the contract's own mechanism (constant-liquidity band, seats
-holding `(a0,a1)`, front-first drain from a cursor, marginal pricing, rank separated from ownership)
-and every table is reproducible from `docs/research/seat-economics/`. Two modelling errors were
-found and fixed inside it — an arbitrageur sliced into $2k trades erases the price impact that
-distinguishes the front of the book from the back, and clamping the price walk inside the band
-produces a pool with almost no LVR — so treat the simulator as evidence that has already been wrong
-twice and check it before trusting a new number from it.
+The owner chose "constructor guard + deployment guide" over documentation alone. **It is not in the
+code yet.** The rule that is actually calibrated against the measurements:
 
-A four-agent adversarial panel (economic incentives, exploit development, devil's advocate, first
-principles) was commissioned to attack this design and **did not return findings before the session
-ended**. The review lenses in AGENTS.md §5 were applied directly instead, which is how the duplicated
-`_bandEntry` rule and the `room == 0` constant-curve defect were caught this session — but **the
-rotation design has NOT had an independent adversarial pass, and Step 0's cursor fix in particular
-is unverified.** Commission that panel again before writing production code.
+```
+    half-width (ticks) × 1e-4  ≥  σ √T
+```
+
+where σ is the deployer's stated annualised volatility and T the stated term in years — because
+expected exit time from a symmetric band is `a²/σ²`. Checks against what was measured: σ = 0.45,
+T = 90 days → ≥ 2,235 ticks (≈ ±25%), and ±30% is exactly where the pool stops losing money at that
+volatility. σ = 0.25, T = 90 days → ≥ 1,241 ticks, and ±10% at 25% vol was indeed viable.
+
+Add `volatilityBps` and `termDays` as constructor parameters and enforce it. **The contract cannot
+verify σ — it can only force the deployer to state it on-chain and keep the band consistent with it.**
+Say exactly that in the comment; do not let it read as a viability guarantee.
+
+**WARNING: the constructor is at eleven parameters and Solidity's ABI decoder ran out of stack at
+twelve.** Two more parameters means you must convert the constructor to a **parameter struct** first.
+Do that anyway — see §4.
+
+---
+
+## 3. What the product now is, and the numbers to quote
+
+A seat is a claim on one Uniswap range plus a position in its fill order.
+
+* **The head** trades first and most — high turnover, high adverse selection. A levered claim on the
+  pool's own outcome. It keeps 15% of a very large fee stream.
+* **The back** trades rarely and is paid a continuous coupon out of the front's fee income for
+  standing behind it. **Vanilla Uniswap cannot sell this**: a range far from the price earns nothing
+  until the price arrives, and nobody pays you ex-ante for depth they hope never to use.
+
+Measured, φ = 8500, one head-only swap on an 8-seat book (`test_7_3`):
+
+```
+    head credit, phi = 0        220,870,896,257,107,547
+    head credit, phi = 8500     220,376,980,583,426,340
+    each standing seat's coupon      70,559,381,954,457   (x 7 seats = the pot, exactly)
+```
+
+**φ = 8,500 is measured, not chosen.** Swept across four independent seed ranges on a ±30% band over
+a 25%-vol pair, φ ≈ 0.85 is the only setting that put 0 of 32 seats negative on **all four**, spread
+10–15 points. Honest limits: on a 45%-vol pair the same φ leaves 0–4 seats negative depending on the
+draw, and the best φ per configuration ranges 0.55–0.90. That is why φ is per-deployment.
+
+### The costs, and none of them are hidden
+
+```
+    plain v4 pool                  69,970
+    QUEUE, phi = 0                131,821    +88%
+    QUEUE, phi = 8,500            162,766   +133%
+```
+
+Both sides measured in **steady state** — one swap through each pool in `setUp()` first. This
+corrected a published number: **QUEUE's overhead was never the +48% this project claimed.** That
+figure compared against a plain pool that had never traded, so the control was paying its own
+one-time fee-growth writes. Routers rank by gas, and a pool that costs 2.3× a hookless one is a pool
+some of them skip — that is real, it belongs in the pitch, and no allocator rule gives back skipped
+flow.
+
+Per-seat sweep cost went 9,945 → 14,777: exactly one cold storage slot for the accumulator mark, and
+a slot is 5,000 gas whatever it holds. `BUDGET` moved 400k → 550k rather than `MAX_SEATS` moving,
+because 32 is the 32 bytes of the packed `order` word.
+
+---
+
+## 4. Things that are true and that you should not re-derive
+
+* **THE CONSTRUCTOR ARGUMENT LIST HAS BEEN HAND-COPIED THREE TIMES AND BROKE TWICE.**
+  `QueueDeployBase._ctorArgs` used `abi.encode` — untyped — so a ten-argument payload against an
+  eleven-argument constructor **compiled, deployed, and decoded φ out of the roster's tail bytes**.
+  The pool came up with a garbage economic parameter and the only symptom was `test_7_5` reporting
+  the demo's seller short by 2.4e15 wei. `Controls.t.sol` had the same duplication and it is deleted.
+  **Give the constructor a parameter STRUCT before adding another argument.**
+* **`seat()` reports the SETTLED value, `totals()` reports the RAW slot sum, and they are different
+  numbers on purpose.** `withdraw` settles before it checks entitlement, so a view that reported the
+  raw slot would promise a holder less than the contract pays them. The conservation identity needs
+  the raw ledger plus the whole unsettled pot: `totals() + premiums().owed`.
+* **`_syncSeat` must run before every write to a seat balance**, because the accumulator's weight IS
+  the balance. There are six such sites in `src/` and a seventh in `QueueHarness.seed()`. M85 is the
+  mutation that proves the ordering matters — it settles *after* the empty test and skips a seat
+  holding nothing but an unsettled premium.
+* **Both claims are weighted by the balances as they stood during the accrual, and neither sees the
+  other.** Compounding them pays out more than was accrued; M86/N7 catch it. Note that
+  **conservation cannot see this defect** — the wei move from `premiumOwed` into the seat, so the
+  books tie out. What it steals is the other seats' unsettled claims, and it is only visible once
+  the whole roster settles and the pot underflows.
+* **A pot with nobody standing is HELD, not dropped** — and conservation cannot see a dropped pot
+  either, because `premiumOwed` still counts it while it has become permanently unclaimable. M87
+  survived the entire suite until `test_7_7` asserted the pot was actually held and actually paid.
+* **`premiumHeld0` is a TOKEN0 pot and only a `zeroForOne` swap can fold it back in.** A reverse
+  swap restores the book's standing inventory; it does not release that pot.
+* **The accumulator is X64 in 128 bits, and the bound is `_accruePremium`'s `w < total` hold.** That
+  guard is what makes a growth increment ≤ 2^64, which is what lets both marks share one slot, which
+  is what keeps the per-seat cost to one slot instead of two. Unpacked it measured +52% on a
+  head-only swap and pushed the supportable roster from 32 seats to 23.
+* **Two of this session's own tests were blind when first written**, both caught by mutation:
+  `test_7_8` compared `seat()` against `seat()` (which already includes the pending claim, so both
+  sides moved together — PITFALLS 5.34's tautological witness), and the N7 control could not enter
+  the branch it mutated because a `zeroForOne` swap only advances one accumulator.
+
+---
+
+## 5. Still outstanding
+
+1. **The reference allocator does not model the premium** (Step 1). The per-seat split at φ > 0
+   currently rests on `Premium.t.sol`'s controls rather than on the independent witness.
+2. **The invariant campaign has never run at φ > 0** (Step 2).
+3. **The band/term constructor guard is decided but unbuilt** (Step 3).
+4. **Broadcast to Unichain Sepolia.** Needs a funded key. Fork-asserted already
+   (`QUEUE_FORK=true forge test`). **There is no deployed address anywhere yet.**
+5. **The video, under five minutes, human voice.** The opening shot is now the premium, not the fill
+   price: drag the swap-size slider and watch the head's credit fall while every seat behind it is
+   paid, live.
+6. **`README.md` and `BUSINESS.md` still describe the pre-premium product** and still quote the +48%
+   gas figure that this session showed was an artifact. They need rewriting around §3 above.
+7. `recenter()` v2 remains unshipped and campaign-red (`docs/wip/recenter-v2/`).
+
+---
+
+## 6. Do not
+
+* Do not re-open rotation without reading the banner on `ROTATION.md`. Its three headline numbers
+  are refuted, with the counter-measurements written down.
+* Do not trust a number from `docs/research/seat-economics/` that has been checked on only one seed
+  range. That is how the last decision went wrong. The simulator reproduces `results-rotation.txt`
+  byte-for-byte; that is repeatability, not robustness.
+* Do not quote "+0.0000%" as evidence about the SPLIT. It is a conservation identity and a
+  deliberately corrupt allocator scores the same.
+* Do not add a `PREMIUM_BPS == 0` fast path to make the gas suite look better. It would make the code
+  the suite measures a different path from the one the product ships; `Gas.t.sol` runs at the
+  shipping φ for exactly that reason, with `PremiumOffGasTest` as its control.
+* Do not add a seventh writer of a seat balance without routing it through `_syncSeat` first.
+* Do not widen a tolerance to absorb a premium rounding difference. `test_7_2` compares the residual
+  against a live φ = 0 control instead, and it reads 3 wei on both — which is what proves the
+  residual is the pre-existing `_positionValue()` instrument and not the premium.
+* Do not run `forge test`, `forge fmt` or anything else while `script/mutate.py` is running.

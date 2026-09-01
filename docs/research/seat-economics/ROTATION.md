@@ -1,7 +1,60 @@
 # Rotation — making every seat worth funding
 
-**Status: DECIDED (design), UNBUILT (code). 2026-09-01.** Simulated, not measured on a live pool.
-Reproduce every table with `python3 report_rotation.py` (output checked in as `results-rotation.txt`).
+> # ⛔ SUPERSEDED — NOT BUILT, AND NOT BECAUSE WE RAN OUT OF TIME
+>
+> **Status: REJECTED 2026-09-01, later the same day, on evidence.** An adversarial pass was
+> commissioned against this document and **broke all three numbers the decision rested on.** What
+> replaced it is the **priority premium** (`PREMIUM_BPS`, §B.13) — see `NEXT_SESSION_PROMPT.md`.
+>
+> **1. "0/32 seats negative" is SEED-SELECTED.** The guarantee was measured on `SEEDS = range(30)`
+> and nowhere else. On the *shipping* configuration (±30% band, 45% vol), re-run on fresh seed
+> ranges with the same code:
+>
+> ```
+>     0-29 (headline)  pool +14.9%   worst  +2.8%   neg 0/32
+>          100-129     pool  +8.3%   worst  -3.2%   neg 2/32
+>          200-229     pool +23.9%   worst +11.2%   neg 0/32
+>        1000-1029     pool  +5.4%   worst -10.2%   neg 6/32
+> ```
+>
+> The pool is PROFITABLE in every row. "0/32 negative whenever the pool is profitable" — the
+> sentence this whole document is sold on — is false.
+>
+> **2. "+0.0000%, now proven rather than argued" is a TAUTOLOGY.** `_fill` was replaced with a
+> maximally corrupt allocator that credits 100% of every swap's input to the head, and it scored
+> `vol diff +0.000000%, P&L diff +0.000000 pts` as well. Availability is identical for *every*
+> allocator, so this measures conservation and is blind to any split. It is a valid one-line
+> algebraic refutation of inventory-recycling and it is not evidence about ordering.
+>
+> **3. "No seat loses money" counts ENSEMBLE MEANS.** `seats()` averages across 30 seeds and then
+> counts `(mean < 0)`. Per individual (path, seat) cell on the shipping configuration: **27% of
+> outcomes lose money, and 25 of 30 futures contain at least one losing seat.** A seat holder lives
+> one path.
+>
+> **Also wrong in this file:** the TOXIC lock table below is described as inverting so that "the
+> longest lock is the worst position". Its own checked-in numbers say lock3 (−826.7%) is worse than
+> lock4 (−781.6%). And every annualised figure linearly extrapolates a position that has already
+> died — TOXIC's −602.9% is roughly a −6% realised loss multiplied by ~100.
+>
+> **The design objection, which is separate from the arithmetic.** Uniform rotation makes every seat
+> earn the pro-rata return exactly. A seat is then an ordinary Uniswap LP position plus a lock, a
+> 32-holder cap, rent, an unrollable band, and (measured since) **+133% gas**. It removes the only
+> differentiated thing the product sells in order to fix the symptom that nothing was paying for the
+> differentiation. Harberger becomes vestigial under it, and lock-weighting does not clear its own
+> equilibrium — nobody funds the lowest tier, the mix collapses to uniform, and uniform reduces to
+> pro-rata with extra steps.
+>
+> **What survives, and it is not nothing.** The diagnosis was right: under permanent rank most seats
+> lose money and the product cannot ship that way. The band-width result is the most useful finding
+> in this directory and is unaffected. `rank(i) = (i + epoch) mod N` remains the correct construction
+> if a rotating schedule is ever wanted, including its refusal to use a builder-chosen block hash.
+>
+> Everything below is preserved as written. Read it as the record of a direction that was taken
+> seriously and then refuted, not as instructions.
+
+**Original status line: DECIDED (design), UNBUILT (code). 2026-09-01.** Simulated, not measured on a
+live pool. Reproduce every table with `python3 report_rotation.py` (output checked in as
+`results-rotation.txt`).
 
 This supersedes the "two products, not 32" conclusion in `README.md` of this directory. That
 conclusion was correct about the *diagnosis* and wrong about the *remedy*.

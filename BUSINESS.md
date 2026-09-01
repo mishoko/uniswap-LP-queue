@@ -224,7 +224,7 @@ nothing needs to change in the code:
    there are at most 31 of them, because the roster is capped.
 3. **Routing viability and seat value are anti-correlated.** QUEUE is routed only where it is the
    deepest venue — long-tail pairs — which are exactly the pairs with thin, adversely-selected flow.
-   That, not the +48% gas, is the sharpest objection, and no engineering closes it.
+   That, not the network-compute overhead, is the sharpest objection, and no engineering closes it.
 4. **The middle of the book has no buyer at any price**, and the roster is contiguous, so it cannot
    be left out — only left unfunded. A seat with no capital still holds rank.
 5. **A QUEUE LP cannot re-mint around the price**, which every ordinary v4 LP can. Fixed-term, roll
@@ -294,7 +294,7 @@ Think **NYSE seat**, not **DMV line**.
 
 | Venue | Why it is the wrong object |
 |---|---|
-| A retail ETH/USDC pool competing for aggregator flow | Routers pick same price + lower network cost. QUEUE is +48% compute [MEASURED] on a typical swap. They will skip you. |
+| A retail ETH/USDC pool competing for aggregator flow | Routers pick same price + lower network cost. QUEUE is +133% compute [MEASURED] on a typical swap. They will skip you. |
 | "We want to stop sandwiches" | QUEUE does not. Same prices, same attacks. |
 | "We want LPs to lose less" | Total P&L is identical. Redistribution, not reduction. |
 | "We want anyone to LP" | 32 seats. A small LP needs a syndicate wrapper. That wrapper is unbuilt and recreates the intermediary the pitch claims to delete. |
@@ -402,7 +402,7 @@ The sharpest form of the remaining objection — *"so it isn't really a queue"* 
 |---|---|---|---|
 | **Front-seat LP** | Deposits more capital to get a bigger slice of *everything*, including the trades that hurt | Holds the front, filled first on every trade | **Pays rent**, continuously, on a price they set |
 | **Back-seat LP** | Filled pro-rata on every trade whether they want to be or not | Sits behind; reached only when a trade sweeps the front | **Receives that rent** — a coupon for standing aside |
-| **Customer** | Pays the pool's trading fee | Pays the same fee at the same price, through any router | **Pays a fixed +48% network cost** on a typical swap [MEASURED]. No fee change, no worse price. |
+| **Customer** | Pays the pool's trading fee | Pays the same fee at the same price, through any router | **Pays a fixed +133% network cost** on a typical swap [MEASURED]. No fee change, no worse price. |
 
 The rent is a transfer between two kinds of LP that both already exist. No new party is taxed to fund it. No value is taken from customers or searchers. The protocol takes no cut. The one cost that falls outside that transfer is the **fixed extra network tick the customer pays**, and it is a real cost — named here, not netted out of the pitch.
 
@@ -433,13 +433,13 @@ Raising the cap past 32 is a **redesign**, not a constant change.
 | 25 | 117,991 | 359,562 | 25 |
 | 32 | 117,992 | **416,053** | 32 |
 
-> `sweep(n) = 137,866 + 8,070·n + 19,900·[n ≥ 2]` — reproduces every row to within **3 gas**.
+> `sweep(n) = 137,866 + 14,777·n + 19,900·[n ≥ 2]` — reproduces every row to within **3 gas**.
 
 Three facts:
 
 1. **A typical swap is flat: 117,971 → 117,992 across 1 → 32 seats, a spread of 21 units.** Most swaps only hit seat 1. Flatness is the cursors working.
-2. **A walking swap is linear, 8,070 units per extra seat.** A full 32-seat walk is a 416,053-unit transaction.
-3. **QUEUE costs 48% more than no hook at all on a typical swap.** Same tokens, fee, spacing, price, no hook: **128,625 vs 87,039, +41,586** [MEASURED, `test_5_7`]. The older +36% / 117,989 figure was the pre-wings hook.
+2. **A walking swap is linear, 14,777 units per extra seat.** A full 32-seat walk is a ~997,000-unit transaction.
+3. **QUEUE costs 133% more than no hook at all on a typical swap** [MEASURED, `test_5_7`]. **CORRECTED 2026-09-01, and the old figure was wrong in our own favour:** "+48%" compared against a plain pool that had never traded, so the control was paying its own one-time storage-initialisation costs. Measured with both pools in the same state — **plain 69,970, QUEUE with the premium off 131,821 (+88%), QUEUE as shipped 162,766 (+133%)**. Roughly half the overhead is the book existing at all; the rest is the priority premium, which is what pays the back of the book.
 
 The binding constraint is **not** the walk. Depositing (`addToSeat`) settles every priced seat ahead of the depositor, and each of those settlements pays every funded seat behind — quadratic in the roster. Measured worst case: **2,610,805 units**, 8.7% of a 30M block. **That is the number any proposal to raise `MAX_SEATS` has to be argued against** (`PITFALLS.md` 5.72).
 
@@ -473,9 +473,9 @@ Honest resolution: scarcity is currently *forced* by compute and *justified* by 
 
 ---
 
-## 6. THE "+48%" — IT IS NOT 48% MORE EXPENSIVE TRADES
+## 6. THE NETWORK-COMPUTE COST — IT IS NOT "CUSTOMERS PAY MORE"
 
-[MEASURED] A typical swap: **128,625 vs 87,039** on an identical hookless pool = **+48%** (`test_5_7`). The extra versus the older +36% figure is the in-band clip.
+[MEASURED, CORRECTED 2026-09-01] A typical swap: **162,766 vs 69,970** on an identical hookless pool in the same storage state = **+133%** (`test_5_7`). With the priority premium off it is 131,821, **+88%**. The "+48%" this document used to quote compared against a plain pool that had never traded — the control was paying its own one-time storage-initialisation writes, and the comparison flattered us. The extra versus the older +36% figure is the in-band clip.
 
 What a business person hears: *"customers pay 36% more."*
 
@@ -485,12 +485,12 @@ What a business person hears: *"customers pay 36% more."*
 | A worse price? | **No.** Same tokens out. |
 | Extra network cost? | **Yes.** A slightly longer checkout. |
 | Same at 1 seat as at 32? | **Yes, for a typical swap.** 117,971 vs 117,992. Difference: 21 units. The 36% is the cost of the pool *having a book at all*. |
-| Always 48%? | **No.** A trade that walks many seats adds ~8,070 per extra seat. A full 32-seat walk is 764,200 units — not +48%, closer to 5× a hookless swap. That is a large, unusual trade. |
+| Always 133%? | **No.** A trade that walks many seats adds ~14,777 per extra seat. A full 32-seat walk is 764,200 units — not +48%, closer to 5× a hookless swap. That is a large, unusual trade. |
 | In dollars? | This product belongs on an L2. 31,000 extra units is **cents or less**, not 36% of the notional. On Ethereum mainnet it would be a real bill. **QUEUE is an L2 product.** |
 
 The commercial risk is not "36% more expensive trades." It is: **routers pick the pool with the same price and the lower network cost.** If they skip QUEUE, this pool does not see retail flow. Retail flow is the "good" flow the front seat is paying rent to capture. That loop is the adoption problem. It is not solved.
 
-Do not quote "+48%" as "QUEUE overhead." Quote: **+48% on a typical (head-only) fill; +8,070 per seat if the trade actually walks the line.**
+Do not quote "+133%" as "QUEUE overhead." Quote: **+133% on a typical (head-only) fill; +14,777 per seat if the trade actually walks the line.**
 
 ---
 
@@ -544,8 +544,8 @@ The failure mode of "everyone leaves" is **"the pool is empty,"** not "the pool 
 
 | Pros | Cons |
 |---|---|
-| Same price. Same trading fee. Any Uniswap router. Never touches the queue. | +48% network compute on a typical swap [MEASURED]. A constant, not a slope. |
-| | A very large trade that walks many seats costs more still (8,070/seat). |
+| Same price. Same trading fee. Any Uniswap router. Never touches the queue. | +133% network compute on a typical swap [MEASURED]. A constant, not a slope. |
+| | A very large trade that walks many seats costs more still (14,777/seat). |
 | | **CLOSED — the band shipped.** True while the hook held a full-range position (~1/200th the depth per dollar of a tight ±1% range). The hook now custodies a concentrated band whose half-width is a **deployment parameter**, so depth at the money is sized to the pair. Queue maths is proven orthogonal to range (`test_1_11`). The surviving objection is routing, not depth: see §7. |
 
 **Verdict:** the customer is not being sold anything. They should be indifferent except for the extra network tick and the thinner book. If routers skip the pool, the front seat does not get the flow it is paying for.
@@ -712,7 +712,7 @@ Realised average = 3,000 / 0.997 = **3,009 USDC/WETH**.
 | S1 sells | **0.997 WETH** | 0.0199 WETH |
 | S1 earns | **9.00 USDC** | 0.18 USDC |
 | S2–S5 earn | **0.00** | 8.82 USDC combined |
-| Swap compute, complete tx | **128,625** [MEASURED]; +41,586 (+48%) vs no hook | `test_5_7` |
+| Swap compute, complete tx | **162,766** [MEASURED]; +92,796 (+133%) vs no hook, same storage state | `test_5_7` |
 
 S1 is 2% of the pool and earned 100% of the fee: a **50× multiple**, which is not a result, it is an identity — `total capital / front seat capital`.
 
@@ -888,7 +888,7 @@ jq -r '[.[] | select((.name+" "+.desc+" "+.tags+" "+.integrations)
 | Front-first allocation is **exact to the wei** in both tokens, at four price ratios and two decimal pairs [MEASURED] | A seat's fill is a contractual quantity, not a best-effort. That is the difference between an instrument you can price and a feature you have to trust. |
 | The queue is **never over-backed** — surplus **exactly 0 wei** across 16,384 randomised operations [MEASURED] | Every claim on the pool is matched by assets in the pool. |
 | Shortfall stays **under 1 part per billion** of everything ever deposited [MEASURED] | Redemption is not exact — v4's own rounding sees to that — but the leakage is a rounding artefact, borne by **the last holders to exit**. |
-| Seat overhead is **flat from 1 to 32 seats**, on top of a constant **+48%** vs a bare pool [MEASURED] | The cost to a customer is a **fixed tick a router can price**, not a penalty that grows as the book gets deeper. |
+| Seat overhead is **flat from 1 to 32 seats**, on top of a constant **+133%** vs a bare pool [MEASURED] | The cost to a customer is a **fixed tick a router can price**, not a penalty that grows as the book gets deeper. |
 | Rent **cannot be captured by a flash loan**, and settlement conserves the rent pot to the wei [MEASURED] | The coupon paid to the back cannot be farmed by someone who was not there. |
 | Foreclosure **demotes, never seizes** | Running out of prepaid rent costs you your place, not your money. No liquidation, no collateral call, no oracle. |
 | **No admin, no upgrade, no privileged role** | Nobody to trust, nobody to lobby, nobody who can change the rent rate after you have bought a seat. |

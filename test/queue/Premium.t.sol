@@ -3,6 +3,10 @@ pragma solidity ^0.8.26;
 
 import {QueueFixture} from "./QueueFixture.sol";
 import {stdError} from "forge-std/StdError.sol";
+
+interface IERC20Like {
+    function approve(address, uint256) external returns (bool);
+}
 import {QueueHarness} from "./QueueHarness.sol";
 import {QueueHook} from "../../src/queue/QueueHook.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -278,6 +282,14 @@ contract PremiumTest is QueueFixture {
         assertEq(t0 + q0, expT0, "a held pot was lost rather than held");
         assertLe(held0, q0, "held is not a subset of owed");
 
+        // **CONSERVATION CANNOT SEE A DROPPED POT, WHICH IS WHY M87 SURVIVED THE WHOLE SUITE.**
+        // Dropping it still leaves `premiumOwed` counting the wei, so `totals() + premiums()` ties
+        // out perfectly while the money has become permanently unclaimable — accounted, and gone.
+        // The assertion has to be that the pot was actually HELD, and then that it was actually
+        // PAID. A test that only checks the books balance is exactly the green test that proves
+        // nothing (AGENTS.md §2).
+        assertGt(held0, 0, "no pot was held: this test never entered the path it claims to cover");
+
         // Flow reverses and the book is standing in token1 again: the held pot must now be payable.
         // token1 is what the book was just drained OF, so the reverse leg is sized in token1
         // the swapper brings — off `expT0`, which is the side that is now full.
@@ -285,6 +297,73 @@ contract PremiumTest is QueueFixture {
         (uint256 n0,) = hook.totals();
         (uint256 nq0,,,) = hook.premiums();
         assertEq(n0 + nq0, expT0, "conservation broke when the held pot was released");
+
+        // **THE HELD POT IS TOKEN0, SO ONLY A TOKEN0 ACCRUAL CAN FOLD IT IN**, and a token0 accrual
+        // is a `zeroForOne` swap. The reverse leg above restored the book's token1 standing; it did
+        // not touch `premiumHeld0`, and asserting otherwise was this test being wrong about which
+        // pot it was watching. One more swap in the original direction is what releases it.
+        _swap(true, expT0 / 40);
+        (,, uint256 heldAfter,) = hook.premiums();
+        assertEq(heldAfter, 0, "the held pot was not folded into the next accrual that had a recipient");
+
+        (uint256 f0,) = hook.totals();
+        (uint256 fq0,,,) = hook.premiums();
+        assertEq(f0 + fq0, expT0, "conservation broke when the held pot was folded back in");
+    }
+
+    // ─────────────────────────────── 7.8 a claim that rounds to nothing still consumes its interval
+
+    /// @dev **THE MARK IS WRITTEN EVEN WHEN THE CLAIM FLOORS TO ZERO, AND M83 SURVIVED THE ENTIRE
+    ///      SUITE UNTIL THIS TEST EXISTED.** A seat too small to earn a whole wei over some interval
+    ///      still has that interval consumed; leaving its mark behind lets the SAME growth be
+    ///      claimed again later against a balance that has since grown. Conservation is blind to it
+    ///      — the wei moves out of `premiumOwed` and into the seat, so the books tie out — and
+    ///      `test_7_6` is blind to it too, because that one settles a seat whose claim is non-zero.
+    ///
+    ///      Reachable because a claim is `a1 * pot / standing1`: a seat holding a few thousand wei
+    ///      of token1 against a book holding 1e20 earns a floored zero on an ordinary swap.
+    function test_7_8_aClaimThatRoundsToZeroStillConsumesItsInterval() public {
+        _use(onHook, onKey);
+        uint256 seatId = 7;
+        address owner = hook.ownerOf(seatId);
+
+        // Shrink the seat until a swap cannot pay it a whole wei.
+        (uint256 h0, uint256 h1) = hook.seat(seatId);
+        vm.prank(owner);
+        hook.withdraw(seatId, h0, h1 - 1_000);
+        (, uint256 small1) = hook.seat(seatId);
+        assertEq(small1, 1_000, "the seat was not shrunk: this test proves nothing");
+
+        _swap(true, expT0 / 40); // accrues premGrowth0; this seat's share floors to zero
+
+        vm.prank(owner);
+        hook.withdraw(seatId, 0, 0); // settle: nothing owed, but the interval is spent
+        (uint256 afterSettle0, uint256 afterSettle1) = hook.seat(seatId);
+
+        // Grow the seat, WITHOUT any swap in between — so there is no new growth for it to earn.
+        uint256 top0 = 5e18;
+        uint256 top1 = 5e18;
+        deal(Currency.unwrap(c0), owner, top0);
+        deal(Currency.unwrap(c1), owner, top1);
+        vm.startPrank(owner);
+        IERC20Like(Currency.unwrap(c0)).approve(address(hook), type(uint256).max);
+        IERC20Like(Currency.unwrap(c1)).approve(address(hook), type(uint256).max);
+        hook.addToSeat(seatId, top0, top1);
+        vm.stopPrank();
+
+        // **THE EXPECTATION IS COMPUTED HERE, NOT READ BACK FROM THE CONTRACT.** The first version
+        // of this assertion compared `seat()` before the settle against `seat()` after it, and M83
+        // survived it: `seat()` REPORTS the pending claim, so a stale mark inflated both sides
+        // equally and the comparison was blind by construction. That is the tautological-witness
+        // mistake this project keeps writing down (PITFALLS 5.34) — two numbers from the same
+        // source cannot check each other.
+        //
+        // The seat was settled to zero owing, then funded, with no swap in between. So it owns
+        // exactly what it had plus what it deposited, and nothing else.
+        (uint256 got0, uint256 got1) = hook.seat(seatId);
+        assertEq(got0, afterSettle0 + top0, "the seat was credited token0 for an interval it was not standing for");
+        assertEq(got1, afterSettle1 + top1, "the seat was credited token1 for an interval it was not standing for");
+        assertGt(got0, afterSettle0, "the deposit did not land: this test proves nothing");
     }
 }
 
