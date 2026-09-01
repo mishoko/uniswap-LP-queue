@@ -44,6 +44,16 @@ The product is the seats. If no seat pays, there is no product. This section is 
 seat, with the conditions written next to it — and it is deliberately the least flattering section
 in this document.
 
+> **SUPERSEDED IN PART, 2026-09-01 — read `docs/research/seat-economics/ROTATION.md` first.**
+> The diagnosis below is right and the numbers stand: under PERMANENT rank, 28–29 of 32 seats lose
+> under every regime. The REMEDY below — "two products, not 32", leave the middle unfunded — was
+> the wrong call. The book is now proven zero-sum against its own pro-rata benchmark (+0.0000%
+> difference in volume and total P&L), which means the ceiling is all 32 seats EQUAL to a pro-rata
+> LP, and **deterministic time-rotation of rank reaches it: 0/32 seats negative whenever the pool
+> is profitable.** It also found that BAND WIDTH dominates everything here — the ±10% band these
+> numbers were taken on is a losing LP position on a volatile pair whatever the hook does. Do not
+> quote §0.5's "two products" conclusion or its per-seat table as current.
+
 **[SIMULATED] — and read this before quoting any number below.** Every figure here comes from
 `docs/research/seat-economics/`, a simulation of the mechanism **as the contract actually executes
 it**: one constant-liquidity band, seats holding `(a0, a1)`, the outgoing token drained front-first

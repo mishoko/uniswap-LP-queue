@@ -1,5 +1,11 @@
 # Seat economics — is there a buyer for seat 5, 15, 30?
 
+> **ITS REMEDY IS SUPERSEDED BY `ROTATION.md` (same date, later in the day).** The diagnosis in
+> this file is correct — under permanent rank the middle of the book loses under every condition.
+> The conclusion it drew ("two products, not 32", leave the middle unfunded) was wrong: rotation
+> makes every seat worth funding. The zero-sum claim argued here is now PROVEN to four decimal
+> places in `ROTATION.md`. Read both; this one is the diagnosis, that one is the decision.
+
 **Status: ANALYSIS (simulated). 2026-09-01.** Not a measurement of a live pool; there is no live
 pool. Read `BUSINESS.md` §0.5 for the conclusions in decision form — this directory is the working.
 

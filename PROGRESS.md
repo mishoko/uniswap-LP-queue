@@ -18,9 +18,84 @@ Newest entry first. Never delete an entry — supersede it.
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
-| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-01** | **PARTLY** — 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **Broadcast and video still outstanding.** |
+| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-01** | **PARTLY** — 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## 2026-09-01 (third session) — 29 of 32 seats lose money. Rotation is the answer, and it is decided but unbuilt.
+
+**No production code changed. `forge test` → 205 passed, 0 failed, 1 skipped, unchanged.** This
+session was a design decision, and the deliverable is `docs/research/seat-economics/ROTATION.md`
+plus a crafted handoff in `NEXT_SESSION_PROMPT.md`.
+
+### The trigger
+
+The owner's objection, and it is correct: a hook where the traffic funnels to one seat is not a
+product, and the previous session's own numbers said 28-29 of 32 positions lose under every regime.
+"Two products, not 32" was a correct DIAGNOSIS and the wrong REMEDY — it accepted that most of the
+book should not be funded rather than fixing it.
+
+### What was proven
+
+**The book is zero-sum against its own pro-rata benchmark, to four decimal places.** Front-first vs
+one undivided pro-rata LP, same capital, same flow, same seeds: volume +0.0000%, total P&L +0.0000
+pts, both regimes. Availability is identical because the cursor only advances past EMPTY seats. So
+the inventory-recycling hypothesis is dead, and **no ordering scheme can make all 32 seats BEAT a
+pro-rata LP.** The ceiling is all 32 EQUAL to it (5.112).
+
+Deterministic time-rotation reaches that ceiling. `rank(i) = (i + floor((now-genesis)/EPOCH)) mod N`
+— a pure function of time, no stored rotation, no keeper, no randomness, no oracle. Round-robin
+rather than random **because on-chain randomness is a block hash and a head slot worth several
+hundred percent a year is worth a builder grinding for.** Measured, benign pool: static rank gives a
+932-point spread with 29/32 negative; rotation gives 13-18 points with **0/32 negative**.
+
+### The result that reframes the whole project
+
+**Band width dominates the allocator and τ, and the shipped ±10% is a losing LP position on a
+volatile pair whatever the hook does** (5.113):
+
+```
+      band    vol      pool     worst      best   seats<0
+     +-10%   0.45    -18.6%    -47.8%    +23.6%     24/32
+     +-30%   0.45    +14.9%     +2.8%    +27.7%      0/32
+```
+
+±10% dies in ~18 days and the terminal traversal is one lumpy loss landing on whoever is at the
+front. Rotation equalises the FLOW; it cannot equalise a single terminal event. Corollary nobody had
+noticed: **the rotation cycle must complete inside the band's life** — at 24h epochs a 32-seat cycle
+is 32 days against an 18-day band, so it never completes and equalisation silently fails. Epochs are
+hours, not days.
+
+### The differentiator, and the honest pitch
+
+**Lock-weighted priority**: head-time share proportional to committed lock length. On the shipping
+configuration (±30%, 4h epochs, tiers 4:3:2:1) it produces a monotone duration curve —
+lock4 +56.1%, lock3 +40.0%, lock2 +24.7%, lock1 +10.5% against a pool of +32.8%, with 0/32 negative.
+The tier mean equals the pool return in every row, so **the split is still conserved; only its AXIS
+changed**, from "which seat number you bought" to "how long you commit".
+
+That is the pitch that survives: **pay for sticky liquidity with fill priority instead of token
+emissions.** Uniswap cannot price how long you will stay; this can. Ship uniform as the DEFAULT (all
+weights equal reduces to it) so the 0/32 guarantee holds out of the box, and make weighting opt-in —
+lock-weighting re-introduces a below-average tier (lock1 −3.8% in NORMAL) and **front-time is
+leverage on the pool's own outcome**, so the curve inverts in a losing pool.
+
+### The riskiest unverified thing, flagged rather than glossed
+
+**A rotating rank breaks INVARIANT C, because cursors ARE ranks** (5.114). Rotate the rank→seat map
+underneath `cursor0`/`cursor1` and a cursor can LEAD a funded seat — silent theft of rank, exactly
+what N2 and N4 exist to catch. Proposed remedy (store `lastEpoch`, reset cursors to 0 on the first
+swap of a new epoch; a lagging cursor costs gas but never money) is **reasoned from the source and
+NOT executed.** It is Step 0 of the next session for that reason.
+
+### Process note
+
+A four-agent adversarial panel was commissioned to attack the rotation design and **did not return
+findings before the session ended**; they were stopped. The AGENTS.md §5 lenses were applied
+directly instead. The rotation design has therefore NOT had an independent adversarial pass, and
+that is stated at the top of the handoff rather than buried.
 
 ---
 
