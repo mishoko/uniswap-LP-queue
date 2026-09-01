@@ -403,6 +403,18 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
         }
     }
 
+    /// @dev Permissionless DMM rebalance. Ledger does not change. Legal reverts: still in range,
+    ///      or the destination ticks already have a wing.
+    function recenter(uint256 callerSeed) external {
+        vm.prank(_actor(callerSeed));
+        try hook.recenter() {
+            calls["recenter"]++;
+            _noteSolvency();
+        } catch (bytes memory err) {
+            _bad("recenter", err);
+        }
+    }
+
     /// @dev Permissionless and credits nobody. It moves float into the position, so it changes no
     ///      seat's ledger and no ghost.
     function sweepFloat(uint256 callerSeed) external {
@@ -670,7 +682,9 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
             || sel == bytes4(keccak256("SwapAmountCannotBeZero()"))
             || sel == bytes4(keccak256("PriceLimitAlreadyExceeded(uint160,uint160)"))
             || sel == bytes4(keccak256("InvalidSqrtPrice(uint160)"))
-            || sel == bytes4(keccak256("InvalidSqrtPriceLimit(uint160,uint160)"));
+            || sel == bytes4(keccak256("InvalidSqrtPriceLimit(uint160,uint160)"))
+            || sel == QueueHook.BandStillInRange.selector || sel == QueueHook.DestinationOccupied.selector
+            || sel == QueueHook.OverlappingLiquidity.selector || sel == QueueHook.BandOutOfBounds.selector;
     }
 
     /// @dev v4 wraps a hook revert in `WrappedError(address,bytes4,bytes,bytes)`; peel to the real

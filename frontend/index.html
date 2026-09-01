@@ -199,7 +199,7 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 <header>
   <div class="wrap head">
     <div class="logo">QUEUE<span>.</span></div>
-    <div class="tagline">32 paid chairs. Same Uniswap price. The front pays the back to stand there.</div>
+    <div class="tagline">32 paid desks at today's price. Ordinary Uniswap everywhere else. The front pays the back to stand there.</div>
     <div class="pill sim" id="modePill">SIMULATED</div>
   </div>
 </header>
@@ -207,15 +207,15 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 <!-- ================================================================ HERO -->
 <section>
   <div class="wrap">
-    <div class="eyebrow">Uniswap already orders by price. QUEUE orders LPs inside that price.</div>
-    <h1>Every Uniswap fills <em style="font-style:normal;color:var(--pro)">everyone a little</em>.<br>Nobody is first. Nobody is paid to be last.</h1>
+    <div class="eyebrow">Uniswap already orders by price. QUEUE orders the cash providers at that price.</div>
+    <h1>A paid counter at today's price.<br>A public Uniswap pool everywhere else.</h1>
     <p class="lede">
-      A Uniswap pool is a shared cash register: every trade hits every cash provider, in proportion to
-      size. QUEUE puts a <strong>numbered line</strong> inside that register and <strong>sells the
-      numbers</strong>. Seat&nbsp;1 takes every trade, including the small ones. Seat&nbsp;32 is reached
-      only when a trade has already emptied everyone ahead. The customer still swaps through any Uniswap
-      router, at the same price, at the same trading fee. <strong>The line is among the people putting
-      up the money, not among the customers.</strong>
+      Around today's price (~±10%) sit <strong>32 paid desks</strong>, filled front-first: desk&nbsp;1
+      takes every small trade; desk&nbsp;32 is reached only after 1–31 are empty. Further away, anyone
+      can put up cash the ordinary Uniswap way — no desk, no rent. The shopper still uses any Uniswap
+      router, at the same price, at the same 0.30% fee. They do <strong>not</strong> get a cheaper
+      trade. They pay ~48% extra network compute (cents on an L2). The desks are the customer of this
+      product, not the shopper.
     </p>
 
     <div class="ctl">
@@ -251,7 +251,7 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
       </div>
     </div>
     <p class="small" style="margin-top:16px">
-      Both panels run the same constant-product full-range curve at 0.30% fee, on the same seeded
+      Both panels run the same constant-product curve at 0.30% fee, on the same seeded
       pool the test suite deploys (1,500 token0 / 6,000 token1, 1 token0 = 4 token1, 18/6 decimals).
       <strong>This is the contract's own arithmetic, not an illustration of it.</strong> At
       2,500&nbsp;in, <span class="mono">test_7_5</span> leaves the five ranks holding
@@ -259,6 +259,16 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
       <span class="mono">0 | 0 | 1054.2 | 800 | 400</span> — a 0.015% difference, all of it the
       simulator working in floats where v4 works in integers.
     </p>
+
+    <pre class="ascii" style="margin-top:28px">CHEAPER ◄──────────── today's price ────────────► MORE EXPENSIVE
+
+  ordinary Uniswap     32 PAID DESKS (~±10%)      ordinary Uniswap
+  anyone, no desk      desk 1 filled first        anyone, no desk
+  Uniswap's own tools  desk 32 filled last        Uniswap's own tools
+
+  small trade  ──────► hits desk 1 only
+  huge trade   ──────► empties the desks, then ordinary Uniswap further out
+  jump the line ─────► refused. You cannot park on top of the paid desks.</pre>
   </div>
 </section>
 
@@ -290,17 +300,17 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
       </div>
       <div class="card">
         <div class="k">Network cost, not a trading fee</div>
-        <div class="v">+36%</div>
-        <div class="n">Same price, same 0.30%. Extra compute on a typical swap: 117,989 vs 86,820.
-          Flat from 1 to 32 seats (21-unit spread). On an L2 this is cents, not 36% of the trade.
-          A walk of the whole line is a different number: 416k.</div>
+        <div class="v">+48%</div>
+        <div class="n">Same price, same 0.30%. Extra compute on a typical swap: 128,406 vs 86,820.
+          Flat from 1 to 32 seats. On an L2 this is cents, not 48% of the trade.
+          A walk of the whole line is a different number: 426k.</div>
       </div>
       <div class="card">
         <div class="k">Roster</div>
         <div class="v"><span id="seatCount">5</span> / 32</div>
-        <div class="n">A franchise, not a public pool. Capital per seat is unbounded; only the numbers
-          in line are scarce. 32 is also one computer word (one seat id per byte) — raising it is a
-          redesign, not a setting.</div>
+        <div class="n">The desks are a franchise. Away from today's price, anyone can LP Uniswap as
+          usual. Capital per seat is unbounded; only the numbers in line are scarce. 32 is one
+          computer word — raising it is a redesign, not a setting.</div>
       </div>
     </div>
 
@@ -514,19 +524,20 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
         <p>Under toxic flow every holder declares near zero, no rent flows, and the front is free to take.
           That is the mechanism behaving correctly, and it is also the point at which the price signal is
           censored. Unsolved, and not solvable inside this design.</p></div>
-      <div class="lim"><h4>A typical swap costs 36% more compute — not 36% more of the trade</h4>
-        <p>Measured: 117,989 vs 86,820 on an identical pool with no hook. That is extra network work, not
-          a worse price and not a higher trading fee. It is the same at 1 seat as at 32 (21-unit spread).
-          Walking the whole line is a different bill: +8,070 per seat, 416,053 for all 32. L2 product.</p></div>
+      <div class="lim"><h4>A typical swap costs 48% more compute — not 48% more of the trade</h4>
+        <p>Measured: 128,406 vs 86,820 on an identical pool with no hook. That is extra network work, not
+          a worse price and not a higher trading fee. It is the same at 1 seat as at 32.
+          Walking the whole line is a different bill: +8,070 per seat, 426,470 for all 32. L2 product.</p></div>
       <div class="lim"><h4>32 seats — a professional venue, not every pool</h4>
         <p>32 desks can empty the book the way any thin market-maker list can pull quotes. They cannot
           seize it, pause it, or trap withdrawals — taking money out does not destroy the seat.
           What binds the number is depositing at 2,610,805 compute with 31 priced seats ahead
           (quadratic), not the walk, which is linear. 100 or 500 is a different program.</p></div>
-      <div class="lim"><h4>The band is ±10%, not ±1%</h4>
-        <p>The hook holds one Uniswap range around the start price, not the whole curve and not one NFT
-          per seat. A ±1% MM band would be even deeper; this version picked the ±10% band the allocator
-          already ran on. A swap that walks out of the band stops, the way any concentrated LP does.</p></div>
+      <div class="lim"><h4>The paid desks cover ~±10%, not ±1%</h4>
+        <p>One Uniswap range around today's price, shared by the 32 desks. Further out is ordinary
+          Uniswap. A huge trade fills the desks first, then that ordinary liquidity. Anyone may move
+          the desks to a new price if the ticks are empty. A ±1% specialist range would be deeper;
+          this version uses ±10%.</p></div>
       <div class="lim"><h4>Rent is currency0, weighted by currency0</h4>
         <p>Weighting a two-token basket needs a price and QUEUE is not allowed to have one. A tail holding
           only currency1 is paid nothing; the rent waits until an eligible recipient exists.</p></div>
@@ -546,9 +557,9 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 <footer>
   <div class="wrap">
     <div>QUEUE — a Uniswap v4 hook. MIT. No mainnet deployment. No off-chain components.</div>
-    <div class="kv"><b>forge test</b> 172 passed, 0 failed &nbsp;·&nbsp;
-      <b>mutations</b> 68, zero survivors &nbsp;·&nbsp;
-      <b>invariants</b> 11 × 256 runs × 64 depth</div>
+    <div class="kv"><b>forge test</b> 183 passed, 0 failed &nbsp;·&nbsp;
+      <b>hook</b> done &nbsp;·&nbsp;
+      <b>video / broadcast</b> not done</div>
   </div>
 </footer>
 

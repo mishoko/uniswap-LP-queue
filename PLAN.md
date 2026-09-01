@@ -31,9 +31,9 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 | **6** | Adversarial + invariant campaign | ✅ **COMPLETE** 2026-08-28 | §D.8 PASS | all 5 criteria; 11 invariants x 256 runs x 64 depth; **3 REAL BUGS FOUND AND FIXED** (PITFALLS 5.73, 5.74, 5.76/5.77); 66 mutations red, **0 survivors** |
 | **7** | Testnet + demo + video | 🟨 **IN PROGRESS** 2026-08-29 | §D.9 | Deploy script + demo built and **fork-verified against live Unichain Sepolia**; frontend built; `pool()` disclosure added; §5.17's orthogonality claim PROVEN; **broadcast and video still outstanding** |
 
-**Whole suite as of 2026-08-29: `forge test` → 172 passed, 0 failed, 1 loudly skipped (the fork
-suite, which needs `QUEUE_FORK=true`). `forge lint src/` → clean.**
-**68 production mutations, zero survivors (`python3 script/mutate.py`).**
+**Whole suite as of 2026-09-01: `forge test` → 183 passed, 0 failed, 1 loudly skipped (the fork
+suite, which needs `QUEUE_FORK=true`). Hook implementation is done. Phase 7 video and broadcast
+are not. M70–M74 RED. Full re-campaign of the older 69 is not claimed.**
 
 **⚠ PHASE 7 FOUND THAT THE DEPLOYMENT PATH HAD NEVER EXECUTED.** After six green phases, every suite
 reached the pool through the TEST-ONLY `QueueHarness.seed()` or through `deployCodeTo` — neither of
@@ -125,17 +125,16 @@ QUEUE they hold *different* assets: one is filled first by every swap, including
 other is filled only when a swap is large enough to sweep through to it. That difference is the
 object. It is scarce, it is transferable, and it can be priced by a market.
 
-**Paragraph two — the machinery.** The hook custodies **all** of the pool's liquidity in a single
-full-range position that it owns itself, and refuses every external attempt to add liquidity — so the
-hook's own ledger *is* the pool's ledger. It keeps an ordered array of **seats**, each holding a
-token0 and a token1 balance. On every swap, in `afterSwap`, the hook receives the realised
-`BalanceDelta` from `PoolManager` — and therefore knows the swap's **realised average price**, a
-number the hook did not choose, cannot influence, and does not have to trust. It allocates the fill
+**Paragraph two — the machinery.** The hook custodies **one concentrated Uniswap band** (~±10%
+around the start price) that it owns itself. Overlapping that band is refused — that is the N5 free
+lane. Disjoint ranges are ordinary Uniswap and may be minted through PositionManager. On every swap,
+in `afterSwap`, the hook clips PoolManager's realised `BalanceDelta` to the in-band fill (identity
+when the swap stayed in the band; one `SwapMath.computeSwapStep` when it left) and therefore knows
+the swap's **realised average price**, a number the hook did not choose. It allocates that fill
 **front-first** rather than pro-rata: the head seat surrenders as much of the outgoing token as it
 holds and receives the incoming token at that realised average price; the fill walks to the next seat
-only when the head is exhausted. A depositor withdraws whatever their seat currently holds. Rank
-transfers move the seat's *position in the queue*; the capital stays with the person who deposited
-it.
+only when the head is exhausted. Rank transfers move the seat's *position in the queue*; the capital
+stays with the person who deposited it.
 
 **Paragraph three — why it is worth building.** Adverse selection — the cost of being the LP holding
 the wrong side when someone else already knows the price moved — is today an **unpriced,
@@ -551,24 +550,33 @@ uint256 internal unallocatedRent0;   // rent with no eligible recipient (see B.8
 
 ## B.4 Callbacks
 
-### `beforeAddLiquidity` — the hook is the sole LP
+### `beforeAddLiquidity` — refuse overlap, allow wings
+
+**AMENDED 2026-08-31.** The hook is the sole LP *inside its band*, not of the whole curve.
+Overlapping adds revert `OverlappingLiquidity` — that is still N5, the free lane. Disjoint
+ranges (the wings) are ordinary Uniswap and are allowed. Adjacent at a boundary is disjoint:
+Uniswap ranges are `[lower, upper)`.
 
 ```solidity
-function _beforeAddLiquidity(address sender, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+function _beforeAddLiquidity(address sender, PoolKey calldata, ModifyLiquidityParams calldata params, bytes calldata)
     internal view override returns (bytes4)
 {
-    require(sender == address(this), "QUEUE: hook is sole LP");
-    return BaseHook.beforeAddLiquidity.selector;
+    if (sender == address(this)) return BaseHook.beforeAddLiquidity.selector;
+    if (params.tickUpper <= tickLower || params.tickLower >= tickUpper) {
+        return BaseHook.beforeAddLiquidity.selector;
+    }
+    revert OverlappingLiquidity(params.tickLower, params.tickUpper, tickLower, tickUpper);
 }
 ```
 
 `sender` here is the caller of `PoolManager.modifyLiquidity`, i.e. **the unlocker**. Because the hook
-adds liquidity from inside its own `poolManager.unlock()`, `sender == address(this)` holds. **PROVEN
-by execution** — the spike's `seed()` passes this check.
+adds liquidity from inside its own `poolManager.unlock()`, `sender == address(this)` holds for the
+band. **PROVEN by execution** — `test_wing_disjointAddSucceeds`, `test_wing_sameRangeIsOverlap`.
 
-This single line is what makes the hook's ledger the pool's ledger. Without it, an outside LP dilutes
-every fill and the allocator's arithmetic is meaningless. **It is the most load-bearing `require` in
-the contract.** It gets its own negative control (§D.3).
+The overlap revert is what makes the hook's ledger the *band's* ledger. Without it, an outside LP at
+the same ticks dilutes every fill and solvency dies. **It is still the most load-bearing `require`
+in the contract.** It keeps N5. The clip in `_afterSwap` is the paired half: without it, a *disjoint*
+wing would be credited to the queue (M70).
 
 ### `afterSwap` — the allocator
 

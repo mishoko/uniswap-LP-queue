@@ -15,7 +15,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
@@ -150,15 +150,23 @@ contract ExternalLP is IUnlockCallback {
     PoolKey internal key;
     int24 internal tl;
     int24 internal tu;
+    bytes32 internal salt;
 
     constructor(IPoolManager pm) {
         poolManager = pm;
     }
 
     function add(PoolKey calldata k, int24 lower, int24 upper, uint128 liq) external {
+        addWithSalt(k, lower, upper, liq, bytes32(0));
+    }
+
+    /// @dev Same ticks, different salt — Uniswap keys positions by (owner, ticks, salt).
+    ///      The overlap guard is tick-based; a salt must not be a free lane.
+    function addWithSalt(PoolKey calldata k, int24 lower, int24 upper, uint128 liq, bytes32 salt_) public {
         key = k;
         tl = lower;
         tu = upper;
+        salt = salt_;
         poolManager.unlock(abi.encode(int256(uint256(liq))));
     }
 
@@ -166,10 +174,46 @@ contract ExternalLP is IUnlockCallback {
         require(msg.sender == address(poolManager), "pm");
         int256 d = abi.decode(data, (int256));
         (BalanceDelta cd,) = poolManager.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: d, salt: bytes32(0)}), ""
+            key, ModifyLiquidityParams({tickLower: tl, tickUpper: tu, liquidityDelta: d, salt: salt}), ""
         );
         _resolve(key.currency0, cd.amount0());
         _resolve(key.currency1, cd.amount1());
+        return "";
+    }
+
+    function _resolve(Currency c, int128 amt) internal {
+        if (amt < 0) {
+            poolManager.sync(c);
+            IERC20Minimal(Currency.unwrap(c)).transfer(address(poolManager), uint128(-amt));
+            poolManager.settle();
+        } else if (amt > 0) {
+            poolManager.take(c, address(this), uint128(amt));
+        }
+    }
+}
+
+/// @dev A swap with an explicit sqrtPriceLimit, so a test can rest just outside the band
+///      instead of slamming to MIN/MAX through empty ticks.
+contract LimitSwapper is IUnlockCallback {
+    IPoolManager public immutable poolManager;
+
+    constructor(IPoolManager pm) {
+        poolManager = pm;
+    }
+
+    function swapTo(PoolKey calldata k, bool zfo, uint256 amountIn, uint160 limit) external {
+        poolManager.unlock(abi.encode(k, zfo, amountIn, limit));
+    }
+
+    function unlockCallback(bytes calldata data) external override returns (bytes memory) {
+        require(msg.sender == address(poolManager), "pm");
+        (PoolKey memory k, bool zfo, uint256 amountIn, uint160 limit) =
+            abi.decode(data, (PoolKey, bool, uint256, uint160));
+        BalanceDelta d = poolManager.swap(
+            k, SwapParams({zeroForOne: zfo, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: limit}), ""
+        );
+        _resolve(k.currency0, d.amount0());
+        _resolve(k.currency1, d.amount1());
         return "";
     }
 
@@ -354,7 +398,8 @@ contract ControlsTest is QueueFixture {
         );
     }
 
-    /// @dev The positive half of N5: with the guard IN PLACE the same call must revert, by name.
+    /// @dev The positive half of N5: overlapping the band (here: full-range on a full-range
+    ///      fixture) must revert, by name. Disjoint wings are a different test (`Wings.t.sol`).
     function test_N5_positive_guardRefusesTheExternalLp() public {
         address a = address(FLAGS ^ (uint160(0x3006) << 144));
         deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgs(_syntheticRoster(3)), a);
@@ -373,7 +418,7 @@ contract ControlsTest is QueueFixture {
                 )
             );
         assertFalse(ok, "an external LP was allowed to add liquidity");
-        assertEq(bytes4(_unwrap(err)), QueueHook.NotSoleLiquidityProvider.selector, "wrong refusal reason");
+        assertEq(bytes4(_unwrap(err)), QueueHook.OverlappingLiquidity.selector, "wrong refusal reason");
     }
 
     /// @dev The positive control. If the UNMUTATED hook cannot pass this harness, the four mutation

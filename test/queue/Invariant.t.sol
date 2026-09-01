@@ -112,7 +112,7 @@ contract InvariantTest is QueueFixture {
 
         targetContract(address(handler));
 
-        bytes4[] memory sels = new bytes4[](12);
+        bytes4[] memory sels = new bytes4[](13);
         sels[0] = QueueHandler.addToSeat.selector;
         sels[1] = QueueHandler.withdraw.selector;
         sels[2] = QueueHandler.swap.selector;
@@ -125,6 +125,7 @@ contract InvariantTest is QueueFixture {
         sels[9] = QueueHandler.claimPending.selector;
         sels[10] = QueueHandler.sweepFloat.selector;
         sels[11] = QueueHandler.warp.selector;
+        sels[12] = QueueHandler.recenter.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: sels}));
 
         // `unauthorised` is deliberately OUTSIDE the fuzz selector set: it is driven by
@@ -414,6 +415,8 @@ contract InvariantTest is QueueFixture {
             handler.transferSeat(a, b, (seed >> 204) & 1 == 1);
         } else if (pick < 96) {
             handler.claimPending(a, b, c);
+        } else if (pick < 98) {
+            handler.recenter(a);
         } else {
             handler.sweepFloat(a);
         }

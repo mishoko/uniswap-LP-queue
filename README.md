@@ -2,9 +2,13 @@
 
 **A Uniswap v4 hook that lets the people putting up the money buy and sell their place in line — so whoever wants to be filled first pays whoever is willing to go last.**
 
-This is not a public Uniswap pool. It is not sandwich protection. It is not a cheaper trade. It is a **32-desk professional venue** sitting on top of Uniswap's ordinary price curve.
+Think of a shop with a **paid counter** and a **public warehouse**.
 
-If that is not a product you have buyers for, stop here.
+- Around today's price (~±10%) sit **32 paid desks**. Desk 1 serves every customer. Desk 32 only serves a customer so large that 1–31 are already empty. You buy a desk. You pay rent to the desks behind you. Anyone can take your desk at the price you posted.
+- **Away from today's price**, anyone can put up cash the ordinary Uniswap way. No desk. No rent. Same old "everyone is hit a little."
+- The **customer** still walks in through any Uniswap router, pays the same 0.30% shop fee, and gets the same price. They never talk to the desks. They do pay **~48% more network compute** on a typical swap (128,406 vs 86,820 units). That is a longer checkout, not a worse bill of goods. On an L2 it is cents. Routers that optimise for gas may still skip this pool.
+
+It is not sandwich protection. It is not a cheaper trade. It is not Uniswap-for-everyone. If you do not have professional desks that want *first fill* and other capital that wants to be *paid to wait*, this is the wrong product.
 
 ---
 
@@ -34,7 +38,7 @@ The customer on the other side of the pool does not see any of this. They trade 
 
 | Question | Honest answer |
 |---|---|
-| Is it well built? | **Yes, as accounting.** 164 tests, 69 mutations with zero survivors, three real bugs found in code that had already passed 135 tests — all fixed. This is not an audit. |
+| Is it well built? | **Yes, as accounting.** 183 tests. Three real bugs were found in code that had already passed 135 tests — all fixed. This is not an audit. |
 | Is it interesting? | **Yes, as a missing product.** Uniswap has run one fill rule for seven years. Nobody has been able to price "being first." QUEUE is the first pool where that number exists on-chain. 0 of 662 prior hook submissions sold an ordering over LP capital. |
 | Does it make Uniswap better for ordinary users? | **No.** Same price, same fee, extra network cost, thinner book. The trader is not the customer of this product. |
 | Does it stop MEV / sandwiches? | **No, and claiming it does is mis-selling.** The hackathon theme is two halves. QUEUE can claim **sustainable liquidity** (the right desks can choose to stay). It cannot claim MEV protection. |
@@ -74,6 +78,72 @@ If that sentence does not describe buyers you have, this is the wrong object.
 
 ---
 
+## Does this even make sense?
+
+**Sometimes. Not for a public ETH/USDC pool.**
+
+Every Uniswap pool today fills every cash provider a little, in proportion to size. That is fair, and it is also why being first is worthless *inside* the pool and valuable *outside* it (to whoever orders the block, and to firms that spend on latency). QUEUE makes "being first" a chair you can buy, with rent paid to the people you are standing in front of.
+
+| Player | What they get | What they pay | Do they want this? |
+|---|---|---|---|
+| **Shopper (end user)** | Same tokens out, same 0.30% fee, any Uniswap router. They do not see the queue. | ~48% extra network compute on a typical swap. On an L2: cents. Not 48% of the trade. | **Usually no.** They get nothing extra. Aggregators may route around this pool for that reason. |
+| **Desk at the front** | Every small trade, 100%, on a fraction of the capital. Like paying for the specialist post on the NYSE instead of a microwave tower. | Rent to the desks behind, plus the risk that this trade was informed. | **Yes, if they can hedge elsewhere.** |
+| **Desk at the back / treasury** | Paid to wait. Only hit by trades large enough to empty everyone ahead. | Forgoes most fee income on quiet days. Large trades are often the informed ones — not "safer." | **Yes, only if rent actually shows up.** |
+| **Ordinary Uniswap LP (outside the paid desks)** | Normal Uniswap. No seat, no rent. Filled only when a trade is so large it has already walked through the paid desks. | Nothing extra. | **Yes, as optional extra depth.** They are not buying the product; they are using Uniswap next to it. |
+| **The pool / process** | A public number: what people will pay to be first. Liquidity that can *choose* its place in line instead of being smeared. | Extra compute. A 32-name club at the money. | Useful as an **experiment** Uniswap has never been able to run. Not a default for every pair. |
+| **Router / aggregator** | Same interface: `V4SwapRouter` / any v4 router. No custom router. The pool *is* a Uniswap pool; the hook is on the key. | The extra gas is visible. Routers that rank by gas will prefer a hookless pool at the same price. | They will **serve** it if someone swaps this pool. They will not **prefer** it. |
+
+**NYSE analogy, not a crypto one.** On the NYSE, designated market makers buy a seat, stand at the post, and pay for the privilege of seeing flow first. The public can still trade. Nobody claims the specialist post makes the *customer's* commission cheaper. QUEUE is that seat, inside a Uniswap pool, with the rent paid to the other seats instead of to an exchange.
+
+**Why would anyone pay ~50% more gas?** The shopper should not, and mostly will not, unless they are already swapping this pool (professional venue, RWA book, a pair the desks chose). The *desks* pay it because they chose this book: they want first fill without posting more capital, or they want the coupon for standing last. The extra compute is the cost of keeping a numbered line on-chain. It is a constant, not a tax that grows with 32 desks (21 units of difference from 1 seat to 32 on a normal trade).
+
+---
+
+## How Uniswap's router sees this
+
+Tightly coupled to Uniswap as it works **today**. Not a new AMM. Not a forked router.
+
+```
+Customer
+   │
+   │  ordinary Uniswap router  (Uniswap, 1inch, a frontend — same as any v4 pool)
+   ▼
+PoolManager.swap
+   │
+   ├─ Uniswap walks PRICE first (nearer ticks fill first). Unchanged.
+   │
+   ├─ around today's price (~±10%):
+   │     32 paid desks, filled FRONT-FIRST
+   │     Desk 1 emptied before desk 2 is touched
+   │
+   └─ further away from today's price:
+         ordinary Uniswap LPs, filled the usual way (everyone a little)
+         minted with Uniswap's own Position Manager. No desk required.
+```
+
+A small $3,000 sale of token A:
+
+```
+TODAY (every Uniswap pool)                  QUEUE (paid desks at the money)
+──────────────────────────                  ──────────────────────────────
+$3,000 hits EVERYONE a little               $3,000 hits Desk 1 only
+
+Alice  2% of the till →  $60 of the trade   Desk 1  $20k  →  takes the whole $3,000
+Bob    5%            → $150                 Desk 2  $50k  →  not touched
+Carol 10%            → $300                 Desk 3 $100k  →  not touched
+...                                         ...
+                                            Desk 1 pays rent to 2–32 for that privilege.
+                                            Customer got the same price, same 0.30%.
+```
+
+A *huge* trade that blows through today's price: the paid desks are emptied first, then ordinary Uniswap liquidity further out takes the rest. That is Uniswap's price order, then QUEUE's line inside it.
+
+You **cannot** put ordinary Uniswap liquidity *on top of* the paid desks. That would be cutting in line for free. The contract refuses it.
+
+If the market price walks more than ~10% and nobody is sitting out there, anyone may call `recenter()` and move the paid desks to the new price — unless someone already parked ordinary Uniswap liquidity on those ticks, in which case they have it until they leave.
+
+---
+
 ## What a "queue" is here — the word is doing too much work
 
 In ordinary English a queue is: you arrive, you stand at the back, you wait, you get served.
@@ -106,18 +176,7 @@ So: **32 paid seats, always for sale.** Scarcity is the product. The always-for-
 
 ## What a Uniswap engineer is looking at
 
-Uniswap already orders by **price**: nearer ticks fill first. Inside a tick, everyone is pro-rata. QUEUE is the missing half: a paid, ordered queue **among LPs at the same price**. Same curve. Same router. Same ticks. The hook holds **one** concentrated Uniswap position — a ±10% band around the start price, the object every v3 LP already knows — and the 32 seats share that band. Seats are not NFTs and they do not pick their own ranges. That would be a second AMM.
-
-```
-Uniswap:  price first                    QUEUE:  price first, THEN queue
-          (ticks, unchanged)                     inside the same band
-
-          LP A ─┐                                seat 1  ← filled first
-          LP B ─┼─ same tick, pro-rata           seat 2
-          LP C ─┘                                seat 3  ← filled last
-```
-
-A swap that walks out of the band stops, the way any concentrated LP does. That is Uniswap, not a bug.
+Uniswap already orders by **price**. QUEUE orders the cash providers **at that price**. One concentrated Uniswap position (~±10%), 32 seats sharing it, not 32 NFT ranges. Ordinary Uniswap liquidity is allowed only *outside* that position. `recenter()` moves the position when spot has left and the new ticks are empty.
 
 A seat **can hold only one of the two tokens**. After a fill, the front usually does. Depositing both in the current ratio is how you add *depth*. Depositing one typically mints **zero** liquidity — the tokens sit as a claim in the float. Rent is paid in token0, weighted by token0.
 
@@ -186,7 +245,7 @@ On a *large* trade that walks several seats, the front is emptied and the back i
    Customer ──► ordinary Uniswap router ──► pool
                 same price, same trading fee
                 plus a fixed extra network tick
-                (see "+36%" below)
+                (see "+48%" below)
                 The queue is invisible to them.
 ```
 
@@ -227,13 +286,13 @@ What it is          monopoly    a franchise    getting cheap    free → no pric
 
 ---
 
-## The "+36%" — it is not 36% more expensive trades
+## The "+48%" — it is not 48% more expensive trades
 
 This is the number that will kill the pitch if you say it wrong.
 
-What was measured: a typical swap on QUEUE uses **117,989 units of network compute**. The same swap on a pool with no hook uses **86,820**. That is **+36%**.
+What was measured: a typical swap on QUEUE uses **128,406 units of network compute**. The same swap on a pool with no hook uses **86,820**. That is **+48%**. The extra versus the previous +36% is making sure a fill that happened *outside* the paid desks is not booked as if the desks served it. It is still a **constant**, flat from 1 to 32 seats.
 
-What a business person hears: *"customers pay 36% more."*
+What a business person hears: *"customers pay 48% more."*
 
 What it actually is:
 
@@ -242,11 +301,11 @@ What it actually is:
 | A trading fee? | **No.** The pool's 0.30% (or whatever was set) is unchanged. |
 | A worse price? | **No.** The customer gets the same tokens out. |
 | Extra network cost? | **Yes.** Like a slightly longer checkout taking a slightly larger card-processing tick. |
-| Same at 1 seat as at 32? | **Yes, for a normal trade.** 1 seat: 117,971. 32 seats: 117,992. Difference: 21 units. The 36% is the cost of the pool *having a book at all*. |
-| Always 36%? | **No.** If a single trade is large enough to walk many seats, add ~8,070 units per extra seat. A full 32-seat walk is a 416,053-unit transaction — not +36%, closer to 5× a hookless swap. That is a large, unusual trade. |
-| Dollars? | This product belongs on an L2. 31,000 extra units is **cents or less**, not 36% of the notional. On Ethereum mainnet it would be a real bill. **QUEUE is an L2 product.** |
+| Same at 1 seat as at 32? | **Yes, for a normal trade.** Head-only is flat (21-unit spread). The 48% is the cost of the pool *having a book at all*. |
+| Always 48%? | **No.** If a single trade is large enough to walk many seats, add ~8,070 units per extra seat. A full 32-seat walk is a 426,470-unit transaction — not +48%, closer to 5× a hookless swap. That is a large, unusual trade. |
+| Dollars? | This product belongs on an L2. ~41,000 extra units is **cents or less**, not 48% of the notional. On Ethereum mainnet it would be a real bill. **QUEUE is an L2 product.** |
 
-The honest commercial risk is not "36% more expensive trades." It is: **routers pick the pool with the same price and the lower network cost.** If they skip QUEUE, this pool does not see retail flow. Retail flow is the "good" flow the front seat wants. That loop is the adoption problem, and it is not solved.
+The honest commercial risk is not "48% more expensive trades." It is: **routers pick the pool with the same price and the lower network cost.** If they skip QUEUE, this pool does not see retail flow. Retail flow is the "good" flow the front seat wants. That loop is the adoption problem, and it is not solved.
 
 ---
 
@@ -296,7 +355,7 @@ The failure mode the pitch should actually fear: **the 32 collude, post a price 
 
 | Pros | Cons |
 |---|---|
-| Same price. Same trading fee. Any Uniswap router. They never touch the queue. | +36% network compute on a typical swap. A constant, not a slope. |
+| Same price. Same trading fee. Any Uniswap router. They never touch the queue. | +48% network compute on a typical swap. A constant, not a slope. |
 | | A very large trade that walks many seats costs more still. |
 | | This version holds one wide-range position — roughly **1/200th the depth per dollar** of a tight Uniswap v3-style range. Worse price impact for the same dollars. **This is the sharpest commercial objection and it is not shipped as a product.** The queue maths is proven not to care about the range; concentrating it is a next-version parameter, unbuilt. |
 
@@ -329,12 +388,12 @@ The failure mode the pitch should actually fear: **the 32 collude, post a price 
 | Pros | Cons |
 |---|---|
 | A differentiated LP product. Professional capital has a reason to pick this pool over the 189th dynamic-fee hook. | Bounded in *number of LPs* (not in dollars — seats can be huge). |
-| Produces a public number: the head-seat price. Both "near zero" and "high" are useful results. | Thin full-range depth until the range is concentrated. Routers may not route. |
+| Produces a public number: the head-seat price. Both "near zero" and "high" are useful results. | The band is ±10%, not ±1%. Wings restore permissionless depth *outside* the money. Routers may still skip the extra compute. |
 | No admin, no upgrade, no privileged role — you cannot be asked to freeze it. | You also cannot freeze it. The founding 32 is an endowment worth one transaction of head start. |
 
 ### JIT bots / searchers
 
-Weak buy-in, stated as weak. They cannot jump this pool with a tight-range mint (nobody except the hook can add liquidity). They can buy the seat for a block and resell it. Honest answer: they trade elsewhere. QUEUE's claim against them is structural, not persuasive.
+Weak buy-in, stated as weak. They cannot jump the paid desks with a tight-range mint. They can still do ordinary Uniswap JIT *outside* those desks, or buy a seat for a block and resell it. Honest answer: they trade elsewhere. QUEUE's claim against them is structural at the money, not persuasive.
 
 ---
 
@@ -416,7 +475,7 @@ Measured against a **real** Uniswap v4 PoolManager and a real router. Never a mo
 - Rent cannot be stolen with a flash loan.
 - Running out of rent demotes you; it does not seize you.
 - You cannot create a seat by depositing. Dusting the head buys nothing.
-- The queue maths does not care about the position's price range (proven on a ±10% band). Concentrating the book is a parameter, not a rewrite — **unbuilt as a product**.
+- The queue maths does not care about the position's price range (proven on a ±10% band). The shipping position **is** that band. Wings are ordinary Uniswap outside it.
 - Three real bugs were found in code that had already passed 135 tests, including one that bricked both deposit paths on any pool with accrued fees. All three are fixed. Mutation testing on this project has found a real defect **every time it was run**.
 - 0 of 662 prior hook submissions sold an ordering over LP capital.
 
@@ -424,7 +483,7 @@ Measured against a **real** Uniswap v4 PoolManager and a real router. Never a mo
 
 - That a liquid market in seats will form. It does not exist. The "toxicity signal" is only as good as that market.
 - That professional LPs will pay for this versus running JIT bots on ordinary pools.
-- That routers will send flow to a full-range 32-seat pool.
+- That routers will send flow to a pool whose typical swap costs +48% compute.
 - That the lease works when the front is worth less than zero. It cannot express that.
 
 Both "the head seat prices near zero" and "the head seat prices high" are results. Claiming to know which in advance is the thing that would make this uninteresting.
@@ -437,25 +496,38 @@ Both "the head seat prices near zero" and "the head seat prices high" are result
 |---|---|
 | "QUEUE stops sandwich attacks." | It does not. Trades execute normally, at the normal price, through any router. |
 | "QUEUE reduces LVR / LP losses." | Total pool P&L is unchanged. What changes is *who bears it, at a known price*. |
-| "QUEUE recaptures value from searchers." | It does not, except one vector: the tight-range JIT jump is structurally unavailable (external adds revert) and the equivalent right must be bought from an incumbent. |
+| "QUEUE recaptures value from searchers." | It does not. You cannot jump the paid desks with a tight-range mint. You can still do ordinary Uniswap JIT *outside* those desks. |
 | "QUEUE detects toxic flow." | It does not, and it must not try — proven impossible for a v4 hook. It sells different slices of the flow and lets capital bid. |
 | "The queue's face value is redeemable." | Face value is an **upper bound**. Last people out eat a rounding residual. |
 | "Sweeps are free / O(1)." | They cost 8,070 compute units per seat walked. |
 | "This is price–time priority." | It is not. Rank goes to willingness to pay rent, not to arrival. |
 | "A queue is obviously better than pro-rata." | We do not know. That is the experiment. |
-| "The overhead is negligible." | It is +36% vs a bare pool on a typical swap. The defensible claim is that it is a **constant a router can price**, not that it is small. |
+| "The overhead is negligible." | It is +48% vs a bare pool on a typical swap. The defensible claim is that it is a **constant a router can price**, not that it is small. |
 
 The longer form of every row, with numbers, is in [`BUSINESS.md`](BUSINESS.md).
 
 ---
 
-## Status — Phases 0–6 complete, Phase 7 shipping, 2026-08-31
+## How this rates as a Uniswap Hooks Incubator submission
+
+Published rubric: **30% original idea · 25% unique execution · 20% impact · 15% functionality · 10% presentation.** Binary gates: public repo, a real v4 hook, new code in the window, tests or a frontend, a video under five minutes with a human voice.
+
+| Slice | Honest score | Why |
+|---|---|---|
+| Original idea (30%) | **Strong** | 0 of 662 prior hooks sold an ordering over LP capital. Uniswap cannot express "pay to be filled first" today. |
+| Unique execution (25%) | **Strong** | Real v4, not a mock. Front-first at the swap's own price. Paid seats, always for sale. Ordinary Uniswap liquidity outside the desks. `recenter()` when the ticks are free. Tests that go red when you cheat. |
+| Impact (20%) | **Medium** | Uniswap will not reroute ETH/USDC through this. A professional venue *can* run it, and a Uniswap team can LP outside the desks with Position Manager tomorrow. Over-claim "every pool" and this slice collapses. |
+| Functionality (15%) | **Strong as a hook** | 183 tests, 0 failed. The hook is the product. |
+| Presentation (10%) | **Incomplete** | Frontend exists. **Video and live broadcast do not.** That is a binary gate, not polish. |
+
+**Hook implementation: done. Submission: not done** until the video and the broadcast exist.
 
 ```
-forge test               ->  172 passed, 0 failed, 1 skipped   (16 suites)
-forge lint src/          ->  clean, zero notes
-python3 script/mutate.py ->  69 mutations on production code, ZERO survivors (M69 included)
+forge test               ->  183 passed, 0 failed, 1 skipped
+python3 script/mutate.py M70 M71 M72 M73 M74 ->  RED
 ```
+
+A full re-campaign of the older 69 mutations against this source is **not claimed**.
 
 The skipped suite is `DeployFork.t.sol`, off unless you ask, because the default suite must not need a network. It skips **loudly**:
 
@@ -473,7 +545,7 @@ Everything runs against **real v4 contracts deployed locally** — a real `PoolM
 
 | File | What it is |
 |---|---|
-| **This file** | The 15-minute read. What it is, who it is for, why 32, why +36%, what breaks, what does not. |
+| **This file** | The 15-minute read. What it is, who it is for, why 32, why +48%, what breaks, what does not. |
 | [`BUSINESS.md`](BUSINESS.md) | The decision memo with worked numbers, the 662-row novelty check, gas tables, and the limitation list at full strength. |
 | [`PLAN.md`](PLAN.md) | What to build, phased, with runnable acceptance criteria. Opens with a BUILD STATUS dashboard — that table is the authoritative answer to "what is done". |
 | [`PROGRESS.md`](PROGRESS.md) | What is proven, what is open, what to do next. |

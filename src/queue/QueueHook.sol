@@ -18,6 +18,9 @@ import {FixedPoint96} from "@uniswap/v4-core/src/libraries/FixedPoint96.sol";
 import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {SwapMath} from "@uniswap/v4-core/src/libraries/SwapMath.sol";
+import {ProtocolFeeLibrary} from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
+import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
 import {Allocation} from "./libraries/Allocation.sol";
 import {Rent} from "./libraries/Rent.sol";
@@ -25,10 +28,14 @@ import {QueueSeats} from "./QueueSeats.sol";
 
 /// @title QUEUE — a priced, front-first fill queue for a Uniswap v4 pool
 ///
-/// @notice The hook custodies the pool's entire liquidity as ONE position and keeps an ordered list
-///         of seats. Every swap's aggregate entitlement is allocated FRONT-FIRST rather than
-///         pro-rata: the head seat surrenders as much of the outgoing token as it holds and is
-///         credited the incoming token at the swap's own realised average price.
+/// @notice The hook custodies ONE concentrated Uniswap position — a band around the start price —
+///         and keeps an ordered list of seats that share it. Every swap's in-band fill is allocated
+///         FRONT-FIRST rather than pro-rata: the head seat surrenders as much of the outgoing token
+///         as it holds and is credited the incoming token at the swap's own realised average price.
+///
+///         Liquidity that does not overlap that band is ordinary Uniswap. Anyone may LP the wings
+///         through PositionManager. Overlapping the band is refused: that is the free lane that
+///         dilutes the position the queue is accounted against (N5).
 ///
 ///         Uniswap has never had a queue, so it has never had a price for one — which did not make
 ///         the ordering worthless. It made it unpriceable INSIDE the pool, and therefore captured
@@ -41,6 +48,9 @@ import {QueueSeats} from "./QueueSeats.sol";
 contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     using CurrencySettler for Currency;
     using StateLibrary for IPoolManager;
+    using PoolIdLibrary for PoolKey;
+    using ProtocolFeeLibrary for uint16;
+    using ProtocolFeeLibrary for uint24;
     using SafeERC20 for IERC20;
 
     // --------------------------------------------------------------------------------- state (§B.3)
@@ -181,8 +191,8 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     uint256 internal transient paidForSeat;
 
     /// @dev What ONE tick of this pool can hold, from v4's own `tickSpacingToMaxLiquidityPerTick`
-    ///      rather than a reimplementation of it. The hook is the pool's sole LP and its position
-    ///      spans every usable tick, so the pool's per-tick ceiling is the hook's ceiling, and
+    ///      rather than a reimplementation of it. Inside the band the hook is the only LP
+    ///      (overlapping adds revert), so the per-tick ceiling is the hook's ceiling, and
     ///      `_liquidityForAmounts` clamps to it instead of handing `modifyLiquidity` a number it
     ///      will reject.
     uint128 internal immutable MAX_LIQUIDITY_PER_TICK;
@@ -202,9 +212,26 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      thing that makes this correct.
     uint256 internal transient pfSnapshotPlusOne;
 
+    /// @dev `slot0.sqrtPriceX96` as `beforeSwap` saw it. The clip in `_afterSwap` needs the start
+    ///      of the traversed interval; after the swap the price has already moved. TRANSIENT for
+    ///      the same reason as `pfSnapshotPlusOne`: it cannot survive the transaction.
+    uint160 internal transient sqrtBefore;
+    /// @dev The tick that went with `sqrtBefore`. The in-band fast path compares ticks, not
+    ///      sqrt prices: `getSqrtPriceAtTick` on the common path was the gas.
+    int24 internal transient tickBefore;
+
     // ------------------------------------------------------------------------------------- errors
 
     error NotSoleLiquidityProvider();
+    /// @dev An outside LP tried to mint inside the queue's band. That is the N5 free lane: the
+    ///      ledger would still tie out, and the position would no longer cover it. Disjoint
+    ///      ranges — the wings — are ordinary Uniswap and are allowed.
+    error OverlappingLiquidity(int24 addLower, int24 addUpper, int24 bandLower, int24 bandUpper);
+    /// @dev `recenter` was called while the spot is still inside the custodied band.
+    error BandStillInRange(int24 tick, int24 lower, int24 upper);
+    /// @dev The new band would sit on ticks that already have liquidity (a wing). Planting the
+    ///      queue there is the N5 overlap. Recenter only when those ticks are empty.
+    error DestinationOccupied(uint128 liveLiquidity);
     /// @dev `beforeSwap` did not run before `afterSwap`. Structurally unreachable (Hooks.sol skips
     ///      both symmetrically on a hook self-call); loud rather than silent if that ever changes.
     error ProtocolFeeSnapshotMissing();
@@ -263,6 +290,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     event SeatBought(uint256 indexed seatId, address indexed from, address indexed to, uint256 price);
     event RentFunded(uint256 indexed seatId, address indexed payer, uint256 amount);
     event RentWithdrawn(uint256 indexed seatId, address indexed to, uint256 amount);
+    event Recentered(int24 oldLower, int24 oldUpper, int24 newLower, int24 newUpper);
 
     /// @dev The pool this hook will serve is fixed AT DEPLOYMENT, not by whoever initializes
     ///      first. Without this, anyone could front-run the intended `poolManager.initialize` and
@@ -435,9 +463,9 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory p) {
         p.afterInitialize = true; // bind the one pool this hook serves
-        p.beforeAddLiquidity = true; // refuse every external LP — the hook is the sole LP
-        p.beforeSwap = true; // open the protocol-fee measurement window
-        p.afterSwap = true; // allocate the fill
+        p.beforeAddLiquidity = true; // refuse overlap; wings are ordinary Uniswap
+        p.beforeSwap = true; // open the protocol-fee measurement window + snapshot sqrtP
+        p.afterSwap = true; // allocate the in-band fill
     }
 
     // ------------------------------------------------------------------------------------ callbacks
@@ -494,18 +522,22 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         return c * spacing;
     }
 
-    /// @dev The premise of every other number in this project: nobody but the hook may add
-    ///      liquidity. Without it an external LP dilutes the position the queue is accounted
-    ///      against, and conservation breaks immediately.
-    function _beforeAddLiquidity(address sender, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
-        internal
-        view
-        virtual
-        override
-        returns (bytes4)
-    {
-        if (sender != address(this)) revert NotSoleLiquidityProvider();
-        return BaseHook.beforeAddLiquidity.selector;
+    /// @dev Overlap is the free lane (N5): an outside LP at the SAME ticks dilutes the position
+    ///      the queue is accounted against, the ledger still ties, and solvency dies. Disjoint
+    ///      ranges are ordinary Uniswap — PositionManager, any router, no seat required — and
+    ///      they are the subordinated tail of a crossing swap. Adjacent at a boundary is
+    ///      disjoint: Uniswap ranges are [lower, upper).
+    function _beforeAddLiquidity(
+        address sender,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata params,
+        bytes calldata
+    ) internal view virtual override returns (bytes4) {
+        if (sender == address(this)) return BaseHook.beforeAddLiquidity.selector;
+        if (params.tickUpper <= tickLower || params.tickLower >= tickUpper) {
+            return BaseHook.beforeAddLiquidity.selector;
+        }
+        revert OverlappingLiquidity(params.tickLower, params.tickUpper, tickLower, tickUpper);
     }
 
     /// @notice Opens the protocol-fee measurement window.
@@ -538,6 +570,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     {
         Currency inputCurrency = params.zeroForOne ? k.currency0 : k.currency1;
         pfSnapshotPlusOne = poolManager.protocolFeesAccrued(inputCurrency) + 1;
+        (sqrtBefore, tickBefore,,) = poolManager.getSlot0(k.toId());
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
@@ -547,8 +580,9 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         override
         returns (bytes4, int128)
     {
-        // Step 1 — the sole LP's entitlement is exactly the NEGATION of the swapper's delta. Nothing
-        // here is the hook's opinion; the numbers come from PoolManager.
+        // Step 1 — the swapper's delta is the WHOLE pool, wings included. The queue is owed the
+        // negation of that delta clipped to its band; `_queueShare` does the clip. Nothing here
+        // is the hook's opinion of price; the numbers come from PoolManager and SwapMath.
         int256 e0 = -int256(d.amount0());
         int256 e1 = -int256(d.amount1());
 
@@ -581,8 +615,11 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // §E.5 silent insolvency.
         Currency inputCurrency = params.zeroForOne ? k.currency0 : k.currency1;
         uint256 pfDelta = poolManager.protocolFeesAccrued(inputCurrency) - (snap - 1);
-        if (pfDelta > amtIn) revert ProtocolFeeExceedsInput(pfDelta, amtIn);
-        amtIn -= pfDelta;
+        // Step 2b — the queue is owed only what filled AGAINST ITS BAND. Wings are ordinary
+        // Uniswap: they keep the leftover. When the swap stayed in the band this is the
+        // identity (the whole delta, net of this swap's protocol fee). M70 deletes this line
+        // and credits the wing fill too, which is the N5 insolvency on a disjoint range.
+        (amtIn, amtOut) = _queueShare(k, params, amtIn, amtOut, pfDelta);
 
         // Step 2c — THE DEGENERATE FILL. The pool took input but paid nothing out, so no seat gives
         // anything up and front-first ordering has no meaning. The input is still owed to the
@@ -619,6 +656,86 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
         _allocate(outIsOne, amtIn, amtOut);
         return (BaseHook.afterSwap.selector, 0);
+    }
+
+    /// @dev Cap the observed swap to the fill that happened inside `[tickLower, tickUpper)`.
+    ///
+    ///      Price is monotonic in a swap, so a swap that starts AND ends inside the band cannot
+    ///      have touched a disjoint wing. That is the common path and it is the identity: net
+    ///      out this swap's protocol fee and return the delta unchanged.
+    ///
+    ///      A swap that leaves or enters the band is reconstructed with one `computeSwapStep`
+    ///      over the overlap of the traversed interval and the band. L is constant across one
+    ///      position, so one step is the whole in-band fill. The result is a CAP: if the replay
+    ///      is within 1 wei of the observed delta we keep the observed numbers. That 1 wei is
+    ///      SwapMath vs Pool.swap rounding on a sole-LP exit through empty ticks (invariant I1).
+    ///      A real wing fill is many orders larger.
+    function _queueShare(PoolKey calldata k, SwapParams calldata params, uint256 amtIn, uint256 amtOut, uint256 pfDelta)
+        internal
+        view
+        returns (uint256 inNet, uint256 outAmt)
+    {
+        (uint160 sqrtAfter, int24 tickAfter, uint24 protocolFee, uint24 lpFee) = poolManager.getSlot0(k.toId());
+        // In-range: tick in [tickLower, tickUpper). Price is monotonic in a swap, so a
+        // swap that starts AND ends inside the band cannot have touched a disjoint wing.
+        if (_tickInBand(tickBefore) && _tickInBand(tickAfter)) {
+            if (pfDelta > amtIn) revert ProtocolFeeExceedsInput(pfDelta, amtIn);
+            return (amtIn - pfDelta, amtOut);
+        }
+
+        (uint256 bandGross, uint256 bandOut, uint256 pfBand) = _bandStep(params, sqrtAfter, protocolFee, lpFee);
+
+        // A 1-wei underestimate vs Pool.swap is SwapMath rounding, not a wing fill.
+        // Clipping it desyncs the ledger from the ghost that tracks PoolManager's delta
+        // (invariant I1, 1 wei). A real wing fill is many orders larger; N5 was 1e15.
+        if (bandGross + 1 >= amtIn && bandOut + 1 >= amtOut) {
+            if (pfDelta > amtIn) revert ProtocolFeeExceedsInput(pfDelta, amtIn);
+            return (amtIn - pfDelta, amtOut);
+        }
+
+        if (pfBand > bandGross) revert ProtocolFeeExceedsInput(pfBand, bandGross);
+        return (bandGross - pfBand, bandOut);
+    }
+
+    function _tickInBand(int24 t) internal view returns (bool) {
+        return t >= tickLower && t < tickUpper;
+    }
+
+    function _bandStep(SwapParams calldata params, uint160 end, uint24 protocolFee, uint24 lpFee)
+        internal
+        view
+        returns (uint256 gross, uint256 outAmt, uint256 pfBand)
+    {
+        // Copy calldata onto the stack NOW, while the frame is still shallow. Reading
+        // `params.amountSpecified` at the `computeSwapStep` call is what blows the frame
+        // (via_ir is off on this project).
+        int256 remaining = params.amountSpecified;
+        bool zfo = params.zeroForOne;
+        uint160 lo = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 hi = TickMath.getSqrtPriceAtTick(tickUpper);
+        uint160 start = sqrtBefore;
+        uint160 fromP = zfo ? (start < hi ? start : hi) : (start > lo ? start : lo);
+        uint160 toP = zfo ? (end > lo ? end : lo) : (end < hi ? end : hi);
+        if (zfo ? fromP <= toP : fromP >= toP) return (0, 0, 0);
+        if (liquidity == 0) return (0, 0, 0);
+
+        uint16 pf = zfo ? protocolFee.getZeroForOneFee() : protocolFee.getOneForZeroFee();
+        uint24 swapFee = pf == 0 ? lpFee : pf.calculateSwapFee(lpFee);
+        uint256 feeAmt;
+        (gross, outAmt, feeAmt) = _oneStep(fromP, toP, remaining, swapFee);
+        if (pf != 0) {
+            pfBand = (uint24(pf) == swapFee) ? feeAmt : gross * uint256(pf) / ProtocolFeeLibrary.PIPS_DENOMINATOR;
+        }
+    }
+
+    function _oneStep(uint160 fromP, uint160 toP, int256 remaining, uint24 swapFee)
+        internal
+        view
+        returns (uint256 gross, uint256 outAmt, uint256 feeAmt)
+    {
+        uint256 stepIn;
+        (, stepIn, outAmt, feeAmt) = SwapMath.computeSwapStep(fromP, toP, liquidity, remaining, swapFee);
+        gross = stepIn + feeAmt;
     }
 
     // ------------------------------------------------------------------------------- the allocator
@@ -1013,6 +1130,56 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         float0 = uint256(int256(float0) + d0);
         // forge-lint: disable-next-line(unsafe-typecast)
         float1 = uint256(int256(float1) + d1);
+    }
+
+    /// @notice Move the custodied band to around the current price. Permissionless.
+    ///
+    ///         The queue is a DMM at the money. The band is snapped at initialize; if spot
+    ///         walks out, seats sit idle and the live book is whoever LPed those ticks.
+    ///         This burns the old position, snaps a new ±BAND_HALF_WIDTH band, and remints
+    ///         from float. Seat ledgers do not change.
+    ///
+    ///         Refuses if the destination ticks already have liquidity — that would be
+    ///         overlapping a wing (N5). Full-width wings occupy the exterior, so recenter
+    ///         then reverts until they leave. Empty ticks (no wings) recenter.
+    function recenter() external nonReentrant {
+        if (!bound) revert PoolNotBound();
+        (uint160 sqrtP, int24 tick,,) = poolManager.getSlot0(key.toId());
+        if (_tickInBand(tick)) revert BandStillInRange(tick, tickLower, tickUpper);
+
+        uint128 live = poolManager.getLiquidity(key.toId());
+        if (live != 0) revert DestinationOccupied(live);
+
+        (int24 lo, int24 hi) = _bandAround(sqrtP, key.tickSpacing);
+        if (lo == tickLower && hi == tickUpper) revert BandStillInRange(tick, tickLower, tickUpper);
+        if (tick < lo || tick >= hi) {
+            revert BandOutOfBounds(lo, hi, TickMath.minUsableTick(key.tickSpacing), TickMath.maxUsableTick(key.tickSpacing));
+        }
+
+        int24 oldLo = tickLower;
+        int24 oldHi = tickUpper;
+        if (liquidity != 0) {
+            (uint256 g0, uint256 g1) = _burnPosition(liquidity);
+            float0 += g0;
+            float1 += g1;
+        }
+        tickLower = lo;
+        tickUpper = hi;
+
+        uint128 added = _liquidityForAmounts(float0, float1);
+        if (added != 0) {
+            (int256 d0, int256 d1) = _modifyPosition(int256(uint256(added)));
+            liquidity += added;
+            // forge-lint: disable-next-line(unsafe-typecast)
+            if (d0 < 0 && uint256(-d0) > float0) revert DepositOversized(uint256(-d0), float0);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            if (d1 < 0 && uint256(-d1) > float1) revert DepositOversized(uint256(-d1), float1);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            float0 = uint256(int256(float0) + d0);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            float1 = uint256(int256(float1) + d1);
+        }
+        emit Recentered(oldLo, oldHi, lo, hi);
     }
 
     // ================================================== HARBERGER — the always-for-sale lease
@@ -1455,6 +1622,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     }
 
     function _burnPosition(uint128 liq) internal returns (uint256 g0, uint256 g1) {
+        if (liq == 0) return (0, 0);
         liquidity -= liq;
         (int256 d0, int256 d1) = _modifyPosition(-int256(uint256(liq)));
         // A removal is owed both the principal it releases and the fees it realises, so neither leg

@@ -146,6 +146,17 @@ abstract contract QueueFixture is BaseTest {
         _openRange(bps, TickMath.minUsableTick(SPACING), TickMath.maxUsableTick(SPACING));
     }
 
+    /// @dev Seed at the concentrated band `_afterInitialize` snapped. Production has no other
+    ///      range. Tests that need a full-range blob (packing fuzz, reentrancy) still go through
+    ///      `_open` / `forceRange`. Wings tests MUST use this: a full-range position has no
+    ///      disjoint ticks left for an outside LP.
+    function _openBand(uint256[] memory bps) internal {
+        k = PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(hook))});
+        poolManager.initialize(k, startPrice);
+        (,, int24 tl, int24 tu) = hook.pool();
+        _seedAt(bps, tl, tu);
+    }
+
     /// @dev The same, over a CHOSEN range. It exists for one claim: `PITFALLS.md` 5.17 calls thin
     ///      full-range depth "the sharpest unanswered attack" and adds that the range is a
     ///      reversible design choice rather than a v4 constraint. That second half was ANALYSIS
@@ -153,6 +164,10 @@ abstract contract QueueFixture is BaseTest {
     function _openRange(uint256[] memory bps, int24 tl, int24 tu) internal {
         k = PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(hook))});
         poolManager.initialize(k, startPrice);
+        _seedAt(bps, tl, tu);
+    }
+
+    function _seedAt(uint256[] memory bps, int24 tl, int24 tu) private {
         (uint256 s0, uint256 s1) = hook.seed(k, tl, tu, LIQ, bps);
         require(s0 != s1, "LAW 1: fixture is unit-priced");
 

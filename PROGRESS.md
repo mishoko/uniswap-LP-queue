@@ -18,9 +18,41 @@ Newest entry first. Never delete an entry — supersede it.
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
-| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-08-29** | **PARTLY** — 172 tests, **68 mutations red, 0 survivors**. The deploy + demo sequence is built, asserted beat by beat, and **verified against a live Unichain Sepolia fork**; the frontend is built. **The broadcast and the video are outstanding.** Found that the deployment path had never executed (PITFALLS 5.81) plus four more instrument defects (5.82-5.86) |
+| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-08-31** | **PARTLY** — 171 tests. Wings shipped: overlap refused, disjoint LP allowed, crossing clip proven, M70/M71 RED. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## 2026-08-31f — Recenter + PositionManager wings
+
+`recenter()`: permissionless, burns the old band, snaps ±10% around spot, remints from float. Seat ledger unchanged. Reverts `BandStillInRange` if still in, `DestinationOccupied` if the new ticks have L (a wing). Empty ticks: follows the price. `_burnPosition(0)` is a no-op (a zero poke reverts `CannotUpdateEmptyPosition`).
+
+Wings mint/burn through the real `PositionManager`. Overlap still `OverlappingLiquidity`.
+
+Invariant handler includes `recenter`. I1 ghost unchanged (no wing mints in that campaign — PM-delta ghost).
+
+183 tests. M72/M73/M74 RED.
+
+---
+
+## 2026-08-31e — DMM on the touch, ordinary Uniswap in the wings
+
+The 32-seat closed pool was the wrong object for a Uniswap submission. What a Uniswap team can use, integrate, or experiment on is: a paid queue **on the concentrated band**, and permissionless v4 LPs **in the disjoint wings**.
+
+**What shipped**
+
+- `_beforeAddLiquidity` allows `sender == this` or a range strictly disjoint of `[tickLower, tickUpper)`. Overlap reverts `OverlappingLiquidity`. Adjacent at a boundary is disjoint (Uniswap ranges are `[lower, upper)`).
+- `_afterSwap` credits only the in-band fill. A swap that starts and ends inside the band is the identity (ticks, not `getSqrtPriceAtTick` — that was the gas). A swap that leaves or enters is one `SwapMath.computeSwapStep` over the overlap. The result is a **cap**: if the replay is not more than 1 wei tighter than PoolManager's delta, keep the delta. That 1 wei is SwapMath vs Pool.swap rounding (I1), not a wing fill.
+- `test/queue/Wings.t.sol` — overlap same-range / partial / full-range RED by name; disjoint mint; small in-band swap does not move wing principal and `_check` still holds; crossing swap credits the band only and `redeemAll` covers the ledger; no-wings in-band is identity.
+- M70 (skip the clip) RED. M71 (allow overlap) RED.
+- Skeptic pass (2026-08-31f): crossing tests were inequality-only; now wei-equal to an independent SwapMath replay. Added reverse, re-entry, full traverse, exact-out, protocol-fee crossing, salt, overlap-from-above, already-outside. **Not claimed:** invariant+wings (ghost is whole-pool), PositionManager glue, band recenter after drift.
+- Head-only gas is now **128,406 vs 86,820 = +48%**, still flat 1–32, still under the 50% ceiling. Sweep slope unchanged at 8,070/seat. 32-seat sweep 426,470.
+- PITFALLS 3.4 SUPERSEDED by 3.14.
+
+**What this is not.** 32 seats per tick. NFT-per-seat ranges. A full re-campaign of the pre-wings 69 mutations (not run this session; do not claim it).
+
+**Suite:** see 2026-08-31f. Recenter + PositionManager wings shipped; M72/M73/M74 RED.
 
 ---
 

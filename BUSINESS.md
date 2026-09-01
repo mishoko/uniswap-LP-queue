@@ -20,9 +20,9 @@ Nothing in this document is a revenue, TVL, or adoption forecast. There is no ba
 
 ## 0. THE VERDICT A DECISION-MAKER CAN ACT ON
 
-**What you are buying:** a 32-desk professional venue in which cash providers can buy and sell *place in line*, **inside a normal Uniswap concentrated position**. The customer still trades through ordinary Uniswap, at the ordinary price, at the ordinary trading fee. The hook does not replace Uniswap's curve or Uniswap's ticks. It orders the LPs who are already at that price.
+**What you are buying:** a 32-desk paid counter around today's price, plus ordinary Uniswap liquidity anyone can add further out with Uniswap's own tools. Cash providers at the counter buy and sell *place in line*. The customer still trades through ordinary Uniswap, at the ordinary price, at the ordinary trading fee. The hook does not replace Uniswap's curve. It orders the people who are already at that price, and it gets out of the way everywhere else.
 
-**What you are not buying:** a public Uniswap pool, sandwich protection, lower LP losses in total, or cheaper execution.
+**What you are not buying:** sandwich protection, lower LP losses in total, cheaper execution, or a better deal for the shopper. The shopper pays ~48% extra network compute and gets the same trade. The **desks** are the customer of this product.
 
 | If you wanted… | You got… | Decision |
 |---|---|---|
@@ -32,7 +32,7 @@ Nothing in this document is a revenue, TVL, or adoption forecast. There is no ba
 | Professional desks that want first fill without posting more capital, and passive capital that wants to be paid to wait | That instrument, which Uniswap cannot express today | **Consider**, in the cases in §2. |
 | A public, on-chain number for "what is being first worth?" | The head seat's self-posted price. Both "near zero" and "high" are results. | **Consider**, as an experiment. The market that would produce that number **does not exist yet**. |
 
-**Do the benefits outweigh the costs?** Only in a professional venue where (a) the front can hedge, (b) rent actually flows to the back, and (c) the extra network cost is acceptable because the desks already chose this book. In a retail Uniswap pool the answer is **no**: you paid +36% extra compute [MEASURED] and ~1/200th the depth-per-dollar of a tight range [ANALYSIS] for a reshuffle of LP P&L that the customer cannot see.
+**Do the benefits outweigh the costs?** Only in a professional venue where (a) the front can hedge, (b) rent actually flows to the back, and (c) the extra network cost is acceptable because the desks already chose this book. In a retail ETH/USDC pool the answer is **no**: you paid +48% extra compute [MEASURED] for a reshuffle of LP P&L that the shopper cannot see. Ordinary Uniswap liquidity *outside* the desks restores permissionless depth away from the money; it does not make the paid counter as deep per dollar as a tight market-maker range.
 
 **The founding 32 names are an endowment**, not a purchase. Whoever deploys picks them. After one transaction they belong to whoever values them — every founding seat starts unpriced, and an unpriced seat is free to take. There is no admin to undo that.
 
@@ -92,7 +92,7 @@ Think **NYSE seat**, not **DMV line**.
 
 | Venue | Why it is the wrong object |
 |---|---|
-| A retail ETH/USDC pool competing for aggregator flow | Routers pick same price + lower network cost. QUEUE is +36% compute [MEASURED] on a typical swap, and this version is ~1/200th as deep per dollar as a tight range [ANALYSIS]. They will skip you. |
+| A retail ETH/USDC pool competing for aggregator flow | Routers pick same price + lower network cost. QUEUE is +48% compute [MEASURED] on a typical swap. They will skip you. |
 | "We want to stop sandwiches" | QUEUE does not. Same prices, same attacks. |
 | "We want LPs to lose less" | Total P&L is identical. Redistribution, not reduction. |
 | "We want anyone to LP" | 32 seats. A small LP needs a syndicate wrapper. That wrapper is unbuilt and recreates the intermediary the pitch claims to delete. |
@@ -104,22 +104,21 @@ Think **NYSE seat**, not **DMV line**.
 
 ## 2b. WHAT SHIPS TODAY — one queue for the whole pair, not per tick
 
-Yes. **The entire queue is for the entire pair**, sitting **inside one concentrated Uniswap band** (±10% around the start price), not one NFT per seat and not the whole curve. There is one Uniswap pool, one position the hook owns, and one ordered list of ≤32 seats. A trade that stays in the band is allocated down that line. A trade that walks out of the band stops, like any v3 LP. There is no per-tick book and no per-seat range.
+Yes. **The queue is for the band, not per tick**, and the band sits inside a normal Uniswap pool. There is one pool, one hook-owned concentrated position (~±10%), and one ordered list of ≤32 seats that share that position. Seats are not NFTs and they do not pick ranges.
+
+A trade that **stays at today's price** is allocated down that line, front-first. A trade that **walks away from today's price** fills the paid desks, then ordinary Uniswap LPs further out (Uniswap's own Position Manager, no seat). Parking on top of the paid desks reverts. There is no per-tick book and no per-seat range.
 
 ```
 UNISWAP v3/v4 TODAY                         QUEUE TODAY (shipping)
 ───────────────────                         ─────────────────────
-Price first: nearer ticks fill first        No tick structure in the fill
-Within a tick: everyone at that             One line for the WHOLE pair
-price is filled pro-rata                    Rank 0 is filled first, period,
-                                            even if a later seat would have
-                                            been "closer to the price" —
-                                            because there is no "closer".
-                                            One wide-range blob. ~1/200th
-                                            the depth of a ±1% book.
+Price first: nearer ticks fill first        Price first, still (ticks unchanged)
+Within a tick: everyone at that             THEN, inside the hook's band:
+price is filled pro-rata                    32 paid seats, front-first
+                                            Outside the band: ordinary Uniswap
+                                            (anyone, PositionManager, pro-rata)
 ```
 
-That is why this version is a **specialist venue**, not a Uniswap primitive. Uniswap's product is concentrated liquidity. This version throws concentration away to get a simple queue. `test_1_11` proved the *allocator* does not care about the range of that one position — concentrating the blob is a parameter, not a rewrite. **Per-seat or per-tick ranges are a different product.** See §16.
+That is why this version is a **specialist DMM at the money**, not a replacement for Uniswap. Uniswap's product is concentrated liquidity; the wings are that product, unmodified. The queue is only who gets filled first *at the same price*. **Per-seat or per-tick ranges are a different product and are not shipping.** See §16.
 
 ### Two tokens vs one
 
@@ -201,7 +200,7 @@ The sharpest form of the remaining objection — *"so it isn't really a queue"* 
 |---|---|---|---|
 | **Front-seat LP** | Deposits more capital to get a bigger slice of *everything*, including the trades that hurt | Holds the front, filled first on every trade | **Pays rent**, continuously, on a price they set |
 | **Back-seat LP** | Filled pro-rata on every trade whether they want to be or not | Sits behind; reached only when a trade sweeps the front | **Receives that rent** — a coupon for standing aside |
-| **Customer** | Pays the pool's trading fee | Pays the same fee at the same price, through any router | **Pays a fixed +36% network cost** on a typical swap [MEASURED]. No fee change, no worse price. |
+| **Customer** | Pays the pool's trading fee | Pays the same fee at the same price, through any router | **Pays a fixed +48% network cost** on a typical swap [MEASURED]. No fee change, no worse price. |
 
 The rent is a transfer between two kinds of LP that both already exist. No new party is taxed to fund it. No value is taken from customers or searchers. The protocol takes no cut. The one cost that falls outside that transfer is the **fixed extra network tick the customer pays**, and it is a real cost — named here, not netted out of the pitch.
 
@@ -238,7 +237,7 @@ Three facts:
 
 1. **A typical swap is flat: 117,971 → 117,992 across 1 → 32 seats, a spread of 21 units.** Most swaps only hit seat 1. Flatness is the cursors working.
 2. **A walking swap is linear, 8,070 units per extra seat.** A full 32-seat walk is a 416,053-unit transaction.
-3. **QUEUE costs 36% more than no hook at all on a typical swap.** Same tokens, fee, spacing, price, full-range liquidity, no hook: **117,989 vs 86,820, +31,169** [MEASURED].
+3. **QUEUE costs 48% more than no hook at all on a typical swap.** Same tokens, fee, spacing, price, no hook: **128,406 vs 86,820, +41,586** [MEASURED, `test_5_7`]. The older +36% / 117,989 figure was the pre-wings hook.
 
 The binding constraint is **not** the walk. Depositing (`addToSeat`) settles every priced seat ahead of the depositor, and each of those settlements pays every funded seat behind — quadratic in the roster. Measured worst case: **2,610,805 units**, 8.7% of a 30M block. **That is the number any proposal to raise `MAX_SEATS` has to be argued against** (`PITFALLS.md` 5.72).
 
@@ -272,9 +271,9 @@ Honest resolution: scarcity is currently *forced* by compute and *justified* by 
 
 ---
 
-## 6. THE "+36%" — IT IS NOT 36% MORE EXPENSIVE TRADES
+## 6. THE "+48%" — IT IS NOT 48% MORE EXPENSIVE TRADES
 
-[MEASURED] A typical swap: **117,989 vs 86,820** on an identical hookless pool = **+36%**.
+[MEASURED] A typical swap: **128,406 vs 86,820** on an identical hookless pool = **+48%** (`test_5_7`). The extra versus the older +36% figure is the in-band clip.
 
 What a business person hears: *"customers pay 36% more."*
 
@@ -284,12 +283,12 @@ What a business person hears: *"customers pay 36% more."*
 | A worse price? | **No.** Same tokens out. |
 | Extra network cost? | **Yes.** A slightly longer checkout. |
 | Same at 1 seat as at 32? | **Yes, for a typical swap.** 117,971 vs 117,992. Difference: 21 units. The 36% is the cost of the pool *having a book at all*. |
-| Always 36%? | **No.** A trade that walks many seats adds ~8,070 per extra seat. A full 32-seat walk is 416,053 units — not +36%, closer to 5× a hookless swap. That is a large, unusual trade. |
+| Always 48%? | **No.** A trade that walks many seats adds ~8,070 per extra seat. A full 32-seat walk is 426,470 units — not +48%, closer to 5× a hookless swap. That is a large, unusual trade. |
 | In dollars? | This product belongs on an L2. 31,000 extra units is **cents or less**, not 36% of the notional. On Ethereum mainnet it would be a real bill. **QUEUE is an L2 product.** |
 
 The commercial risk is not "36% more expensive trades." It is: **routers pick the pool with the same price and the lower network cost.** If they skip QUEUE, this pool does not see retail flow. Retail flow is the "good" flow the front seat is paying rent to capture. That loop is the adoption problem. It is not solved.
 
-Do not quote "+36%" as "QUEUE overhead." Quote: **+36% on a typical (head-only) fill; +8,070 per seat if the trade actually walks the line.**
+Do not quote "+48%" as "QUEUE overhead." Quote: **+48% on a typical (head-only) fill; +8,070 per seat if the trade actually walks the line.**
 
 ---
 
@@ -343,7 +342,7 @@ The failure mode of "everyone leaves" is **"the pool is empty,"** not "the pool 
 
 | Pros | Cons |
 |---|---|
-| Same price. Same trading fee. Any Uniswap router. Never touches the queue. | +36% network compute on a typical swap [MEASURED]. A constant, not a slope. |
+| Same price. Same trading fee. Any Uniswap router. Never touches the queue. | +48% network compute on a typical swap [MEASURED]. A constant, not a slope. |
 | | A very large trade that walks many seats costs more still (8,070/seat). |
 | | This version holds one wide-range position — ~**1/200th the depth per dollar** of a tight ±1% range [ANALYSIS]. Worse price impact for the same dollars. **Sharpest commercial objection. Not shipped as a product.** Queue maths is proven orthogonal to range (`test_1_11`); concentrating the book is a next-version parameter. |
 
@@ -388,7 +387,7 @@ $477/day on $530k is ~9 bps/day of given-up income. **That is the hole rent has 
 | Pros | Cons |
 |---|---|
 | Differentiated LP product. A reason for professional capital to pick this pool over the 189th dynamic-fee hook [COUNTED]. | Bounded in *number of LPs* (not dollars). |
-| A public number: the head-seat price. Both answers are results. | Thin full-range depth. Routers may not route. |
+| A public number: the head-seat price. Both answers are results. | The band is ±10%. Wings are public Uniswap outside it. Routers may still skip +48% compute. |
 | No admin, no upgrade, no privileged role. You cannot be asked to freeze it. | You also cannot freeze it. Founding 32 is an endowment worth one transaction of head start. |
 
 ### JIT bots / searchers
@@ -511,7 +510,7 @@ Realised average = 3,000 / 0.997 = **3,009 USDC/WETH**.
 | S1 sells | **0.997 WETH** | 0.0199 WETH |
 | S1 earns | **9.00 USDC** | 0.18 USDC |
 | S2–S5 earn | **0.00** | 8.82 USDC combined |
-| Swap compute, complete tx | **117,990** [MEASURED]; +31,169 (+36%) vs no hook | — |
+| Swap compute, complete tx | **128,406** [MEASURED]; +41,586 (+48%) vs no hook | `test_5_7` |
 
 S1 is 2% of the pool and earned 100% of the fee: a **50× multiple**, which is not a result, it is an identity — `total capital / front seat capital`.
 
@@ -687,7 +686,7 @@ jq -r '[.[] | select((.name+" "+.desc+" "+.tags+" "+.integrations)
 | Front-first allocation is **exact to the wei** in both tokens, at four price ratios and two decimal pairs [MEASURED] | A seat's fill is a contractual quantity, not a best-effort. That is the difference between an instrument you can price and a feature you have to trust. |
 | The queue is **never over-backed** — surplus **exactly 0 wei** across 16,384 randomised operations [MEASURED] | Every claim on the pool is matched by assets in the pool. |
 | Shortfall stays **under 1 part per billion** of everything ever deposited [MEASURED] | Redemption is not exact — v4's own rounding sees to that — but the leakage is a rounding artefact, borne by **the last holders to exit**. |
-| Seat overhead is **flat from 1 to 32 seats** (21-unit spread), on top of a constant **+36%** vs a bare pool [MEASURED] | The cost to a customer is a **fixed tick a router can price**, not a penalty that grows as the book gets deeper. |
+| Seat overhead is **flat from 1 to 32 seats**, on top of a constant **+48%** vs a bare pool [MEASURED] | The cost to a customer is a **fixed tick a router can price**, not a penalty that grows as the book gets deeper. |
 | Rent **cannot be captured by a flash loan**, and settlement conserves the rent pot to the wei [MEASURED] | The coupon paid to the back cannot be farmed by someone who was not there. |
 | Foreclosure **demotes, never seizes** | Running out of prepaid rent costs you your place, not your money. No liquidation, no collateral call, no oracle. |
 | **No admin, no upgrade, no privileged role** | Nobody to trust, nobody to lobby, nobody who can change the rent rate after you have bought a seat. |
@@ -714,7 +713,7 @@ Stated at full strength. Nothing here is softened. The standing hazard ledger is
 
 **7. The whole toxicity signal depends on a liquid secondary market in ranks that does not exist.** Weakest point in the design. In a demo, a new pool, or a long-tail pair, there is no market, therefore no price, therefore no signal. No measurement supporting the assertion that it would form.
 
-**8. One full-range position is thin.** ~1/200th the depth per dollar of a ±1% concentrated position [ANALYSIS]. Half-answered 2026-08-29: the queue is PROVEN orthogonal to the range (`test_1_11`). Concentrating the custodied position is a v2 parameter, not a redesign. Out-of-range behaviour, rebalancing, and the depth-versus-coverage trade-off are **unbuilt**. The economics of a thin pool — no aggregator routes retail to it, and retail is the entire benign side of the P&L — still stand.
+**8. The band is ±10%, not ±1%.** Depth per dollar is better than the old full-range blob and worse than a tight MM range [ANALYSIS]. Wings restore permissionless depth *outside* the money; they do not make the band itself a ±1% book. Aggregators may still skip +48% compute.
 
 **9. Rent is `currency0`, weighted by `currency0`.** Weighting a two-token basket needs a price and QUEUE is not allowed to have one. A tail holding only `currency1` is paid nothing; the rent waits until an eligible recipient exists.
 
@@ -825,7 +824,7 @@ intra-tick order.
 
 **What not to do:** add an admin, a keeper, a classifier, or a curve. Those are how this project already died, several times.
 
-The adoption path for Uniswap is: **shipping proves the arithmetic (done) → concentrate the blob (v2, small) → per-seat ranges (v3, the actual primitive).** Pitching the current full-range 32-seat blob as what Uniswap should run is how you get Impact 2.
+The adoption path for Uniswap is: **shipping proves the arithmetic (done) → the band plus ordinary Uniswap wings (done, this is the integrable object) → per-seat ranges (not shipping, a different product).** Pitching 32 NFT ranges or a closed full-range blob as what Uniswap should run is how you get Impact 2. The wings are how a Uniswap team can LP this pool tomorrow without buying a seat.
 
 ---
 

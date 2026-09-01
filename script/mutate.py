@@ -239,6 +239,21 @@ MUTS = [
     ("M69", HOOK, "the custodied position is full-range again, so a dollar of QUEUE is 200x thinner than a v3 LP",
      "        (tickLower, tickUpper) = _bandAround(sqrtPriceX96, k.tickSpacing);",
      "        tickLower = TickMath.minUsableTick(k.tickSpacing);\n        tickUpper = TickMath.maxUsableTick(k.tickSpacing);"),
+    ("M70", HOOK, "the queue is credited the whole swap including wing fill, so a disjoint LP bricks solvency",
+     "        (amtIn, amtOut) = _queueShare(k, params, amtIn, amtOut, pfDelta);",
+     "        if (pfDelta > amtIn) revert ProtocolFeeExceedsInput(pfDelta, amtIn);\n        amtIn -= pfDelta;"),
+    ("M71", HOOK, "overlapping liquidity is allowed, which is the N5 free lane on the band",
+     "        if (params.tickUpper <= tickLower || params.tickLower >= tickUpper) {\n            return BaseHook.beforeAddLiquidity.selector;\n        }\n        revert OverlappingLiquidity(params.tickLower, params.tickUpper, tickLower, tickUpper);",
+     "        return BaseHook.beforeAddLiquidity.selector;"),
+    ("M72", HOOK, "recenter runs while the spot is still inside the band",
+     "        if (_tickInBand(tick)) revert BandStillInRange(tick, tickLower, tickUpper);",
+     "        // MUT"),
+    ("M73", HOOK, "recenter plants the band on occupied ticks, which is the N5 overlap",
+     "        if (live != 0) revert DestinationOccupied(live);",
+     "        // MUT"),
+    ("M74", HOOK, "burning zero liquidity pokes an empty position and reverts",
+     "        if (liq == 0) return (0, 0);",
+     "        // MUT"),
 ]
 
 
