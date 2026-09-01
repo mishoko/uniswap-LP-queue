@@ -6,7 +6,7 @@ Think of a shop with a **paid counter** and a **public warehouse**.
 
 - Around today's price (~±10%) sit **32 paid desks**. Desk 1 serves every customer. Desk 32 only serves a customer so large that 1–31 are already empty. You buy a desk. You pay rent to the desks behind you. Anyone can take your desk at the price you posted.
 - **Away from today's price**, anyone can put up cash the ordinary Uniswap way. No desk. No rent. Same old "everyone is hit a little."
-- The **customer** still walks in through any Uniswap router, pays the same 0.30% shop fee, and gets the same price. They never talk to the desks. They do pay **~48% more network compute** on a typical swap (128,406 vs 86,820 units). That is a longer checkout, not a worse bill of goods. On an L2 it is cents. Routers that optimise for gas may still skip this pool.
+- The **customer** still walks in through any Uniswap router, pays the same 0.30% shop fee, and gets the same price. They never talk to the desks. They do pay **~48% more network compute** on a typical swap (128,625 vs 87,039 units). That is a longer checkout, not a worse bill of goods. On an L2 it is cents. Routers that optimise for gas may still skip this pool.
 
 It is not sandwich protection. It is not a cheaper trade. It is not Uniswap-for-everyone. If you do not have professional desks that want *first fill* and other capital that wants to be *paid to wait*, this is the wrong product.
 
@@ -38,12 +38,15 @@ The customer on the other side of the pool does not see any of this. They trade 
 
 | Question | Honest answer |
 |---|---|
-| Is it well built? | **Yes, as accounting.** 183 tests. Three real bugs were found in code that had already passed 135 tests — all fixed. This is not an audit. |
+| Is it well built? | **Yes, as accounting — and we keep proving that is not the same as correct.** 199 tests. Three real bugs were once found in code that had already passed 135. Most recently the mutation campaign ran **74/74 red, zero survivors**, while an expert panel reading the same source found **four more defects that sailed straight through it** — because the mutations had been written against the same mental model as the tests. One of them (`recenter()`) was deleted rather than patched, then rebuilt — and the rebuild passed all eight of its own tests while failing the invariant campaign, so it is **still not shipped**. This is not an audit. |
 | Is it interesting? | **Yes, as a missing product.** Uniswap has run one fill rule for seven years. Nobody has been able to price "being first." QUEUE is the first pool where that number exists on-chain. 0 of 662 prior hook submissions sold an ordering over LP capital. |
 | Does it make Uniswap better for ordinary users? | **No.** Same price, same fee, extra network cost, thinner book. The trader is not the customer of this product. |
 | Does it stop MEV / sandwiches? | **No, and claiming it does is mis-selling.** The hackathon theme is two halves. QUEUE can claim **sustainable liquidity** (the right desks can choose to stay). It cannot claim MEV protection. |
 | Does it make LPs lose less in total? | **No.** Total pool P&L is identical. QUEUE **redistributes** who bears a bad trade, and **prices** that redistribution. Anyone who writes "QUEUE reduced LP losses" is lying. |
-| Who is this for? | Professional market makers who want first fill without posting more capital, and treasuries / vaults who want to be paid to stand behind. Roughly 10–32 serious desks on a pair — not 10,000 retail LPs. |
+| Who is this for? | **The front desk, and — at the shipped parameters — essentially nobody else.** See the next row; this is the most important line in the document. |
+| Is a back seat worth buying? | **Only inside a window, and we can name it.** A seat the trade never reaches is never written — so it is not an LP position at all, it is a static basket, and a basket that does not trade has **zero LVR**. That is loss avoidance, not deferral: the conversion never happened. So a tail seat **declines the arbitrage half of the flow and gives up the retail half.** In this pool's decomposition a pro-rata dollar earns `+32.85%` from retail and `−21.90%` from arbitrage, net `+10.95%`, and cannot decline either half. **Buy the deep tail when your pool loses more to arbitrageurs than ~89% of what it collects in fees; stop above ~168%, where a plain wallet dominates.** Below that window ordinary LPing wins outright. Full arithmetic, the trough, and the deployment rule in [`BUSINESS.md` §0.5](BUSINESS.md). |
+| What does a seat actually earn? | **Less than the annualised tables suggest, because the band is fixed.** `recenter()` is not shipped, so the pool is a **fixed-term instrument** — a ±10% band on a 45%/yr-vol pair has an expected in-band life of ~16–18 days. The tail's whole lifetime edge is **~2.2% of capital, once, plus a coupon worth ~0.13%**. Band width is now a deployment parameter and is the dial that pays for this: in-band life scales as `w²` while depth scales as `1/w`, so **doubling the band quadruples the life and only halves the depth**. The shipped ±10% is sized for a demo, not a deployment. |
+| Who should NOT buy one? | Anyone at ranks 2–4 of a naively sized roster. Depth past the largest *noise* trade sees only large trades, and large trades are the informed ones — so the middle of the book takes **all the toxicity and none of the fees** (−241%, −110%, −22% on capital at 60 bps markout, while rank 1 is +723%). The fix is a sizing rule, not a code change: **make the head seat's capital the largest routine *informed* trade**, and no trough seat exists. |
 | Should a business person be afraid of it? | They should be afraid of **the closed club and the extra cost**, which are real. They should not be afraid that "32 people cancel and the pool explodes" — that is the wrong picture of the machine. Details below. |
 
 ---
@@ -140,7 +143,7 @@ A *huge* trade that blows through today's price: the paid desks are emptied firs
 
 You **cannot** put ordinary Uniswap liquidity *on top of* the paid desks. That would be cutting in line for free. The contract refuses it.
 
-If the market price walks more than ~10% and nobody is sitting out there, anyone may call `recenter()` and move the paid desks to the new price — unless someone already parked ordinary Uniswap liquidity on those ticks, in which case they have it until they leave.
+If the market price walks more than ~10%, the paid desks go out of range and stop earning — exactly like any concentrated Uniswap position that the price has left behind. **The band does not move.** A `recenter()` was built, deleted, rebuilt and left out again — v1 could plant the desks on top of somebody else's liquidity and destroyed the position's depth when it ran; v2 fixes all of that, passes eight targeted tests, and **fails the invariant campaign for a reason we have not found**, so it does not ship (`docs/wip/recenter-v2/`). Holders withdraw and a new pool is deployed. **QUEUE is a rolling fixed-term instrument, not a perpetual venue** — ~16 days of in-band life on a 45%-vol pair — and band width is chosen at deployment to set that term: in-band life scales as `w²` while depth scales as `1/w`, so doubling the band quadruples the life and only halves the depth.
 
 ---
 
@@ -176,7 +179,7 @@ So: **32 paid seats, always for sale.** Scarcity is the product. The always-for-
 
 ## What a Uniswap engineer is looking at
 
-Uniswap already orders by **price**. QUEUE orders the cash providers **at that price**. One concentrated Uniswap position (~±10%), 32 seats sharing it, not 32 NFT ranges. Ordinary Uniswap liquidity is allowed only *outside* that position. `recenter()` moves the position when spot has left and the new ticks are empty.
+Uniswap already orders by **price**. QUEUE orders the cash providers **at that price**. One concentrated Uniswap position (width chosen at deployment; ~±10% by default), 32 seats sharing it, not 32 NFT ranges. Ordinary Uniswap liquidity is allowed only *outside* that position. The band is written once at initialisation and never moves — which is what makes the no-overlap rule a complete guard rather than a snapshot of a moving target.
 
 A seat **can hold only one of the two tokens**. After a fill, the front usually does. Depositing both in the current ratio is how you add *depth*. Depositing one typically mints **zero** liquidity — the tokens sit as a claim in the float. Rent is paid in token0, weighted by token0.
 
@@ -290,7 +293,7 @@ What it is          monopoly    a franchise    getting cheap    free → no pric
 
 This is the number that will kill the pitch if you say it wrong.
 
-What was measured: a typical swap on QUEUE uses **128,406 units of network compute**. The same swap on a pool with no hook uses **86,820**. That is **+48%**. The extra versus the previous +36% is making sure a fill that happened *outside* the paid desks is not booked as if the desks served it. It is still a **constant**, flat from 1 to 32 seats.
+What was measured: a typical swap on QUEUE uses **128,625 units of network compute**. The same swap on a pool with no hook uses **87,039**. That is **+48%**. The extra versus the earlier +36% figure is making sure a fill that happened *outside* the paid desks is not booked as if the desks served it. It is still a **constant**, flat from 1 to 32 seats.
 
 What a business person hears: *"customers pay 48% more."*
 
@@ -302,7 +305,7 @@ What it actually is:
 | A worse price? | **No.** The customer gets the same tokens out. |
 | Extra network cost? | **Yes.** Like a slightly longer checkout taking a slightly larger card-processing tick. |
 | Same at 1 seat as at 32? | **Yes, for a normal trade.** Head-only is flat (21-unit spread). The 48% is the cost of the pool *having a book at all*. |
-| Always 48%? | **No.** If a single trade is large enough to walk many seats, add ~8,070 units per extra seat. A full 32-seat walk is a 426,470-unit transaction — not +48%, closer to 5× a hookless swap. That is a large, unusual trade. |
+| Always 48%? | **No.** If a single trade is large enough to walk many seats, add ~8,070 units per extra seat. A full 32-seat walk is a 764,200-unit transaction — not +48%, closer to 5× a hookless swap. That is a large, unusual trade. |
 | Dollars? | This product belongs on an L2. ~41,000 extra units is **cents or less**, not 48% of the notional. On Ethereum mainnet it would be a real bill. **QUEUE is an L2 product.** |
 
 The honest commercial risk is not "48% more expensive trades." It is: **routers pick the pool with the same price and the lower network cost.** If they skip QUEUE, this pool does not see retail flow. Retail flow is the "good" flow the front seat wants. That loop is the adoption problem, and it is not solved.
@@ -357,7 +360,7 @@ The failure mode the pitch should actually fear: **the 32 collude, post a price 
 |---|---|
 | Same price. Same trading fee. Any Uniswap router. They never touch the queue. | +48% network compute on a typical swap. A constant, not a slope. |
 | | A very large trade that walks many seats costs more still. |
-| | This version holds one wide-range position — roughly **1/200th the depth per dollar** of a tight Uniswap v3-style range. Worse price impact for the same dollars. **This is the sharpest commercial objection and it is not shipped as a product.** The queue maths is proven not to care about the range; concentrating it is a next-version parameter, unbuilt. |
+| | **CLOSED.** This objection was real while the hook held a full-range position — roughly 1/200th the depth per dollar of a tight range. The hook now custodies a **concentrated band**, and its half-width is a deployment parameter rather than a constant, so depth at the money is a sizing decision the deployer makes. What remains true, and is stated below, is that the pool is only routed if it is genuinely the deepest venue for the pair. |
 
 **Verdict:** the customer is not being sold anything. They should be indifferent except for the extra network tick and the thinner book. If routers skip the pool, the front seat does not get the flow it is paying for.
 
@@ -408,7 +411,7 @@ Yes. These are the fears, tagged.
 | "If they all leave, depositors are trapped" | **Mostly false.** Withdrawals are per-seat, against actual tokens. Face value is an *upper bound*, not a promise — last people out eat rounding dust so small it is not a business risk. No lockup. No pause. |
 | "Someone can steal by being first" | **That was version 1, and it is dead.** You cannot create a seat by depositing. Dusting the head buys nothing. |
 | "This is a dark pool / permissioned" | **Looks like one; is not, quite.** Entry is permissionless *at a price*. A real permissioned pool has a whitelist and a forked router. QUEUE uses the ordinary Uniswap router. Compliance people will still treat 32 named seats as a designated-MM list. Do not be surprised. |
-| "A bug loses the money" | **Real, and the most serious risk in the table.** The hook *is* the pool's accounting. A bug is lost funds, not a degraded feature. 172 tests, 68 mutations with zero survivors, three production bugs found by attacking our own code. This is not an audit. |
+| "A bug loses the money" | **Real, and the most serious risk in the table.** The hook *is* the pool's accounting. A bug is lost funds, not a degraded feature. 198 tests, 74 mutations with zero survivors, three production bugs found by attacking our own code. This is not an audit. |
 | "We will get blamed for MEV" | **Theme risk, not product risk.** QUEUE does not stop sandwiches. Anyone who ships this as "MEV protection" is mis-selling. |
 
 ---
@@ -515,9 +518,9 @@ Published rubric: **30% original idea · 25% unique execution · 20% impact · 1
 | Slice | Honest score | Why |
 |---|---|---|
 | Original idea (30%) | **Strong** | 0 of 662 prior hooks sold an ordering over LP capital. Uniswap cannot express "pay to be filled first" today. |
-| Unique execution (25%) | **Strong** | Real v4, not a mock. Front-first at the swap's own price. Paid seats, always for sale. Ordinary Uniswap liquidity outside the desks. `recenter()` when the ticks are free. Tests that go red when you cheat. |
+| Unique execution (25%) | **Strong** | Real v4, not a mock. Front-first at the swap's own price. Paid seats, always for sale. Ordinary Uniswap liquidity outside the desks. Tests that go red when you cheat — and a `recenter()` that is **still not shipped** because, after our own attack killed v1 and the rebuild passed all eight of its tests, the invariant campaign said no. |
 | Impact (20%) | **Medium** | Uniswap will not reroute ETH/USDC through this. A professional venue *can* run it, and a Uniswap team can LP outside the desks with Position Manager tomorrow. Over-claim "every pool" and this slice collapses. |
-| Functionality (15%) | **Strong as a hook** | 183 tests, 0 failed. The hook is the product. |
+| Functionality (15%) | **Strong as a hook** | 198 tests, 0 failed. The hook is the product. |
 | Presentation (10%) | **Incomplete** | Frontend exists. **Video and live broadcast do not.** That is a binary gate, not polish. |
 
 **Hook implementation: done. Submission: not done** until the video and the broadcast exist.
@@ -579,7 +582,7 @@ forge test --match-path "test/queue/Invariant.t.sol"    -vv   # 11 invariants + 
 forge test --match-path "test/queue/Adversarial.t.sol"        # every named attack, with an outcome
 forge test --match-path "test/queue/Gas.t.sol"          -vv   # prints the gas table
 forge lint src/                                               # must stay clean, zero notes
-python3 script/mutate.py                                      # 68 mutations, must be 0 survivors
+python3 script/mutate.py                                      # 74 mutations, must be 0 survivors
 ```
 
 `script/mutate.py` edits `src/` in place, runs the suite, and puts it back. **Do not run `forge` against the repo while it is going**; it holds a deliberate bug on disk for the duration of each case, and the suite will refuse to run and tell you so.

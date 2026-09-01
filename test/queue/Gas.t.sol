@@ -123,9 +123,11 @@ contract GasTest is QueueFixture {
         _buildPlainPool();
     }
 
-    /// @dev The control pool: identical tokens, fee, spacing, price and full-range liquidity, and
-    ///      no hook. `LIQ` is the same constant `QueueHook.seed` mints, so the two pools have the
-    ///      same depth and a swap of the same size does the same work inside PoolManager.
+    /// @dev The control pool: identical tokens, fee, spacing, price and liquidity **over the same
+    ///      band**, and no hook. `LIQ` is the same constant `QueueHook.seed` mints, so the two
+    ///      pools have the same depth and a swap of the same size does the same work inside
+    ///      PoolManager. The range must match the hook's band: a full-range control against a
+    ///      banded subject measures the RANGE, not the hook.
     function _buildPlainPool() internal {
         plainKey = PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(0))});
         poolManager.initialize(plainKey, startPrice);
@@ -133,7 +135,8 @@ contract GasTest is QueueFixture {
         ExternalLP lp = new ExternalLP(poolManager);
         MockERC20(Currency.unwrap(c0)).mint(address(lp), 1e30);
         MockERC20(Currency.unwrap(c1)).mint(address(lp), 1e30);
-        lp.add(plainKey, TickMath.minUsableTick(SPACING), TickMath.maxUsableTick(SPACING), LIQ);
+        (,, int24 btl, int24 btu) = hook.pool();
+        lp.add(plainKey, btl, btu, LIQ);
     }
 
     /// @dev Three seats through the PRODUCTION deposit path, with the head then emptied so a
@@ -184,7 +187,12 @@ contract GasTest is QueueFixture {
             bps[i] = 10_000 / n;
         }
         bps[n - 1] = 10_000 - (10_000 / n) * (n - 1);
-        _open(bps);
+        // **THE BAND, NOT `_open`.** Every gas number in this project used to be taken on a
+        // FULL-RANGE fixture built through the test-only `seed()` — a configuration production
+        // cannot create, since `_afterInitialize` always snaps a band. On it `_tickInBand` is
+        // always true, so `_queueShare` took its fast path and `_bandStep`/`computeSwapStep` —
+        // the clip a real out-of-band swap must pay for — never executed in any measurement.
+        _openBand(bps);
     }
 
     /// @dev Point the fixture at one of the pre-built rosters. Writes only the TEST contract's own
@@ -370,12 +378,28 @@ contract GasTest is QueueFixture {
     ///      everything a real first transaction pays, including the ~21,200 gas of cold-account
     ///      access that `_warmUp` exists to factor out of the comparative rows.
     ///
-    ///      500,000 gas is 1.7% of a 30M block. A sweeping trade through QUEUE is priced like a
+    ///      **THIS CEILING WAS RAISED FROM 500,000 TO 850,000, AND THE REASON IS NOT A REGRESSION
+    ///      IN THE CODE — IT IS THAT THE OLD MEASUREMENT WAS TAKEN ON A FIXTURE WHERE THE SWEEP
+    ///      DID NOT SWEEP.** Until the band fixture landed here, this suite built its rosters
+    ///      full-range through the test-only `seed()`. On a full-range position, reaching the back
+    ///      of the book needs a trade worth several times the position's own stock of the outgoing
+    ///      token (PITFALLS 5.87), so the "full 32-seat sweep" was a swap that walked a handful of
+    ///      seats and stopped. Measured on the production band, the same sweep really does walk all
+    ///      32 and costs 764,200 rather than the 426,470 this project published.
+    ///
+    ///      The slope is unchanged at 8,070/seat; the whole difference is the INTERCEPT (168k ->
+    ///      485k), which is the swap crossing out of the band and paying for `_bandStep`'s
+    ///      `computeSwapStep` and the tick crossings. So the bounded-roster claim survives — the
+    ///      cost is still linear in seats walked and still a transaction rather than an event —
+    ///      but the honest number to quote is 764,200, and 850,000 is the ceiling that makes a
+    ///      real regression loud without pretending the old figure was ever right.
+    ///
+    ///      850,000 gas is 2.8% of a 30M block. A sweeping trade through QUEUE is priced like a
     ///      trade, not like an event — which is the whole claim the bounded roster has to support.
     function test_5_3c_aFullSweepIsAnOrdinaryTransaction() public {
         uint256 g = _sweepAt(5, 32);
         emit log_named_uint("full 32-seat sweep, complete tx, nothing warmed", g);
-        assertLt(g, 500_000, "a full sweep has stopped being an ordinary transaction");
+        assertLt(g, 850_000, "a full sweep has stopped being an ordinary transaction");
     }
 
     /// @dev One sweep against the pre-built roster at index `i`, asserting it really did reach the
@@ -466,7 +490,8 @@ contract GasTest is QueueFixture {
         _checkInvariantR("5.6");
     }
 
-    /// @dev **WHAT QUEUE COSTS A TRADER, AGAINST NO HOOK AT ALL. MEASURED: +31,169 gas, +36%.**
+    /// @dev **WHAT QUEUE COSTS A TRADER, AGAINST NO HOOK AT ALL. MEASURED: +41,586 gas, +48%.**
+    ///      (128,625 through QUEUE vs 87,039 with no hook, both on the production band.)
     ///
     ///      Say that number, not a rounder one. It is tempting to claim the common case is free
     ///      because it is flat in queue depth, and it is not free — it is a THIRD MORE than the
@@ -508,7 +533,7 @@ contract GasTest is QueueFixture {
         assertGt(queued, plain, "QUEUE measured CHEAPER than no hook at all: the comparison is broken");
         // Stated as a ratio, because that is the form the claim is made in. A swap that lands in
         // the head must not cost half as much again as an ordinary one.
-        // A CEILING, so a regression is loud. 36% measured; 50% is the line past which the
+        // A CEILING, so a regression is loud. 48% measured; 50% is the line past which the
         // overhead stops being a constant a trader can shrug at.
         assertLt((queued - plain) * 100, plain * 50, "QUEUE's per-swap overhead has grown past 50%");
     }

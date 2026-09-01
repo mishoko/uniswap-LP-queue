@@ -203,7 +203,7 @@ contract QueueHook is BaseHook, IUnlockCallback {
                 uint256 take_ = bal < remaining ? bal : remaining;
                 remaining -= take_;
                 uint256 give = (remaining == 0 && mode != FLOOR_ONLY)
-                    ? amtIn - assignedIn // the LAST filled entry absorbs the rounding remainder
+                    ? amtIn - assignedIn  // the LAST filled entry absorbs the rounding remainder
                     : FullMath.mulDiv(amtIn, take_, amtOut);
                 assignedIn += give;
                 _apply(i, outIsOne, take_, give);
@@ -264,7 +264,9 @@ contract QueueAllocatorSpikeTest is BaseTest {
     }
 
     function _open(uint256[] memory bps) internal {
-        k = PoolKey({currency0: c0, currency1: c1, fee: feeOverride, tickSpacing: SPACING, hooks: IHooks(address(hook))});
+        k = PoolKey({
+            currency0: c0, currency1: c1, fee: feeOverride, tickSpacing: SPACING, hooks: IHooks(address(hook))
+        });
         // 1:4 — NEVER 1:1. CLAUDE.md 5.10: a unit fixture hides every token0/token1 mixing bug,
         // and this allocator converts one token into the other at a realised ratio.
         poolManager.initialize(k, Constants.SQRT_PRICE_1_4);
@@ -371,7 +373,7 @@ contract QueueAllocatorSpikeTest is BaseTest {
             (uint256 a0, uint256 a1) = hook.entry(1);
             (uint256 b0, uint256 b1) = hook.entry(2);
             require(a0 == r0[1] && a1 == r1[1] && b0 == r0[2] && b1 == r1[2], "swap1: ref");
-            require(a1 == e1a1, "swap1: entry a0");  // pro-rata smears the fill across all three entries
+            require(a1 == e1a1, "swap1: entry a0"); // pro-rata smears the fill across all three entries
             (uint256 h0, uint256 h1) = hook.entry(0);
             require(h1 < e0a1 && h0 > e0a0, "swap1: head did not fill");
             require(hook.entriesTouched() == 1, "swap1: touched != 1");
@@ -461,7 +463,7 @@ contract QueueAllocatorSpikeTest is BaseTest {
     }
 
     function test_negativeControl_proRataGoesRed() public {
-        _expectRed(1, 0x2002, "PRO-RATA (what v4 actually does) passed the front-first assertions", "swap1: entry a0");  // pro-rata smears the fill across all three entries
+        _expectRed(1, 0x2002, "PRO-RATA (what v4 actually does) passed the front-first assertions", "swap1: entry a0"); // pro-rata smears the fill across all three entries
     }
 
     function test_negativeControl_offByOneCursorGoesRed() public {

@@ -12,6 +12,9 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {QueueHarness} from "./QueueHarness.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 
@@ -200,55 +203,68 @@ contract WingsTest is QueueFixture {
         _pmMint(tl, tu, LIQ);
     }
 
-    /// @dev In range: recenter is refused. The band is not an admin slider.
-    function test_recenter_inRangeReverts() public {
+    // ------------------------------------------------------- the band half-width is a DEPLOY PARAM
+
+    /// @dev `BAND_HALF_WIDTH` stopped being a contract constant and became a constructor argument,
+    ///      because band width is the mechanism's main economic dial: it sets depth at the money,
+    ///      and depth sets how large a swap must be to reach rank 2. A parameter nothing asserts is
+    ///      a parameter that can be silently ignored, so this asserts the SNAPPED BAND, not the
+    ///      stored number — the stored number agreeing with itself proves nothing.
+    function test_band_halfWidthIsHonouredAndSnapped() public {
+        int24 narrow = 180; // 3 spacings, deliberately not the fixture's 960
+        address a = address(FLAGS ^ (uint160(0xBD01) << 144));
+        deployCodeTo(
+            "QueueHarness.sol:QueueHarness",
+            abi.encode(
+                poolManager, c0, c1, FEE, SPACING, narrow, _syntheticRoster(3), RENT_BPS, RENT_PERIOD, FIRM_WINDOW
+            ),
+            a
+        );
+        QueueHarness h = QueueHarness(a);
+        assertEq(int256(h.BAND_HALF_WIDTH()), int256(narrow), "the constructor argument was not stored");
+
+        PoolKey memory nk =
+            PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(h))});
+        poolManager.initialize(nk, startPrice);
+        (,, int24 lo, int24 hi) = h.pool();
+
+        // The band the hook ACTUALLY custodies is `narrow`, snapped to spacing on both sides.
+        assertEq(int256(hi - lo), int256(2 * narrow), "the snapped band does not match the parameter");
+
+        // And it is genuinely narrower than the fixture's default, which is the point of the
+        // parameter existing at all. Without this the test would pass against a hook that ignored
+        // the argument and snapped 960 anyway, if 960 happened to snap to the same width.
         _boot();
-        (bool ok, bytes memory err) = address(hook).call(abi.encodeWithSelector(QueueHook.recenter.selector));
-        assertFalse(ok, "recenter ran while the spot was in the band");
-        assertEq(bytes4(_unwrap(err)), QueueHook.BandStillInRange.selector, "wrong refusal");
+        (,, int24 dlo, int24 dhi) = hook.pool();
+        assertGt(int256(dhi - dlo), int256(hi - lo), "the default band is not wider: this test proves nothing");
     }
 
-    /// @dev Wings occupy the exterior. Recenter into them is N5 and is refused.
-    function test_recenter_occupiedByWingReverts() public {
-        _boot();
-        (,, int24 tl,) = hook.pool();
-        _addWings(LIQ);
-        _swapObserved(true, expT0 * 4);
-        (, int24 tick,,) = poolManager.getSlot0(k.toId());
-        assertTrue(tick < tl, "never left the band");
-        (bool ok, bytes memory err) = address(hook).call(abi.encodeWithSelector(QueueHook.recenter.selector));
-        assertFalse(ok, "recenter planted the band on top of a wing");
-        assertEq(bytes4(_unwrap(err)), QueueHook.DestinationOccupied.selector, "wrong refusal");
+    /// @dev A band narrower than one spacing cannot be snapped to anything but zero width, and a
+    ///      zero-width position holds nothing. Refused at CONSTRUCTION, where it can be read,
+    ///      rather than at `initialize` on some starting prices and not others. LAW 2: the exact
+    ///      reason, and this one is NOT wrapped by v4 because it reverts in the constructor.
+    function test_band_tooNarrowIsRefusedAtConstruction() public {
+        address a = address(FLAGS ^ (uint160(0xBD02) << 144));
+        bytes memory args = abi.encode(
+            poolManager,
+            c0,
+            c1,
+            FEE,
+            SPACING,
+            int24(SPACING - 1),
+            _syntheticRoster(3),
+            RENT_BPS,
+            RENT_PERIOD,
+            FIRM_WINDOW
+        );
+        vm.expectRevert(abi.encodeWithSelector(QueueHook.BadBandWidth.selector, int24(SPACING - 1), SPACING));
+        deployCodeTo("QueueHarness.sol:QueueHarness", args, a);
     }
 
-    /// @dev No wings, price walked out through empty ticks: the DMM follows. Seats keep
-    ///      their ledger. The new band contains the spot.
-    function test_recenter_emptyTicksFollowsThePrice() public {
-        _boot();
-        (,, int24 oldLo, int24 oldHi) = hook.pool();
-        uint160 limit = TickMath.getSqrtPriceAtTick(oldLo - SPACING);
-        LimitSwapper sp = new LimitSwapper(poolManager);
-        MockERC20(Currency.unwrap(c0)).mint(address(sp), 1e30);
-        MockERC20(Currency.unwrap(c1)).mint(address(sp), 1e30);
-        sp.swapTo(k, true, expT0 * 4, limit);
-        (, int24 tick,,) = poolManager.getSlot0(k.toId());
-        assertTrue(tick < oldLo, "never left the band");
-        assertEq(uint256(poolManager.getLiquidity(k.toId())), 0, "empty ticks were not empty");
-
-        (uint256 t0, uint256 t1) = hook.totals();
-        hook.recenter();
-        (uint256 n0, uint256 n1) = hook.totals();
-        assertEq(n0, t0, "recenter changed the token0 ledger");
-        assertEq(n1, t1, "recenter changed the token1 ledger");
-
-        (,, int24 lo, int24 hi) = hook.pool();
-        (, tick,,) = poolManager.getSlot0(k.toId());
-        assertTrue(lo != oldLo || hi != oldHi, "band did not move");
-        assertTrue(tick >= lo && tick < hi, "new band does not contain the spot");
-        _checkInvariantF("after recenter", 1e12);
-        _assertSolvent();
-    }
-
+    // `recenter()` was rebuilt this session and left OUT again: eight targeted tests pass, the
+    // INVARIANT CAMPAIGN does not, and the defect was not located. The implementation, its tests and
+    // the bisection evidence are preserved in `docs/wip/recenter-v2/`. Eight green unit tests were
+    // not a reason to ship it.
     /// @dev No wings, same concentrated band, a swap that stays in: the clip is the identity
     ///      against PoolManager. If `_queueShare` silently under-credits a sole-LP in-band
     ///      swap, this is the control that goes red.

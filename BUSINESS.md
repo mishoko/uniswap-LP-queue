@@ -38,6 +38,152 @@ Nothing in this document is a revenue, TVL, or adoption forecast. There is no ba
 
 ---
 
+## 0.5 WHO BUYS WHICH SEAT, AND WHEN THEY LOSE
+
+The product is the seats. If no seat pays, there is no product. This section is the arithmetic, per
+seat, with the conditions written next to it.
+
+**One caveat that governs every number below.** The band is **fixed for the life of the pool**, and
+on a 45%-vol pair that life is **~16 days** before the price leaves it. So every annual rate here is
+a rate *while in band*. QUEUE is a **rolling fixed-term instrument** — like rolling 2-week paper, not
+a perpetual venue. You get the rate if you redeploy; you get ~1/20th of it if you don't.
+
+### Where the money comes from
+
+```
+  A TRADE ARRIVES
+       |
+       v
+  Uniswap sets the PRICE (unchanged: same curve, same 0.30% fee, any router)
+       |
+       v
+  QUEUE decides WHOSE MONEY FILLS IT, in seat order
+       |
+       +--> seat 1 empties first ------> then seat 2 ------> ... ------> seat 32
+       |
+       v
+  small trades  reach seat 1 only
+  large trades  reach deep into the book
+
+  RETAIL / noise flow  = many small trades   -> PROFITABLE to fill (fees > markout)
+  ARBITRAGE flow       = few large trades    -> LOSS-MAKING to fill (markout > fees)
+
+  ==> Sitting at the FRONT buys the retail flow. Sitting at the BACK declines
+      the arbitrage flow. There is no third thing being sold here.
+```
+
+An ordinary Uniswap dollar takes **both halves and cannot decline either**:
+
+```
+  ONE PRO-RATA DOLLAR, PER YEAR IN BAND
+    retail flow     109.5 turns x 0.30%              = +32.85%
+    arbitrage flow   73.0 turns x (0.30% - markout)  = -21.90%   <-- undeclinable
+                                                       -------
+    net                                              = +10.95%
+```
+
+**That is the whole product: QUEUE is the first AMM position where capital can choose which half of
+the flow it takes.** Nothing else about it is new.
+
+### The book, and where the trap is
+
+```
+  y_net(depth) = fees from trades bigger than you - toxicity from trades bigger than you
+                 ^ dies at the biggest RETAIL trade   ^ dies at the biggest ARBITRAGE trade
+                                                        ...which is LARGER.
+
+  $1M book, $500k/day, 0.30% fee, arb markout 60bps       per $1 per year   vs pro-rata
+  -------------------------------------------------------------------------------------
+  depth $0    - $1k     every trade reaches you             +$177.39          +1,620x
+  depth $1k   - $10k    all but the smallest                 +$13.14           +120x
+  depth $10k  - $50k    ONLY arbitrage reaches you            -$3.29            -30x  <-- TRAP
+  depth $50k  - $100k   only the largest arbitrage            -$1.09            -10x  <-- TRAP
+  depth $100k - $1M     nothing reaches you                    $0.00              0x
+                                                             -------
+  pool net                                                   +$0.1095        (+10.95%)
+```
+
+**There is a dead zone between the biggest retail trade and the biggest arbitrage trade that takes
+all of the toxicity and none of the fees.** It is $90k of capital destroying $186k/year — 1.7x the
+pool's entire profit. It cannot be left empty (the queue is contiguous), only **assigned**.
+
+### The four positions
+
+| | **HEAD** (seat 1) | **MIDDLE** (the trap) | **TAIL** (the deep seats) | ordinary LP |
+|---|---|---|---|---|
+| What you are | buying the retail flow | nobody | declining the arb flow | taking both |
+| Capital should be | = biggest routine **arbitrage** trade | **none — do not create these seats** | whatever you have idle | anything |
+| You earn | fees on huge turnover | fees on almost nothing | **rent only**, plus zero LVR | the blend |
+| You pay | rent to everyone behind | rent, for nothing | nothing | nothing |
+| **You profit when** | you can hedge the inventory | **never** | the pool is toxic, or you were going to hold the tokens anyway | the pool is benign |
+| **You lose when** | arb markout > ~126 bps | **always** | you had a better use for the capital | the pool is toxic |
+
+**Answer to "should seats have the same capital": no, and equal seats are the mistake that creates
+the trap.** Size the head to the largest routine *arbitrage* trade — not the largest retail trade,
+which maximises the head's rate but manufactures the dead zone. Then the head absorbs the trap as
+part of a profitable bundle and **no middle seat exists**. What remains is **two products, not 32**:
+one head, and an undifferentiated tail. `MAX_SEATS = 32` is room for *participants*, not 32 things
+to sell.
+
+### Simulation: the same book under three conditions
+
+Head sized correctly ($100k). Tail = $900k. Rates are per year *in band*.
+
+```
+                          BENIGN            NORMAL            TOXIC
+  arb markout             0 bps             60 bps            100 bps
+  pool net (pro-rata)     +54.8%            +11.0%            -18.3%
+  -----------------------------------------------------------------------
+  HEAD  (seat 1)          +109.5%           +109.5%           -12.0%
+        vs pro-rata       +54.7 pts         +98.5 pts         +6.3 pts
+        verdict           BUY               BUY, strongly     marginal
+
+  TAIL  (seats 2..n)      +16.6%            +6.8%             +2.7%
+        vs pro-rata       -38.2 pts         -4.2 pts          +21.0 pts
+        vs A WALLET       +16.6 pts         +6.8 pts          +2.7 pts
+        verdict           LP instead        close             BUY
+```
+
+**The tail's benchmark is the question the whole product turns on.** Against an ordinary LP position
+it only wins in a toxic pool. Against **tokens sitting idle in a treasury it wins every time**, and
+that is the honest customer: capital that was never going to LP, being paid a coupon to sit in a
+place where it also provides depth and takes almost none of the arbitrage loss.
+
+**The crossover, testable against a real pool with no model of ours:**
+
+> **Buy the tail when your pool loses more to arbitrageurs than ~89% of what it collects in fees.**
+> Stop above ~168% — past that the head stops paying rent and holding the tokens in a wallet wins.
+> Measure it from the pool's own history: mark inventory at t+5min on every swap, sum the signed
+> P&L, divide by fees. A subgraph query. Stablecoin pairs: never. Volatile/long-tail pairs: common.
+
+### What is honestly wrong with this
+
+1. **The pools where the tail pays are the pools rational LPs are already leaving.** The addressable
+   market is people who have concluded LPing there loses money and want the exposure anyway — and
+   there are at most 31 of them, because the roster is capped.
+2. **Routing viability and seat value are anti-correlated.** QUEUE is routed only where it is the
+   deepest venue — long-tail pairs — which are exactly the pairs with thin, adversely-selected flow.
+   That, not the +48% gas, is the sharpest objection, and no engineering closes it.
+3. **The tail's protection fails in the event it most cares about.** It is untouched by every move
+   that does not reach it, and reaching it means the price is at the band edge. Protected against
+   what it does not mind, exposed to what it does. (Measured: the traversal costs the tail 0.25% of
+   capital against a pro-rata LP's 2.42% — a tenth — but it is one event, not a stream.)
+4. **The rent can never make the tail whole.** Only `θ = τ/(τ+k) = 29%` of the head's advantage moves
+   backward; the rest is capitalised into the seat price. θ→1 only as τ→∞. Rent is a *discipline*
+   device, not the tail's income — the income is the avoided arbitrage loss.
+5. **A QUEUE LP cannot re-mint around the price**, which every ordinary v4 LP can. Fixed-term, roll it.
+
+### What would make this a strong product, none of it built
+
+| | why |
+|---|---|
+| **Marginal pricing instead of average** | Today every seat a trade reaches gets that trade's *average* price, so the tail gets no price advantage — only the option to sit out. Credit each seat the *segment it actually absorbed* and the tail systematically fills nearer the post-move price. This is the change that makes the tail a genuine senior tranche. **A different allocator, not a parameter.** |
+| **A correct `recenter()`** | Worth ~20x on the tail's coupon by ending the fixed term. Attempted this session; unit-green, campaign-red, not shipped (`docs/wip/recenter-v2/`). |
+| **τ at 25–50%, not 10%** | Raises θ from 29% to 51–81%. Already a constructor argument. |
+| **A big book** | The trap is a fixed ~$90k: 9% of a $1M book, 0.9% of a $10M one. Dilution is the only lever on it. |
+
+---
+
 ## 1. NINETY SECONDS
 
 A Uniswap pool is a shared cash register. Every trade hits every cash provider a little, in proportion to size. Nobody is first. Nobody is last. The only way to get more of the action is to put more money in.
@@ -237,7 +383,7 @@ Three facts:
 
 1. **A typical swap is flat: 117,971 → 117,992 across 1 → 32 seats, a spread of 21 units.** Most swaps only hit seat 1. Flatness is the cursors working.
 2. **A walking swap is linear, 8,070 units per extra seat.** A full 32-seat walk is a 416,053-unit transaction.
-3. **QUEUE costs 48% more than no hook at all on a typical swap.** Same tokens, fee, spacing, price, no hook: **128,406 vs 86,820, +41,586** [MEASURED, `test_5_7`]. The older +36% / 117,989 figure was the pre-wings hook.
+3. **QUEUE costs 48% more than no hook at all on a typical swap.** Same tokens, fee, spacing, price, no hook: **128,625 vs 87,039, +41,586** [MEASURED, `test_5_7`]. The older +36% / 117,989 figure was the pre-wings hook.
 
 The binding constraint is **not** the walk. Depositing (`addToSeat`) settles every priced seat ahead of the depositor, and each of those settlements pays every funded seat behind — quadratic in the roster. Measured worst case: **2,610,805 units**, 8.7% of a 30M block. **That is the number any proposal to raise `MAX_SEATS` has to be argued against** (`PITFALLS.md` 5.72).
 
@@ -273,7 +419,7 @@ Honest resolution: scarcity is currently *forced* by compute and *justified* by 
 
 ## 6. THE "+48%" — IT IS NOT 48% MORE EXPENSIVE TRADES
 
-[MEASURED] A typical swap: **128,406 vs 86,820** on an identical hookless pool = **+48%** (`test_5_7`). The extra versus the older +36% figure is the in-band clip.
+[MEASURED] A typical swap: **128,625 vs 87,039** on an identical hookless pool = **+48%** (`test_5_7`). The extra versus the older +36% figure is the in-band clip.
 
 What a business person hears: *"customers pay 36% more."*
 
@@ -283,7 +429,7 @@ What a business person hears: *"customers pay 36% more."*
 | A worse price? | **No.** Same tokens out. |
 | Extra network cost? | **Yes.** A slightly longer checkout. |
 | Same at 1 seat as at 32? | **Yes, for a typical swap.** 117,971 vs 117,992. Difference: 21 units. The 36% is the cost of the pool *having a book at all*. |
-| Always 48%? | **No.** A trade that walks many seats adds ~8,070 per extra seat. A full 32-seat walk is 426,470 units — not +48%, closer to 5× a hookless swap. That is a large, unusual trade. |
+| Always 48%? | **No.** A trade that walks many seats adds ~8,070 per extra seat. A full 32-seat walk is 764,200 units — not +48%, closer to 5× a hookless swap. That is a large, unusual trade. |
 | In dollars? | This product belongs on an L2. 31,000 extra units is **cents or less**, not 36% of the notional. On Ethereum mainnet it would be a real bill. **QUEUE is an L2 product.** |
 
 The commercial risk is not "36% more expensive trades." It is: **routers pick the pool with the same price and the lower network cost.** If they skip QUEUE, this pool does not see retail flow. Retail flow is the "good" flow the front seat is paying rent to capture. That loop is the adoption problem. It is not solved.
@@ -344,7 +490,7 @@ The failure mode of "everyone leaves" is **"the pool is empty,"** not "the pool 
 |---|---|
 | Same price. Same trading fee. Any Uniswap router. Never touches the queue. | +48% network compute on a typical swap [MEASURED]. A constant, not a slope. |
 | | A very large trade that walks many seats costs more still (8,070/seat). |
-| | This version holds one wide-range position — ~**1/200th the depth per dollar** of a tight ±1% range [ANALYSIS]. Worse price impact for the same dollars. **Sharpest commercial objection. Not shipped as a product.** Queue maths is proven orthogonal to range (`test_1_11`); concentrating the book is a next-version parameter. |
+| | **CLOSED — the band shipped.** True while the hook held a full-range position (~1/200th the depth per dollar of a tight ±1% range). The hook now custodies a concentrated band whose half-width is a **deployment parameter**, so depth at the money is sized to the pair. Queue maths is proven orthogonal to range (`test_1_11`). The surviving objection is routing, not depth: see §7. |
 
 **Verdict:** the customer is not being sold anything. They should be indifferent except for the extra network tick and the thinner book. If routers skip the pool, the front seat does not get the flow it is paying for.
 
@@ -405,7 +551,7 @@ Weak buy-in, stated as weak. They cannot jump this pool with a tight-range mint.
 | "If they all leave, money is trapped" | **Mostly false.** Per-seat withdrawal against actual tokens. No lockup. No pause. Last-out rounding dust, not a lock. |
 | "Someone steals by being first" | **Version 1, dead.** You cannot create a seat by depositing. Dusting the head buys nothing. |
 | "This is a dark / permissioned pool" | **Looks like one; is not, quite.** Entry is permissionless *at a price*. A real permissioned pool has a whitelist and a forked router. QUEUE uses the ordinary Uniswap router. Compliance will still treat 32 named seats as a designated-MM list. Do not be surprised. |
-| "A bug loses the money" | **Real, and the most serious row in this table.** The hook *is* the pool's accounting. A bug is lost funds. 172 tests, 68 mutations with zero survivors, three production bugs found by attacking our own code. **This is not an audit.** |
+| "A bug loses the money" | **Real, and the most serious row in this table.** The hook *is* the pool's accounting. A bug is lost funds. 198 tests, 74 mutations with zero survivors, three production bugs found by attacking our own code. **This is not an audit.** |
 | "We get blamed for MEV" | **Theme risk, not product risk.** QUEUE does not stop sandwiches. Shipping it as "MEV protection" is mis-selling. |
 
 ---
@@ -510,7 +656,7 @@ Realised average = 3,000 / 0.997 = **3,009 USDC/WETH**.
 | S1 sells | **0.997 WETH** | 0.0199 WETH |
 | S1 earns | **9.00 USDC** | 0.18 USDC |
 | S2–S5 earn | **0.00** | 8.82 USDC combined |
-| Swap compute, complete tx | **128,406** [MEASURED]; +41,586 (+48%) vs no hook | `test_5_7` |
+| Swap compute, complete tx | **128,625** [MEASURED]; +41,586 (+48%) vs no hook | `test_5_7` |
 
 S1 is 2% of the pool and earned 100% of the fee: a **50× multiple**, which is not a result, it is an identity — `total capital / front seat capital`.
 
@@ -812,7 +958,7 @@ intra-tick order.
 
 | Idea | Why Uniswap / a judge would care | Honest cost |
 |---|---|---|
-| **Concentrate the one position** | Fixes the 1/200th-depth hole. Allocator already proven orthogonal. | Out-of-range behaviour, rebalancing, unbuilt. Fastest v2. |
+| **Concentrate the one position** | **DONE.** Fixed the 1/200th-depth hole; half-width is a deploy parameter. Allocator proven orthogonal (`test_1_11`). | Out-of-range behaviour is now the honest limitation: the band does not move, and `recenter()` was deleted after our own attack broke it three ways. |
 | **Per-seat ranges** (16.1) | Actual missing half of price–time priority. The Foundation-shaped object. | Ladder walk **MEASURED** to the wei. Overlapping arbitrary ranges UNPROVEN (v3). |
 | **JIT as a one-block head rental** | Already possible: `buySeat` → harvest → re-ask. Makes the free jump *pay the incumbent*. Demo this; do not redesign for it. | Firm window, buyout capital, rank-then-run for an hour. |
 | **ERC-4626 syndicate vault** | Retail can buy a slice of a seat. "Sustainable liquidity" at more than 32 names. | Recreates the intermediary §4 claimed to delete. Unbuilt. Needed if you ever want non-professional LPs. |

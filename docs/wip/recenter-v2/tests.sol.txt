@@ -1,0 +1,179 @@
+    // ------------------------------------------------------------------- recenter, rebuilt properly
+
+    /// @dev The FIRST thing the deleted version got wrong, and the assertion it did not have:
+    ///      **the remint must actually deploy the inventory.** The old one centred the band on
+    ///      spot, which is in range and needs both tokens, while a band the price has left holds
+    ///      exactly one — so `_liquidityForAmounts` took the min of the legs and deployed ~zero.
+    ///      Both instruments were blind to it (`_positionValue` and `redeemAll` each early-return
+    ///      at `L == 0`), so this asserts the position DIRECTLY (PITFALLS 5.54, 5.94).
+    function test_recenter_remintsThePositionAtFullSize() public {
+        _boot();
+        (,, int24 oldLo,) = hook.pool();
+        _pushBelow(oldLo);
+
+        uint128 before_ = hook.positionLiquidity();
+        assertGt(uint256(before_), 0, "nothing was deployed to begin with: this test proves nothing");
+        (uint256 t0, uint256 t1) = hook.totals();
+
+        hook.recenter();
+
+        assertGt(uint256(hook.positionLiquidity()), 0, "recenter reminted NOTHING: the deleted bug");
+        (uint256 f0,) = hook.floats();
+        (uint256 n0, uint256 n1) = hook.totals();
+        assertEq(n0, t0, "recenter moved the token0 ledger");
+        assertEq(n1, t1, "recenter moved the token1 ledger");
+        // The band the price fell out of holds currency0, and essentially all of it must go back
+        // to work. A bound would be blind to the exact defect this test exists for, so assert that
+        // what is left idle is dust against what was redeployed.
+        assertLt(f0, t0 / 100, "the currency0 inventory was left sitting in float");
+        _assertSolvent();
+    }
+
+    /// @dev The new band must lie strictly on one side of spot. That is not cosmetic: a band
+    ///      containing the price is IN RANGE, and an in-range mint from one-sided inventory is
+    ///      exactly the remint-to-zero above.
+    function test_recenter_bandSitsBesideSpotNotAroundIt() public {
+        _boot();
+        (,, int24 oldLo,) = hook.pool();
+        _pushBelow(oldLo);
+        hook.recenter();
+
+        (, int24 tick,,) = poolManager.getSlot0(k.toId());
+        (,, int24 lo, int24 hi) = hook.pool();
+        assertTrue(tick < lo, "the new band contains spot: it will not fund from one token");
+        assertTrue(hi > lo, "empty band");
+    }
+
+    /// @dev **THE N5 HOLE THE DELETED VERSION HAD.** Its guard read `getLiquidity()` — liquidity
+    ///      active AT SPOT — while the destination is a RANGE, so a wing sitting inside the new
+    ///      band but not spanning spot was invisible and got swallowed. No test in the project
+    ///      used a NARROW wing, which is why nothing caught it.
+    ///
+    ///      Here the wing sits above spot, inside where a full-width band would land. The band must
+    ///      be TRUNCATED at it, never planted over it.
+    function test_recenter_truncatesAtANarrowWingInsideTheDestination() public {
+        _boot();
+        (,, int24 oldLo,) = hook.pool();
+        _pushBelow(oldLo);
+
+        (, int24 tick,,) = poolManager.getSlot0(k.toId());
+        int24 wLo = ((tick / SPACING) + 3) * SPACING;
+        int24 wHi = wLo + SPACING;
+        ExternalLP lp = new ExternalLP(poolManager);
+        MockERC20(Currency.unwrap(c0)).mint(address(lp), 1e30);
+        MockERC20(Currency.unwrap(c1)).mint(address(lp), 1e30);
+        lp.add(k, wLo, wHi, 1e15);
+        (uint128 wingL,) = poolManager.getTickLiquidity(k.toId(), wLo);
+        assertGt(uint256(wingL), 0, "the wing did not mint: this test proves nothing");
+
+        hook.recenter();
+
+        (,, int24 lo, int24 hi) = hook.pool();
+        assertTrue(hi <= wLo, "the band was planted ON TOP OF a wing: N5 reopened");
+        assertTrue(lo < hi, "the band was truncated to nothing");
+        // and the truncated band is still a real position, not a zero
+        assertGt(uint256(hook.positionLiquidity()), 0, "truncated band deployed nothing");
+        _assertSolvent();
+    }
+
+    /// @dev The mirror of the guard that used to be over-broad. A wing that ENDS exactly at the
+    ///      band's near edge is DISJOINT (ranges are `[lower, upper)`) and must not block the move.
+    ///      The deleted version refused this, which is how one wei of liquidity stranded a roster.
+    function test_recenter_aWingEndingAtTheEdgeDoesNotBlockIt() public {
+        _boot();
+        (,, int24 oldLo,) = hook.pool();
+        _pushBelow(oldLo);
+
+        (, int24 tick,,) = poolManager.getSlot0(k.toId());
+        int24 edge = ((tick / SPACING) + 1) * SPACING; // where the band's lower edge will land
+        ExternalLP lp = new ExternalLP(poolManager);
+        MockERC20(Currency.unwrap(c0)).mint(address(lp), 1e30);
+        MockERC20(Currency.unwrap(c1)).mint(address(lp), 1e30);
+        lp.add(k, edge - 2 * SPACING, edge, 1e15); // ends AT the edge: disjoint
+
+        hook.recenter();
+
+        (,, int24 lo,) = hook.pool();
+        assertEq(int256(lo), int256(edge), "a wing ending at the edge wrongly moved the band");
+        assertGt(uint256(hook.positionLiquidity()), 0, "reminted nothing");
+        _assertSolvent();
+    }
+
+    /// @dev A wing that STRADDLES the whole destination places no tick inside it, so the bitmap
+    ///      scan alone cannot see it. That is why emptiness is also asserted on the liquidity
+    ///      ACTIVE at the near edge. LAW 2: the exact reason.
+    ///
+    ///      Note the wing must end exactly at the OLD band's lower tick — it has to be disjoint
+    ///      from the band that exists when it is minted, while covering the ticks the band is
+    ///      about to move onto. That is precisely the shape the deleted version could not see.
+    function test_recenter_straddlingWingIsRefusedByName() public {
+        _boot();
+        (,, int24 oldLo,) = hook.pool();
+        _pushBelow(oldLo);
+
+        (, int24 tick,,) = poolManager.getSlot0(k.toId());
+        int24 wLo = ((tick / SPACING) - 4) * SPACING;
+        ExternalLP lp = new ExternalLP(poolManager);
+        MockERC20(Currency.unwrap(c0)).mint(address(lp), 1e30);
+        MockERC20(Currency.unwrap(c1)).mint(address(lp), 1e30);
+        lp.add(k, wLo, oldLo, 1e15); // covers spot and the whole destination; disjoint from the band
+        assertGt(uint256(poolManager.getLiquidity(k.toId())), 0, "the wing is not active at spot: wrong shape");
+
+        (bool ok, bytes memory err) = address(hook).call(abi.encodeWithSelector(QueueHook.recenter.selector));
+        assertFalse(ok, "the band was planted inside a straddling wing");
+        assertEq(bytes4(_unwrap(err)), QueueHook.DestinationOccupied.selector, "wrong refusal");
+    }
+
+    /// @dev In range, and just-outside, are both refused. The margin is what stops the band being
+    ///      ratcheted one tick at a time by anyone willing to pay gas — the burn/remint is not free
+    ///      to the seats, so a permissionless mover must not be callable on every block.
+    function test_recenter_inRangeAndJustOutsideAreBothRefused() public {
+        _boot();
+        (bool ok, bytes memory err) = address(hook).call(abi.encodeWithSelector(QueueHook.recenter.selector));
+        assertFalse(ok, "recenter ran while the spot was in the band");
+        assertEq(bytes4(_unwrap(err)), QueueHook.BandStillInRange.selector, "wrong refusal");
+
+        // Leave the band by a little. Still refused: the move must be worth doing.
+        (,, int24 oldLo,) = hook.pool();
+        _swapTo(oldLo - SPACING);
+        (, int24 tick,,) = poolManager.getSlot0(k.toId());
+        assertTrue(tick < oldLo, "never actually left the band: this test proves nothing");
+        (ok, err) = address(hook).call(abi.encodeWithSelector(QueueHook.recenter.selector));
+        assertFalse(ok, "a one-spacing excursion was enough to move the band");
+        assertEq(bytes4(_unwrap(err)), QueueHook.BandStillInRange.selector, "wrong refusal");
+    }
+
+    /// @dev And it cannot be called twice in a row: after a move the price is one spacing outside
+    ///      the NEW band, which is inside the margin. Without this a caller could walk the band
+    ///      down the curve, burning and reminting at every step at the seats' expense.
+    function test_recenter_cannotBeRatcheted() public {
+        _boot();
+        (,, int24 oldLo,) = hook.pool();
+        _pushBelow(oldLo);
+        hook.recenter();
+
+        (bool ok, bytes memory err) = address(hook).call(abi.encodeWithSelector(QueueHook.recenter.selector));
+        assertFalse(ok, "recenter was immediately callable again: the band can be ratcheted");
+        assertEq(bytes4(_unwrap(err)), QueueHook.BandStillInRange.selector, "wrong refusal");
+    }
+
+    /// @dev The invariant the whole design rests on, asserted end to end: after a move, an outside
+    ///      LP still cannot mint inside the band. `_beforeAddLiquidity` guards arrivals; `recenter`
+    ///      guards the band's own arrival. Both halves, or the guard is a snapshot of a moving
+    ///      target — which is precisely what the deleted version made it.
+    function test_recenter_theNoOverlapInvariantSurvivesTheMove() public {
+        _boot();
+        (,, int24 oldLo,) = hook.pool();
+        _pushBelow(oldLo);
+        hook.recenter();
+
+        (,, int24 lo, int24 hi) = hook.pool();
+        ExternalLP lp = new ExternalLP(poolManager);
+        MockERC20(Currency.unwrap(c0)).mint(address(lp), 1e30);
+        MockERC20(Currency.unwrap(c1)).mint(address(lp), 1e30);
+        (bool ok, bytes memory err) =
+            address(lp).call(abi.encodeWithSelector(ExternalLP.add.selector, k, lo, hi, uint128(1e15)));
+        assertFalse(ok, "an outside LP minted inside the band after it moved");
+        assertEq(bytes4(_unwrap(err)), QueueHook.OverlappingLiquidity.selector, "wrong refusal");
+    }
+

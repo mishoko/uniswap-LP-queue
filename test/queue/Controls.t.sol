@@ -35,12 +35,13 @@ contract MutantQueueHook is QueueHarness {
         Currency c1_,
         uint24 f,
         int24 sp,
+        int24 bhw,
         address[] memory roster,
         uint256 rb,
         uint256 rp,
         uint256 fw,
         uint8 m
-    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {
         mode = m;
     }
 
@@ -128,11 +129,12 @@ contract UnguardedQueueHook is QueueHarness {
         Currency c1_,
         uint24 f,
         int24 sp,
+        int24 bhw,
         address[] memory roster,
         uint256 rb,
         uint256 rp,
         uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
 
     function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         internal
@@ -254,8 +256,24 @@ contract ControlsTest is QueueFixture {
         address a = address(FLAGS ^ (nonce << 144));
         deployCodeTo(
             "Controls.t.sol:MutantQueueHook",
+            // NOTE: this call site builds the argument list INLINE rather than through
+            // `_ctorArgs`, which is what QueueFixture's "one place the constructor argument list is
+            // written" comment exists to prevent. Adding `bandHalfWidth` broke exactly here, and
+            // the symptom was `deployCodeTo` failing to create runtime bytecode — a constructor
+            // ABI mismatch, reported as if the artifact were bad. `mode` is why it cannot simply
+            // call `_ctorArgs`; it appends one argument.
             abi.encode(
-                poolManager, c0, c1, FEE, SPACING, _syntheticRoster(3), RENT_BPS, RENT_PERIOD, FIRM_WINDOW, mode
+                poolManager,
+                c0,
+                c1,
+                FEE,
+                SPACING,
+                BAND_HALF_WIDTH,
+                _syntheticRoster(3),
+                RENT_BPS,
+                RENT_PERIOD,
+                FIRM_WINDOW,
+                mode
             ),
             a
         );

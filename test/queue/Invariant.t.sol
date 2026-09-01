@@ -112,7 +112,7 @@ contract InvariantTest is QueueFixture {
 
         targetContract(address(handler));
 
-        bytes4[] memory sels = new bytes4[](13);
+        bytes4[] memory sels = new bytes4[](12);
         sels[0] = QueueHandler.addToSeat.selector;
         sels[1] = QueueHandler.withdraw.selector;
         sels[2] = QueueHandler.swap.selector;
@@ -125,7 +125,6 @@ contract InvariantTest is QueueFixture {
         sels[9] = QueueHandler.claimPending.selector;
         sels[10] = QueueHandler.sweepFloat.selector;
         sels[11] = QueueHandler.warp.selector;
-        sels[12] = QueueHandler.recenter.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: sels}));
 
         // `unauthorised` is deliberately OUTSIDE the fuzz selector set: it is driven by
@@ -161,9 +160,17 @@ contract InvariantTest is QueueFixture {
         _solvent("I2 token1", t1 + w1, p1 + f1, handler.gIn1());
     }
 
-    /// @dev The two directions are DIFFERENT CLAIMS and get two different assertions. `inflow` is
-    ///      everything that has ever entered the queue in this token, which is what the residual is
-    ///      proportional to — see `K` for why the current ledger is the wrong denominator.
+    /// @dev The witness is the handler's ghost, built from its own inputs and from token flows
+    ///      measured across the hook's boundary. The two directions are DIFFERENT CLAIMS and get two
+    ///      different assertions. `inflow` is everything that has ever entered the queue in this
+    ///      token, which is what the residual is proportional to.
+    ///
+    ///      **The excess branch is EXACT equality, and that is a real claim rather than an oversight.**
+    ///      Every shipped path moves value one way: deposits and swaps credit the ledger exactly, and
+    ///      v4 rounds for the pool, so the hook can only ever end up SHORT. A burn/re-mint cycle would
+    ///      round both ways — which is why the (unshipped) `recenter()` broke this, by 393 wei on an
+    ///      `owed` of 4.0e21. If a band move is ever shipped, this assertion needs the same bound on
+    ///      both signs, and `docs/wip/recenter-v2/` records why.
     function _solvent(string memory tag, uint256 owed, uint256 backing, uint256 inflow) internal pure {
         if (backing >= owed) {
             require(backing == owed, string.concat(tag, ": the position is OVER-backed"));
@@ -415,8 +422,6 @@ contract InvariantTest is QueueFixture {
             handler.transferSeat(a, b, (seed >> 204) & 1 == 1);
         } else if (pick < 96) {
             handler.claimPending(a, b, c);
-        } else if (pick < 98) {
-            handler.recenter(a);
         } else {
             handler.sweepFloat(a);
         }

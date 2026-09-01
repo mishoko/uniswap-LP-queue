@@ -195,7 +195,7 @@ managed; they are the honest scope, and stating them is what makes the rest cred
 | "Sweeps are O(1)." | **They are O(entries touched)**, at 8,070 gas per seat. The O(1) redesign is DECIDED NOT SHIPPED (§B.11). And the roster is bounded by `addToSeat`, which is **quadratic** at 2,610,805 gas worst case — not by the sweep (PITFALLS 5.72). |
 | "QUEUE is price–time priority." | **It is not, and saying so invites an objection we cannot answer.** The roster is closed, you cannot join by arriving, and rank goes to willingness to pay rent. What QUEUE reproduces is the **scarcity and value** of queue position, made explicit and payable to the LPs behind you. See §A.3. |
 | "A queue is obviously better than pro-rata." | **We do not know, and that is the point.** QUEUE produces the number — the self-assessed price of the head seat — and both answers are results. Claiming to know it in advance is the one thing that would make this uninteresting. |
-| "The overhead is negligible." | **It is +36% gas versus a bare pool** (117,989 vs 86,820, measured). The defensible claim is that it is a **constant a trader can price**, flat from 1 to 32 seats — not that it is small (PITFALLS 5.71). |
+| "The overhead is negligible." | **It is +36% gas versus a bare pool** (117,989 vs 87,039, measured). The defensible claim is that it is a **constant a trader can price**, flat from 1 to 32 seats — not that it is small (PITFALLS 5.71). |
 
 The honest answer to *"the theme slide says neutralize the attack and recapture the value — where is
 that?"* is:
@@ -987,7 +987,7 @@ work cancels exactly.
 | | gas |
 |---|---:|
 | head-only swap through QUEUE | 117,989 |
-| identical swap, identical pool shape, **no hook** | 86,820 |
+| identical swap, identical pool shape, **no hook** | 87,039 |
 | **QUEUE's overhead** | **31,169 (+36%)** |
 
 **Say +36%, not "free".** The claim worth making is that the overhead is a **constant a trader can

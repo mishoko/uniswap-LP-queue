@@ -57,6 +57,11 @@ abstract contract QueueDeployBase is CommonBase {
     ///      citation, not a number somebody picked — and `PLAN.md` §B.10 forbids defending a value.
     ///      They are immutable in the contract because a rent rate somebody can change afterwards
     ///      is a privileged role over everyone's money, and this contract has none.
+    /// @dev Band half-width in ticks, snapped to spacing at `_afterInitialize`. ~+10.08%/-9.16%.
+    ///      A DEPLOYMENT PARAMETER: band width sets depth at the money, and depth sets how large a
+    ///      swap must be to reach rank 2. A stablecoin pair wants tens of ticks, not 960.
+    int24 internal constant BAND_HALF_WIDTH = 960;
+
     uint256 internal constant RENT_BPS = 1_000;
     uint256 internal constant RENT_PERIOD = 365 days;
     uint256 internal constant FIRM_WINDOW = 1 hours;
@@ -121,7 +126,7 @@ abstract contract QueueDeployBase is CommonBase {
         pure
         returns (bytes memory)
     {
-        return abi.encode(pm, c0, c1, FEE, SPACING, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW);
+        return abi.encode(pm, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW);
     }
 
     // --------------------------------------------------------------------------------- the steps

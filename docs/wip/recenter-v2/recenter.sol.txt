@@ -1,0 +1,199 @@
+    // ------------------------------------------------------------------------ recenter, done right
+    //
+    // A FIRST VERSION OF THIS FUNCTION WAS DELETED, AND WHY IT FAILED IS THE SPECIFICATION FOR THIS
+    // ONE. It centred a new band on spot, guarded only by `poolManager.getLiquidity(poolId)`, and:
+    //
+    //   * that guard reads liquidity ACTIVE AT THE CURRENT TICK while the destination is a RANGE,
+    //     so a wing resting inside the new band but not spanning spot was invisible and got
+    //     swallowed — the N5 free lane, opened by the hook itself;
+    //   * centring on spot puts the band IN RANGE, which needs both tokens, while a band the price
+    //     has left holds exactly one. `_liquidityForAmounts` takes the min of the two legs, so the
+    //     remint deployed ~nothing and the pool stopped quoting;
+    //   * and the guard was over-broad in the other direction: any wing covering spot blocked it
+    //     forever, for one wei.
+    //
+    // THE INVARIANT THIS VERSION MAINTAINS, and it is the whole point:
+    //
+    //     NO FOREIGN LIQUIDITY IS EVER INSIDE `[tickLower, tickUpper)`.
+    //
+    // `_beforeAddLiquidity` enforces it for anyone arriving; this function enforces it for the band
+    // arriving. Both halves are needed — that is exactly the asymmetry the first version had.
+
+    /// @notice Move the custodied band to where the market now is. Permissionless, no admin.
+    ///
+    ///         Three properties, each of which the deleted version got wrong:
+    ///
+    ///         **It moves to EMPTY ticks, verified, not assumed.** The destination is checked as a
+    ///         RANGE: liquidity active at its first tick must be zero, and the band is truncated at
+    ///         the first initialised tick inside it. Whatever is minted cannot overlap a wing.
+    ///
+    ///         **It mints ONE-SIDED, just past spot, in the direction of the inventory it holds.**
+    ///         A band the price fell out of holds only `currency0`, so the new band sits ABOVE spot
+    ///         and is fully fundable from `currency0` alone; mirrored above. This is the ordinary
+    ///         thing a concentrated LP does with a stale range, and it is why the position comes
+    ///         back at full size instead of at zero.
+    ///
+    ///         **It cannot be ratcheted.** The price must be a full half-width beyond the band, and
+    ///         after a move it is one spacing outside the new one — so the next call needs another
+    ///         real move, not another block.
+    function recenter() external nonReentrant {
+        if (!bound) revert PoolNotBound();
+        PoolId id = key.toId();
+        int24 spacing = key.tickSpacing;
+        int24 half = _halfSpan(spacing);
+        (, int24 tick,,) = poolManager.getSlot0(id);
+
+        // Far enough out to be worth the burn, in the direction that names which token we hold.
+        bool up = tick < tickLower - half; // price fell out of the bottom => we hold currency0
+        bool down = tick >= tickUpper + half; // price rose out of the top  => we hold currency1
+        if (!up && !down) revert BandStillInRange(tick, tickLower, tickUpper);
+
+        // Realise the old position into float FIRST, so the occupancy checks below see only
+        // foreign liquidity. Reading them before the burn would count the hook against itself.
+        if (liquidity != 0) {
+            (uint256 g0, uint256 g1) = _burnPosition(liquidity);
+            float0 += g0;
+            float1 += g1;
+        }
+
+        (int24 lo, int24 hi) = _emptyBandBeside(id, tick, spacing, half, up);
+
+        int24 oldLo = tickLower;
+        int24 oldHi = tickUpper;
+        tickLower = lo;
+        tickUpper = hi;
+
+        uint128 added = _liquidityForAmounts(float0, float1);
+        if (added != 0) {
+            (int256 d0, int256 d1) = _modifyPosition(int256(uint256(added)));
+            liquidity += added;
+            // forge-lint: disable-next-line(unsafe-typecast)
+            if (d0 < 0 && uint256(-d0) > float0) revert DepositOversized(uint256(-d0), float0);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            if (d1 < 0 && uint256(-d1) > float1) revert DepositOversized(uint256(-d1), float1);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            float0 = uint256(int256(float0) + d0);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            float1 = uint256(int256(float1) + d1);
+        }
+        emit Recentered(oldLo, oldHi, lo, hi, added);
+    }
+
+    /// @dev The destination: a band of at most `2 * half` ticks lying entirely on ONE side of spot,
+    ///      containing no foreign liquidity anywhere.
+    ///
+    ///      **It must not contain spot.** A band containing the price is in range and needs both
+    ///      tokens; we hold one. Placing it one spacing past spot puts `sqrtP` outside it, which is
+    ///      the branch of `_liquidityForAmounts` that deploys a single token in full.
+    ///
+    ///      Emptiness is established as a RANGE property, in two parts, because neither alone is
+    ///      sufficient:
+    ///        1. liquidity ACTIVE at the band's near edge must be zero — this is what catches a wing
+    ///           that straddles the whole destination without placing a tick inside it. It is
+    ///           computed rather than assumed: `activeAtSpot + liquidityNet(edge)`, and the net term
+    ///           is why a wing that ENDS at the edge is correctly allowed rather than refused;
+    ///        2. the band is truncated at the first initialised tick strictly inside it, which
+    ///           catches every wing with an endpoint in the destination.
+    function _emptyBandBeside(PoolId id, int24 tick, int24 spacing, int24 half, bool up)
+        internal
+        view
+        returns (int24 lo, int24 hi)
+    {
+        int24 minU = TickMath.minUsableTick(spacing);
+        int24 maxU = TickMath.maxUsableTick(spacing);
+        int24 span = 2 * half;
+
+        // The near edge, one spacing clear of spot so the band never contains the price.
+        int24 edge = up ? _floorToSpacing(tick, spacing) + spacing : _floorToSpacing(tick, spacing);
+
+        (uint128 gross, int128 net) = poolManager.getTickLiquidity(id, edge);
+        gross; // liquidityGross is not the question; what is ACTIVE at `edge` is.
+        int256 active = int256(uint256(poolManager.getLiquidity(id)));
+        // Crossing `edge` upward adds `net`; crossing downward removes it. `up` walks from spot
+        // (below) to `edge`, so the crossing is upward.
+        active = up ? active + int256(net) : active - int256(net);
+        if (active != 0) revert DestinationOccupied(uint128(uint256(active < 0 ? -active : active)));
+
+        if (up) {
+            lo = edge;
+            hi = lo + span > maxU ? maxU : lo + span;
+            hi = _firstInitialisedAbove(id, spacing, lo, hi);
+        } else {
+            hi = edge;
+            lo = hi - span < minU ? minU : hi - span;
+            lo = _firstInitialisedBelow(id, spacing, lo, hi);
+        }
+        if (hi <= lo || lo < minU || hi > maxU) revert BandOutOfBounds(lo, hi, minU, maxU);
+    }
+
+    /// @dev Walk the pool's own tick bitmap from `lo` (exclusive) up to `hi` (exclusive) and return
+    ///      the first initialised tick found, or `hi` if there is none. Bounded: the window is
+    ///      `2 * BAND_HALF_WIDTH` ticks, which is at most a handful of 256-bit words.
+    function _firstInitialisedAbove(PoolId id, int24 spacing, int24 lo, int24 hi)
+        internal
+        view
+        returns (int24)
+    {
+        int24 c = _compress(lo, spacing) + 1; // strictly above `lo`: `lo` is our own edge
+        int24 cHi = _compress(hi, spacing);
+        while (c < cHi) {
+            (int16 word, uint8 bit) = _bitmapPosition(c);
+            uint256 bm = poolManager.getTickBitmap(id, word);
+            // Mask off everything below `bit`; everything at or above it is a candidate.
+            uint256 masked = bm & ~((uint256(1) << bit) - 1);
+            if (masked != 0) {
+                int24 found = ((int24(word) << 8) + int24(uint24(BitMath.leastSignificantBit(masked)))) * spacing;
+                return found < hi ? found : hi;
+            }
+            c = ((int24(word) + 1) << 8); // first compressed tick of the next word
+        }
+        return hi;
+    }
+
+    /// @dev The mirror, walking down from `hi` (exclusive) to `lo` (inclusive).
+    function _firstInitialisedBelow(PoolId id, int24 spacing, int24 lo, int24 hi)
+        internal
+        view
+        returns (int24)
+    {
+        int24 c = _compress(hi, spacing) - 1;
+        int24 cLo = _compress(lo, spacing);
+        while (c >= cLo) {
+            (int16 word, uint8 bit) = _bitmapPosition(c);
+            uint256 bm = poolManager.getTickBitmap(id, word);
+            // Mask off everything above `bit`.
+            uint256 mask = bit == 255 ? type(uint256).max : ((uint256(1) << (uint256(bit) + 1)) - 1);
+            uint256 masked = bm & mask;
+            if (masked != 0) {
+                int24 found =
+                    ((int24(word) << 8) + int24(uint24(BitMath.mostSignificantBit(masked)))) * spacing;
+                // A tick at `found` is a boundary; the band may start there only if it is `lo`
+                // itself, which is a shared edge and therefore disjoint.
+                return found > lo ? found : lo;
+            }
+            c = ((int24(word) << 8)) - 1; // last compressed tick of the previous word
+        }
+        return lo;
+    }
+
+    /// @dev Floor division by spacing, the compressed tick index v4's bitmap is keyed on.
+    function _compress(int24 t, int24 spacing) internal pure returns (int24 c) {
+        c = t / spacing;
+        if (t < 0 && t % spacing != 0) c -= 1;
+    }
+
+    /// @dev v4's own `TickBitmap.position`, on an already-compressed tick.
+    function _bitmapPosition(int24 c) internal pure returns (int16 word, uint8 bit) {
+        assembly ("memory-safe") {
+            word := sar(8, signextend(2, c))
+            bit := and(c, 0xff)
+        }
+    }
+
+    /// @dev `BAND_HALF_WIDTH` snapped down to spacing, never below one spacing. One place, so
+    ///      `_afterInitialize` and `recenter` cannot disagree about how wide the band is.
+    function _halfSpan(int24 spacing) internal view returns (int24 h) {
+        h = _floorToSpacing(BAND_HALF_WIDTH, spacing);
+        if (h < spacing) h = spacing;
+    }
+

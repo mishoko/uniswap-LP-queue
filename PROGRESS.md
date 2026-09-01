@@ -18,9 +18,185 @@ Newest entry first. Never delete an entry — supersede it.
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
-| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-08-31** | **PARTLY** — 171 tests. Wings shipped: overlap refused, disjoint LP allowed, crossing clip proven, M70/M71 RED. **Broadcast and video still outstanding.** |
+| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-01** | **PARTLY** — 198 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## 2026-09-01 — The panel attacked the pivot. `recenter()` is gone, and the demo was showing a deleted design.
+
+Took over after four commits (`cc1c594`..`11e1578`) that moved the hook from a **full-range sole-LP
+position** to a **concentrated band with disjoint wings**, an in-band clip, and a permissionless
+`recenter()`. Convened the §5 panel against the new surface. Findings, then what shipped.
+
+### The instrument was green and wrong
+
+`python3 script/mutate.py` → **74/74 RED, zero survivors** — while the panel, reading the same source
+the same afternoon, found three real defects in `recenter()` and one in the clip. **All four sailed
+through.** M72/M73 each went red on exactly *2* failing tests, and those two tests were the ones the
+panel showed were blind. The mutations were written by the person who wrote the tests, against the
+same mental model. **Zero survivors measures the hypotheses the suite encodes, not correctness**
+(PITFALLS 5.92). This is the single most important thing learned this session.
+
+### `recenter()` — DELETED, and the deletion is what makes the rest sound
+
+Three defects, one root cause: the band and the wings compete for the at-the-money ticks, and
+"overlap is forbidden" means the queue can never take them back.
+
+- Its guard read `getLiquidity(poolId)` — active L **at the current tick** — while the destination is
+  a **range**. A wing resting inside the new band but not spanning spot was invisible and got
+  swallowed: N5 reopened, with no overlapping add ever submitted to `_beforeAddLiquidity`.
+- The guard was nonetheless **correct**, which is worse — any wing covering spot blocks it, and price
+  leaving the band *is* price entering a wing. One wei at the money stranded the whole roster.
+- When it did run it destroyed the position's depth: a band the price left holds one token, the
+  remint takes `min` of both legs, so it deployed ~nothing and `sweepFloatIntoPosition` could not
+  restore it. **Capital was never at risk** — every seat could still withdraw in full from float —
+  but the pool quoted nothing until repaired, and anyone could re-trigger it for gas.
+
+Both covering tests passed because `_positionValue` and `redeemAll` each early-return at `L == 0`, so
+INVARIANT F degraded to `Σa == float` and held *because* the float carried the whole inventory
+(5.54 compounded by 5.75). Deleting the function makes `(tickLower, tickUpper)` write-once, which
+upgrades `_beforeAddLiquidity`'s add-time disjointness test from a snapshot of a moving target into a
+**complete guard**. Verdict on band+wings without recenter: **SOUND**.
+
+### `BAND_HALF_WIDTH` is now a deployment parameter
+
+It was `int24 public constant = 960` — ±10% for every pair forever, chosen because a test used it.
+Band width sets depth at the money, which sets how large a trade must be to reach rank 2, which sets
+how many seats exist in practice. It is the mechanism's main economic dial and it now belongs to the
+deployer. Validated at construction (`BadBandWidth`), immutable for the same reason τ is. Two new
+tests assert the **snapped band**, not the stored number; M72/M73 re-purposed to cover them.
+
+### Every gas number was taken on a fixture where the sweep did not sweep
+
+`Gas.t.sol` was untouched by the pivot and built through `_open` → `_openRange(minUsable, maxUsable)`
+→ the test-only `seed()` — full range, which **production cannot create**. `_tickInBand` was always
+true, so `_bandStep`/`computeSwapStep` never executed in any measurement in the project. The control
+pool was full-range too, which measures the range rather than the hook. Re-measured on the band:
+
+| | published | measured on the band |
+|---|---|---|
+| head-only through QUEUE | 128,406 | **128,625** |
+| same swap, no hook | 86,820 | **87,039** |
+| overhead | +41,586 / +48% | **+41,586 / +48%** — unchanged |
+| slope | 8,070/seat | **8,070/seat** — unchanged |
+| **full 32-seat sweep** | **426,470** | **764,200 (+79%)** |
+
+The headline survives because the common path really is the fast path. The sweep was understated
+because the old "full sweep" walked a handful of seats and stopped — 5.87's full-range reachability
+showing up as a broken instrument. `test_5_3c`'s ceiling went 500k → 850k **with the reason recorded
+in the test**, since the code did not regress; the measurement was wrong.
+
+### A one-line fix I nearly shipped, caught by the invariant campaign
+
+The clip's tolerance fires when the band's share is zero (`0 + 1 >= amtIn` at `amtIn == 1`), crediting
+the head a wei the band did not earn. Adding `bandGross != 0` made `invariant_I1` go **RED** — and I1
+was right: with no wings there is nowhere else the wei can have gone, v4 cannot attribute it at
+`L == 0`, and Step 2c exists precisely to stop the ledger under-counting there. **Reverted, and the
+negative result written into the code** so the next person does not re-derive it (5.95). The residual
+exposure needs wings + a wing-only swap + `amtIn == 1`; closing it needs the hook to measure what its
+own position received rather than infer it. Logged, not papered over.
+
+### The economics — the panel's own verdict INVERTED mid-session, twice, and the final one holds
+
+The owner asked what seat 5 or seat 30 is for, and whether the whole thing is dead code. The first
+answer ("the tail is the subsidy") **was wrong: it assumed markout = 0.** Recorded here in the order
+it happened, because the corrections are the result.
+
+- **Yield is set by depth, not rank.** `y_net(x) = f·N_noise(x) − (m−f)·N_inf(x)`. The noise term dies
+  at the largest *noise* trade, the toxicity term at the largest *informed* trade, and **informed
+  trades are larger** — so there is a depth band that takes ALL the toxicity and NONE of the fees.
+  At m = 60 bps the trough is exactly `[$10k, $50k)` at −328.5%/yr; the poison zone `[$10k, $100k)`
+  is $90k of capital destroying $186,150/yr, 1.7× the pool's whole net profit. Ranks 2–4 are
+  −241% / −110% / −22% while rank 1 is +723%. **A barbell with a poisoned middle.**
+- **An unreached seat is not an LP position.** `_allocate` breaks the moment the swap is sourced, so
+  the seat is never written — it is a static basket, and a basket that does not trade has **zero LVR**.
+  Avoidance, not deferral: the conversion never happened, so there is no later date on which it does.
+- **What QUEUE actually sells.** A pro-rata dollar here earns +32.85%/yr from retail flow and
+  −21.90%/yr from arbitrage flow, net +10.95%, **and cannot decline either half.** QUEUE is the first
+  AMM position where capital can decline the arbitrage half — the price being the retail half.
+  **The stronger-sounding claim that a pro-rata LP "holds a slice of the trough" is FALSE and must
+  never be written:** the depth coordinate is *created* by front-first ordering, not revealed by it.
+- **The window:** a tail seat beats pro-rata at **m ∈ (66.6, 126) bps** — i.e. when the pool loses more
+  to arbitrageurs than ~89% of what it collects in fees. Above 168% a plain wallet dominates.
+  Measurable from a pool's own history (mark inventory at t+5min, sum signed P&L, divide by fees).
+- **θ = τ/(τ+k) = 0.29.** Rent moves 29% of the front's advantage backward; 71% is capitalised into
+  the seat price. θ→1 only as τ→∞. **No Harberger rent can make the tail whole** — so rent is not the
+  tail's product; declining the arbitrage half is. The docs' `A/τ` fair-ask rule was the
+  zero-discount-rate limit and **overstated an ask 3.4×**; corrected to `A/(τ+k)` (5.99).
+- **The trough cannot be dodged, only assigned** — queue depth is contiguous, and wings live on *tick*
+  ranges, which is a price coordinate, not a depth coordinate. Deployment rule: **head seat capital =
+  the largest routine INFORMED trade (P99)**, not the largest noise trade, and then no trough seat
+  exists. **"Two products, not 32 seats":** one head, one undifferentiated tail; `MAX_SEATS` is
+  capacity for participants, not 32 distinct products.
+- **Deleting `recenter()` has a real economic cost and it is stated at full strength.** The crossover
+  window is unchanged (it is a ratio; a fixed band duty-cycles both sides equally) but **the
+  magnitudes collapse ~20×**: a ±10% band at σ=45%/yr has ~16–18 days of expected in-band life, so
+  the tail's whole lifetime edge is **~2.2% of capital once, plus a coupon worth ~0.13%**. And a
+  **genuine regression versus ordinary Uniswap, new this session:** a QUEUE LP cannot burn and
+  re-mint around the price; the only exit is withdraw-and-redeploy into a new pool. **QUEUE is now a
+  fixed-term instrument, not a perpetual venue.** Every annualised figure is therefore *per year of
+  in-band operation* — said once, loudly, not in footnotes.
+- **The dial that pays for it is the band width made a parameter this session.** In-band life scales
+  as `w²`, depth per dollar as `1/w`, so **doubling the band quadruples the life and halves the
+  depth**: ±10% → 16 days, ±30% → 124 days, ±50% → 296 days. **The shipped ±10% is sized for a demo.**
+- **The risk, kept at full strength:** the pools where this pays are the pools rational LPs are
+  already leaving, and there are at most 31 buyers because the roster is capped. Plus **routing
+  viability and seat value are anti-correlated**. That, not the +48% gas, is the sharpest unanswered
+  commercial objection.
+
+Written up as `BUSINESS.md` **§0.5** (eight subsections) and a rebuilt demo section.
+
+### `recenter()` v2 — attempted properly, and NOT SHIPPED
+
+Rebuilt after the deletion, on the owner's instruction to fix it robustly rather than remove it. The
+rebuild does fix all three v1 defects:
+
+- destination emptiness is checked as a **RANGE** — liquidity active at the near edge
+  (`getLiquidity() ± liquidityNet(edge)`, so a wing *ending* at the edge is correctly allowed) plus a
+  tick-bitmap walk that truncates the band at the first initialised tick inside it;
+- the mint is **one-sided, one spacing clear of spot**, so `sqrtP` is outside the band and
+  `_liquidityForAmounts` takes the single-token branch and deploys in full instead of `min`-ing to
+  zero;
+- the price must be a **full half-width** beyond the band, and after a move it is one spacing outside
+  the new one, so it cannot be ratcheted.
+
+Eight targeted tests pass, including one asserting the property the deletion had bought: an outside
+LP still cannot mint inside the band **after** it moves.
+
+**The invariant campaign fails and the cause was not located, so it does not ship.** Bisecting the
+handler's selector set, one 40-second run per hypothesis: `swap`+`recenter` GREEN; `+sweepFloat` RED;
+`+addToSeat` RED; `+withdraw` green; everything except `recenter` GREEN. The magnitudes rule out
+rounding — `I2b` shortfalls ~9.1e20 on inflow 9.1e21 (10%), `I1` gaps ~60,631 wei. The lead: a v2 band
+sits BESIDE spot and never contains it, so the pool has **zero active liquidity at the current tick**,
+which the rest of the contract has never operated in. Everything is preserved in
+`docs/wip/recenter-v2/` with the evidence and three ranked suspects.
+
+**Two things this cost, both worth more than the function.** `_solvent`'s over-backing branch turned
+out to be an *asymmetry* rather than a stronger claim (PITFALLS 5.102) — and making it symmetric is
+what let the campaign find the large divergences at all, so a strict assertion had been hiding a
+bigger defect behind a smaller one. And **a background `mutate.py` silently reverted ~200 lines of
+`src/` mid-session** (5.100): the 5.86 interlock guards `forge test`, not *writes*, and the campaign's
+`finally` restore overwrote work made while it ran. The only symptom was a compiler error pointing at
+the caller of a function that no longer existed.
+
+### The demo was simulating a design that no longer exists
+
+`frontend/index.html` ran `swapOut` as pure full-range constant product and credited 100% of the
+whole-pool output — **literally M70**. Its "Sweeping trade" button sent 2,500 into a band emptied by
+1,578 and rendered "3 swept, 2 untouched" for a trade that empties every seat. The pivot's *only*
+edit to the hero paragraph was deleting the word "full-range", while it still claimed to be "the
+contract's own arithmetic" and quoted a wei-level agreement measured on the pre-band hook. Rebuilt on
+concentrated-liquidity maths (capacity 1,578.5, derived two ways independently), preset corrected,
+the false validation claim removed rather than restated, the band read from `pool()` in live mode,
+a glossary added (**"wings" appeared nowhere on the page or in the README**), and the seat-economics
+section added.
+
+**Suite: 197 passed, 0 failed, 1 skipped. `forge lint src/` clean.**
+
+**Not claimed:** no broadcast, no video. The marginal-pricing allocator that would make a back seat a
+genuine senior tranche is **not built** and is a different allocator, not a parameter.
 
 ---
 

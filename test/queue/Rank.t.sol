@@ -25,11 +25,12 @@ contract ForgetfulTransferFromHook is QueueHarness {
         Currency c1_,
         uint24 f,
         int24 sp,
+        int24 bhw,
         address[] memory roster,
         uint256 rb,
         uint256 rp,
         uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
 
     function transferFrom(address sender, address receiver, uint256 seatId, uint256) public override returns (bool) {
         if (seatHolder[seatId] != sender) revert NotSeatOwner(seatId, sender);
@@ -50,11 +51,12 @@ contract MintingDepositHook is QueueHarness {
         Currency c1_,
         uint24 f,
         int24 sp,
+        int24 bhw,
         address[] memory roster,
         uint256 rb,
         uint256 rp,
         uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
 
     function deposit(uint256 amount0, uint256 amount1) external returns (uint256 seatId) {
         seatId = q.length;
@@ -78,11 +80,12 @@ contract LedgerOnlyEvacuationHook is QueueHarness {
         Currency c1_,
         uint24 f,
         int24 sp,
+        int24 bhw,
         address[] memory roster,
         uint256 rb,
         uint256 rp,
         uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
 
     function _onSeatTransfer(uint256 seatId, address from) internal override {
         Seat storage s = q[seatId];
@@ -103,11 +106,12 @@ contract UnguardedTransferHook is QueueHarness {
         Currency c1_,
         uint24 f,
         int24 sp,
+        int24 bhw,
         address[] memory roster,
         uint256 rb,
         uint256 rp,
         uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
 
     function transfer(address receiver, uint256 seatId, uint256 amount) public override returns (bool) {
         if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);

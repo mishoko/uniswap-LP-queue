@@ -96,18 +96,27 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     int24 internal tickUpper;
     uint128 internal liquidity;
 
-    /// @notice Half-width of the custodied Uniswap position, in ticks.
+    /// @notice Half-width of the custodied Uniswap position, in ticks. **A DEPLOYMENT PARAMETER.**
     ///
-    ///         Uniswap's product is a RANGE around the current price. QUEUE today was sitting
-    ///         that range at the full usable curve — $0 to infinity — which is not how anyone
-    ///         LPs on Uniswap, and which is why a dollar of QUEUE liquidity quoted ~1/200th
-    ///         the depth of a ±1% v3 position. The hook still holds ONE position (not one NFT
-    ///         per seat). The 32 seats share that band. The queue is who gets filled first
-    ///         *inside the same price Uniswap already uses*.
+    ///         Uniswap's product is a RANGE around the current price. QUEUE once sat that range at
+    ///         the full usable curve — $0 to infinity — which is not how anyone LPs on Uniswap, and
+    ///         which is why a dollar of QUEUE liquidity quoted ~1/200th the depth of a ±1% v3
+    ///         position. The hook still holds ONE position (not one NFT per seat). The seats share
+    ///         that band. The queue is who gets filled first *inside the same price Uniswap already
+    ///         uses*.
     ///
-    ///         960 ticks ≈ 10% in price at v3 tick math. Snapped to the pool's spacing.
-    ///         Chosen because `test_1_11` already ran the allocator over a ±10% band to the wei.
-    int24 public constant BAND_HALF_WIDTH = 960;
+    ///         **THIS IS THE MECHANISM'S MAIN ECONOMIC DIAL AND IT BELONGS TO THE DEPLOYER, NOT TO
+    ///         A CONSTANT A TEST HAPPENED TO USE.** Band width sets the position's depth at the
+    ///         money; depth sets how large a swap must be to reach rank 2, and therefore how many
+    ///         seats are ever filled at all. A stablecoin pair wants tens of ticks; a volatile pair
+    ///         wants thousands. Shipping 960 for every pair forever was a leftover, not a decision:
+    ///         it was chosen because `test_1_11` already ran the allocator over a ±10% band.
+    ///
+    ///         Immutable for the same reason τ is: a band somebody can move afterwards is a
+    ///         privileged role over the depth everyone else's capital is standing in, and this
+    ///         contract has no privileged role at all. 960 ticks ≈ +10.08% / −9.16% in price at v3
+    ///         tick math. Snapped to the pool's spacing at `_afterInitialize`.
+    int24 public immutable BAND_HALF_WIDTH;
 
     /// @dev INVARIANT C (§B.6): for each token X, every seat at index < cursorX holds aX == 0.
     ///      A cursor may LAG (the loop's `continue` handles an empty seat). It must never LEAD —
@@ -227,11 +236,6 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      ledger would still tie out, and the position would no longer cover it. Disjoint
     ///      ranges — the wings — are ordinary Uniswap and are allowed.
     error OverlappingLiquidity(int24 addLower, int24 addUpper, int24 bandLower, int24 bandUpper);
-    /// @dev `recenter` was called while the spot is still inside the custodied band.
-    error BandStillInRange(int24 tick, int24 lower, int24 upper);
-    /// @dev The new band would sit on ticks that already have liquidity (a wing). Planting the
-    ///      queue there is the N5 overlap. Recenter only when those ticks are empty.
-    error DestinationOccupied(uint128 liveLiquidity);
     /// @dev `beforeSwap` did not run before `afterSwap`. Structurally unreachable (Hooks.sol skips
     ///      both symmetrically on a hook self-call); loud rather than silent if that ever changes.
     error ProtocolFeeSnapshotMissing();
@@ -245,6 +249,9 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     error PoolNotBound();
     error AlreadyBound();
     error WrongPool();
+    /// @dev The band half-width is narrower than one tick spacing, or too wide to leave room for
+    ///      a two-sided band inside the usable tick range.
+    error BadBandWidth(int24 bandHalfWidth, int24 tickSpacing);
     /// @dev The starting price sat so close to a usable edge that a ±BAND_HALF_WIDTH band
     ///      could not be formed inside `[minUsable, maxUsable]`. Refused rather than silently
     ///      opening a full-range blob.
@@ -290,7 +297,6 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     event SeatBought(uint256 indexed seatId, address indexed from, address indexed to, uint256 price);
     event RentFunded(uint256 indexed seatId, address indexed payer, uint256 amount);
     event RentWithdrawn(uint256 indexed seatId, address indexed to, uint256 amount);
-    event Recentered(int24 oldLower, int24 oldUpper, int24 newLower, int24 newUpper);
 
     /// @dev The pool this hook will serve is fixed AT DEPLOYMENT, not by whoever initializes
     ///      first. Without this, anyone could front-run the intended `poolManager.initialize` and
@@ -332,6 +338,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         Currency currency1,
         uint24 fee,
         int24 tickSpacing,
+        int24 bandHalfWidth,
         address[] memory foundingRoster,
         uint256 rentBps,
         uint256 rentPeriod,
@@ -354,6 +361,16 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             rentBps > Rent.MAX_BPS || rentPeriod == 0 || rentPeriod > 3650 days || firmWindow == 0
                 || firmWindow > 365 days
         ) revert BadRentParameters();
+
+        // The band must be at least one spacing wide (a zero-width position holds nothing and
+        // `_bandAround` would have to widen it silently) and must fit inside the usable tick range
+        // with room for the ±half on BOTH sides, or `_afterInitialize` reverts at deploy time on
+        // some starting prices and not others. Refused here, once, where it can be read — rather
+        // than discovered by a pool that will not initialise.
+        if (bandHalfWidth < tickSpacing || bandHalfWidth > TickMath.MAX_TICK / 2) {
+            revert BadBandWidth(bandHalfWidth, tickSpacing);
+        }
+        BAND_HALF_WIDTH = bandHalfWidth;
         RENT_BPS = rentBps;
         RENT_PERIOD = rentPeriod;
         FIRM_WINDOW = firmWindow;
@@ -497,7 +514,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      the usable tick range. This is the Uniswap v3 range the hook will custody. The
     ///      queue does not see it — the allocator sees only realised swap deltas — but the
     ///      *inventory* does, and that is the whole of the depth question.
-    function _bandAround(uint160 sqrtPriceX96, int24 spacing) internal pure returns (int24 lo, int24 hi) {
+    function _bandAround(uint160 sqrtPriceX96, int24 spacing) internal view returns (int24 lo, int24 hi) {
         int24 minU = TickMath.minUsableTick(spacing);
         int24 maxU = TickMath.maxUsableTick(spacing);
         int24 tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
@@ -685,9 +702,43 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
         (uint256 bandGross, uint256 bandOut, uint256 pfBand) = _bandStep(params, sqrtAfter, protocolFee, lpFee);
 
-        // A 1-wei underestimate vs Pool.swap is SwapMath rounding, not a wing fill.
+        // A wei of underestimate vs Pool.swap is SwapMath rounding, not a wing fill.
         // Clipping it desyncs the ledger from the ghost that tracks PoolManager's delta
-        // (invariant I1, 1 wei). A real wing fill is many orders larger; N5 was 1e15.
+        // (invariant I1). A real wing fill is many orders larger; N5 was 1e15.
+        //
+        // **THE `1` IS NOT A PROVEN BOUND AND THIS COMMENT NO LONGER CLAIMS IT IS.** `_bandStep`
+        // does ONE `computeSwapStep`; `Pool.swap` does one per tick-bitmap WORD (its
+        // `nextInitializedTickWithinOneWord` stops at a word edge even when nothing in it is
+        // initialised) plus one per initialised tick, and each extra step re-ceils `amountIn`,
+        // re-ceils `feeAmount` and re-floors `amountOut`. Over a 1920-tick band that is up to 2
+        // steps at `tickSpacing == 60` (~2 wei) and up to 8 at spacing 1 (~14-16 wei). So at the
+        // project's own spacing the true bound is 2, not 1.
+        //
+        // It is left at 1 DELIBERATELY, because being too tight fails SAFE: the tolerance simply
+        // does not fire, the band numbers are taken instead, and those are the smaller pair
+        // (`bandGross <= amtIn`, `bandOut >= amtOut`). The queue is then under-credited and
+        // over-debited — over-collateralised — and the residual wei land in the float. Widening
+        // the number to make the identity path fire more often would be loosening a tolerance to
+        // buy a green, which is the one response to a finding this project does not allow.
+        // The residual leak is logged rather than papered over.
+        //
+        // **THE ZERO-BAND CASE IS DELIBERATE, AND A `bandGross != 0` GUARD HERE IS A BUG.**
+        // Reviewed and REJECTED, with the negative result recorded because it looks obviously
+        // right: when a swap never touches the band, `_bandStep` returns `(0, 0, 0)` and
+        // `0 + 1 >= amtIn` is TRUE for `amtIn == 1`. A 1-wei input on a 0.30% pool is consumed
+        // entirely as fee (`mulDiv(1, 997000, 1e6) == 0`), giving delta `(-1, 0)` — the shape
+        // Step 2 already records as measured — so the head is credited a wei the BAND did not
+        // earn. Adding `bandGross != 0` to drop it makes `invariant_I1_ledgerEqualsTheGhost` go
+        // RED, and the invariant is right: with no wings there is nowhere else the wei can have
+        // gone. v4 cannot even attribute it (`feeGrowthGlobal` does not update at `L == 0`), so
+        // it sits in PoolManager owed to nobody, and Step 2c's degenerate-fill policy exists
+        // precisely to stop the ledger UNDER-counting the position in that case.
+        //
+        // The residual exposure is real but narrower than it first looks: it needs a pool that
+        // HAS wings, a swap that lands entirely in one, and `amtIn == 1`. It is bounded at one
+        // wei per transaction — ledger drift, not an economic exploit — and closing it needs the
+        // hook to measure what its OWN position received rather than to infer it from the band
+        // replay. That is a real change, not a clause. Logged rather than papered over.
         if (bandGross + 1 >= amtIn && bandOut + 1 >= amtOut) {
             if (pfDelta > amtIn) revert ProtocolFeeExceedsInput(pfDelta, amtIn);
             return (amtIn - pfDelta, amtOut);
@@ -1132,55 +1183,45 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         float1 = uint256(int256(float1) + d1);
     }
 
-    /// @notice Move the custodied band to around the current price. Permissionless.
-    ///
-    ///         The queue is a DMM at the money. The band is snapped at initialize; if spot
-    ///         walks out, seats sit idle and the live book is whoever LPed those ticks.
-    ///         This burns the old position, snaps a new ±BAND_HALF_WIDTH band, and remints
-    ///         from float. Seat ledgers do not change.
-    ///
-    ///         Refuses if the destination ticks already have liquidity — that would be
-    ///         overlapping a wing (N5). Full-width wings occupy the exterior, so recenter
-    ///         then reverts until they leave. Empty ticks (no wings) recenter.
-    function recenter() external nonReentrant {
-        if (!bound) revert PoolNotBound();
-        (uint160 sqrtP, int24 tick,,) = poolManager.getSlot0(key.toId());
-        if (_tickInBand(tick)) revert BandStillInRange(tick, tickLower, tickUpper);
-
-        uint128 live = poolManager.getLiquidity(key.toId());
-        if (live != 0) revert DestinationOccupied(live);
-
-        (int24 lo, int24 hi) = _bandAround(sqrtP, key.tickSpacing);
-        if (lo == tickLower && hi == tickUpper) revert BandStillInRange(tick, tickLower, tickUpper);
-        if (tick < lo || tick >= hi) {
-            revert BandOutOfBounds(lo, hi, TickMath.minUsableTick(key.tickSpacing), TickMath.maxUsableTick(key.tickSpacing));
-        }
-
-        int24 oldLo = tickLower;
-        int24 oldHi = tickUpper;
-        if (liquidity != 0) {
-            (uint256 g0, uint256 g1) = _burnPosition(liquidity);
-            float0 += g0;
-            float1 += g1;
-        }
-        tickLower = lo;
-        tickUpper = hi;
-
-        uint128 added = _liquidityForAmounts(float0, float1);
-        if (added != 0) {
-            (int256 d0, int256 d1) = _modifyPosition(int256(uint256(added)));
-            liquidity += added;
-            // forge-lint: disable-next-line(unsafe-typecast)
-            if (d0 < 0 && uint256(-d0) > float0) revert DepositOversized(uint256(-d0), float0);
-            // forge-lint: disable-next-line(unsafe-typecast)
-            if (d1 < 0 && uint256(-d1) > float1) revert DepositOversized(uint256(-d1), float1);
-            // forge-lint: disable-next-line(unsafe-typecast)
-            float0 = uint256(int256(float0) + d0);
-            // forge-lint: disable-next-line(unsafe-typecast)
-            float1 = uint256(int256(float1) + d1);
-        }
-        emit Recentered(oldLo, oldHi, lo, hi);
-    }
+    // ---------------------------------------------------------------- why there is no `recenter()`
+    //
+    // A `recenter()` was written, DELETED, REBUILT, and left OUT AGAIN. Both attempts are recorded
+    // because the second one is the more useful failure.
+    //
+    // v1 centred a new band on spot behind a single `getLiquidity()` guard. Three defects, one root
+    // cause — the band and the wings compete for the at-the-money ticks, and "overlap is forbidden"
+    // means the queue can never take them back:
+    //   * the guard read liquidity ACTIVE AT THE CURRENT TICK while the destination is a RANGE, so a
+    //     wing inside the new band but not spanning spot was invisible and got swallowed — N5,
+    //     reopened by the hook itself, with no overlapping add ever submitted here;
+    //   * the guard was nonetheless CORRECT, which is worse: any wing covering spot blocked it, and
+    //     price leaving the band IS price entering a wing, so one wei stranded the whole roster;
+    //   * centring on spot puts the band IN RANGE, which needs both tokens, while a band the price
+    //     has left holds exactly one — so the re-mint deployed ~nothing and the pool stopped quoting.
+    //
+    // v2 fixes all three (destination emptiness checked as a RANGE via a tick-bitmap walk plus the
+    // liquidity active at the near edge; a ONE-SIDED mint one spacing clear of spot, which is fully
+    // fundable from the token actually held; and a half-width margin so the band cannot be ratcheted).
+    // Its eight tests pass. **THE INVARIANT CAMPAIGN DOES NOT.** Bisecting the handler's selector set
+    // localises it: `swap`+`recenter` alone is green, and adding either path that DEPLOYS FLOAT INTO
+    // THE POSITION (`addToSeat`, `sweepFloatIntoPosition`) turns it red, with ledger-vs-ghost gaps and
+    // per-token shortfalls of ~10% — orders of magnitude past rounding. The defect was not located.
+    //
+    // It is therefore NOT SHIPPED, and eight green unit tests are not a reason to ship it. The work,
+    // the evidence and the leads are preserved in `docs/wip/recenter-v2/`.
+    //
+    // WHAT THE ABSENCE BUYS, and it is not nothing: `(tickLower, tickUpper)` is written exactly once,
+    // in `_afterInitialize`, and never again. That is what upgrades `_beforeAddLiquidity`'s add-time
+    // disjointness test from a snapshot of a moving target into a COMPLETE guard — no legal wing can
+    // ever become overlapping, because the band cannot move onto it.
+    //
+    // THE HONEST CONSEQUENCE, which belongs in the pitch rather than hidden: this is a FIXED-RANGE
+    // position. If the price leaves the band it goes one-sided and stops earning, and unlike an
+    // ordinary v4 LP the holders CANNOT burn and re-mint around the price — the only exit is to
+    // withdraw and redeploy into a new pool. QUEUE is a fixed-term instrument, not a perpetual venue,
+    // and `BAND_HALF_WIDTH` is a deployment parameter precisely so the term can be chosen: expected
+    // in-band life scales as w^2 while depth scales as 1/w, so doubling the band quadruples the life
+    // and only halves the depth.
 
     // ================================================== HARBERGER — the always-for-sale lease
 
@@ -1621,8 +1662,19 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         (d0, d1) = abi.decode(res, (int256, int256));
     }
 
+    /// @dev **THE CALLER MUST GUARANTEE `liq != 0`, AND THE ONLY PRODUCTION CALLER DOES** —
+    ///      `_payOut` reaches this behind `if (dl != 0)`, and `_liquidityToCover` returns 0 when
+    ///      nothing needs releasing. A zero poke would revert `CannotUpdateEmptyPosition` inside v4.
+    ///
+    ///      A `if (liq == 0) return (0, 0);` guard used to sit here. It was added for `recenter()`,
+    ///      which could burn an already-empty position; with `recenter()` deleted the branch became
+    ///      unreachable from production, and the mutation campaign said so — **M74 SURVIVED with
+    ///      zero failing tests**, because nothing in the project could reach it any more. Per §3b
+    ///      the three honest answers to a survivor are write the test, DELETE THE LINE, or write
+    ///      down why it cannot be tested. Nothing depends on it, so it is deleted (PITFALLS 5.49's
+    ///      shape). The zero case now belongs where it actually arises — the TEST-ONLY
+    ///      `QueueHarness.redeemAll()`, which may be called on a fully-withdrawn position.
     function _burnPosition(uint128 liq) internal returns (uint256 g0, uint256 g1) {
-        if (liq == 0) return (0, 0);
         liquidity -= liq;
         (int256 d0, int256 d1) = _modifyPosition(-int256(uint256(liq)));
         // A removal is owed both the principal it releases and the fees it realises, so neither leg

@@ -220,7 +220,7 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 
     <div class="ctl">
       <label for="sz">Swap size</label>
-      <input type="range" id="sz" min="1" max="4000" value="2500" step="1">
+      <input type="range" id="sz" min="1" max="2000" value="1400" step="1">
       <div class="val mono" id="szv">2,500 token0</div>
       <button id="preset-small">Small trade</button>
       <button id="preset-sweep">Sweeping trade</button>
@@ -251,24 +251,51 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
       </div>
     </div>
     <p class="small" style="margin-top:16px">
-      Both panels run the same constant-product curve at 0.30% fee, on the same seeded
-      pool the test suite deploys (1,500 token0 / 6,000 token1, 1 token0 = 4 token1, 18/6 decimals).
-      <strong>This is the contract's own arithmetic, not an illustration of it.</strong> At
-      2,500&nbsp;in, <span class="mono">test_7_5</span> leaves the five ranks holding
-      <span class="mono">0 | 0 | 1053.66 | 800 | 400</span> of currency1 and this page computes
-      <span class="mono">0 | 0 | 1054.2 | 800 | 400</span> — a 0.015% difference, all of it the
-      simulator working in floats where v4 works in integers.
+      Both panels run <strong>concentrated-liquidity</strong> maths at 0.30% fee over the hook's
+      own &plusmn;10% band, on the same seeded pool the test suite deploys (1,500 token0 /
+      6,000 token1, 1 token0 = 4 token1, 18/6 decimals). The band is finite and that is the point:
+      it holds 6,000 token1 in total and <strong>~1,578 token0 empties it completely</strong>.
+      Past that the trade is served by ordinary Uniswap out in the wings, and the queue has nothing
+      further to give.
+      <br><br>
+      <strong>Honest status of these numbers:</strong> this is a faithful model of the mechanism,
+      <em>not</em> a replay of a deployment. An earlier version of this page claimed to be "the
+      contract's own arithmetic" and quoted a wei-level agreement with <span class="mono">test_7_5</span>
+      — but those figures were measured when the hook held a <em>full-range</em> position, and were
+      never re-taken after it moved to a band. Rather than restate a stale agreement we have removed
+      the claim. The allocator shown here (front-first, and the whole-trade average price to every
+      seat it reaches) is exactly what <span class="mono">_allocate</span> does.
     </p>
 
     <pre class="ascii" style="margin-top:28px">CHEAPER ◄──────────── today's price ────────────► MORE EXPENSIVE
 
-  ordinary Uniswap     32 PAID DESKS (~±10%)      ordinary Uniswap
-  anyone, no desk      desk 1 filled first        anyone, no desk
-  Uniswap's own tools  desk 32 filled last        Uniswap's own tools
+  ◄──── WING ────►    ◄──── THE BAND ────►    ◄──── WING ────►
+  ordinary Uniswap    32 PAID DESKS (~±10%)   ordinary Uniswap
+  anyone, no desk     desk 1 filled first     anyone, no desk
+  Uniswap's own tools desk 32 filled last     Uniswap's own tools
 
   small trade  ──────► hits desk 1 only
-  huge trade   ──────► empties the desks, then ordinary Uniswap further out
-  jump the line ─────► refused. You cannot park on top of the paid desks.</pre>
+  huge trade   ──────► empties the desks, then the wings further out
+  jump the line ─────► refused. You cannot park on top of the paid desks.
+  price walks out ───► the desks go out of range and stop earning, exactly
+                       like any concentrated Uniswap position. THE BAND DOES
+                       NOT MOVE.</pre>
+
+    <div class="card" style="margin-top:22px">
+      <div class="eyebrow" style="margin-bottom:10px">The words on this page, defined once</div>
+      <table class="tbl">
+        <tbody>
+          <tr><td><strong>band</strong></td><td>The one concentrated Uniswap position the hook holds, around the starting price. Its width is chosen at deployment (&plusmn;10% here). This is the only place the queue applies.</td></tr>
+          <tr><td><strong>wings</strong></td><td>Ordinary Uniswap liquidity anyone may add on price ranges that do <em>not</em> overlap the band — through PositionManager, any router, no seat and no rent. They are the subordinated tail: reached only once the band is emptied.</td></tr>
+          <tr><td><strong>seat</strong></td><td>One of 32 numbered places in the band, an ERC&#8209;6909 token of supply one. Buying a seat buys <em>position in line</em>, not liquidity — you still put your own capital in.</td></tr>
+          <tr><td><strong>rank</strong></td><td>Where your seat sits in the fill order. Rank 1 is served by every trade; rank 32 only by a trade that has already emptied 1&ndash;31.</td></tr>
+          <tr><td><strong>self&#8209;assessed price</strong></td><td>The number <em>you</em> post as what your seat is worth. Anyone may buy it from you at that number at any time.</td></tr>
+          <tr><td><strong>rent</strong></td><td>&tau; = 10%/year of your own self-assessed price, charged continuously and paid <strong>backward</strong>, to the seats behind you. Not to a protocol, not to a treasury.</td></tr>
+          <tr><td><strong>float</strong></td><td>Capital the hook holds but has not yet deployed into the position (because the position can only take matched pairs of both tokens). It is still yours and still withdrawable.</td></tr>
+          <tr><td><strong>markout</strong></td><td>What a fill was worth shortly afterwards. Negative markout is the cost of having traded against someone better informed — the thing LPs actually lose to.</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </section>
 
@@ -301,7 +328,7 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
       <div class="card">
         <div class="k">Network cost, not a trading fee</div>
         <div class="v">+48%</div>
-        <div class="n">Same price, same 0.30%. Extra compute on a typical swap: 128,406 vs 86,820.
+        <div class="n">Same price, same 0.30%. Extra compute on a typical swap: 128,625 vs 87,039.
           Flat from 1 to 32 seats. On an L2 this is cents, not 48% of the trade.
           A walk of the whole line is a different number: 426k.</div>
       </div>
@@ -412,7 +439,7 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
           <div class="card">
             <div class="k">Ask vs a rational cap</div>
             <div class="v" id="bkFair">—</div>
-            <div class="n" id="bkFairN">At τ = 10%/yr, rent = 10% of your ask. Extra annual P&amp;L / 0.10 is the cap above which you are paying to not be taken.</div>
+            <div class="n" id="bkFairN">At τ = 10%/yr you are billed 10% of your ask every year. A buyer pays that too, so a seat is worth <span class="mono">extra&nbsp;annual&nbsp;P&amp;L / (τ + k)</span> — with a 24% cost of capital that is <strong>/0.34, not /0.10</strong>. The older rule on this page divided by τ alone and overstated the fair ask by 3.4×.</div>
           </div>
         </div>
         <div class="ascii" id="bkAscii"></div>
@@ -421,6 +448,166 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
     </div>
 
     <table class="tbl" id="bkTable"></table>
+  </div>
+</section>
+
+<!-- ================================================ WHO BUYS WHICH SEAT -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">The only question that decides whether this is a product</div>
+    <h2>Who buys which seat, and when they lose</h2>
+    <p class="lede">
+      The product <em>is</em> the seats. If no seat pays, there is no product. Here is the arithmetic
+      per seat, with the losing condition written next to the winning one.
+    </p>
+    <div class="verdict" style="margin-bottom:18px">
+      <strong>One caveat that governs every number here.</strong> The band is <strong>fixed for the
+      life of the pool</strong>, and on a 45%-vol pair that life is <strong>~16 days</strong> before
+      the price leaves it. Every rate below is a rate <em>while in band</em>. QUEUE is a
+      <strong>rolling fixed-term instrument</strong> &mdash; like rolling two-week paper, not a
+      perpetual venue. You get the rate if you redeploy; ~1/20th of it if you don't.
+    </div>
+
+<pre class="ascii">  WHERE THE MONEY COMES FROM
+
+  A TRADE ARRIVES
+       |
+       v
+  Uniswap sets the PRICE   (unchanged: same curve, same 0.30% fee, any router)
+       |
+       v
+  QUEUE decides WHOSE MONEY FILLS IT, in seat order
+       |
+       +--> seat 1 empties first --> then seat 2 --> ... --> seat 32
+       |
+       v
+  small trades reach seat 1 only        large trades reach deep into the book
+
+  RETAIL / noise flow = many small trades -> PROFITABLE to fill (fees > markout)
+  ARBITRAGE flow      = few large trades  -> LOSS-MAKING to fill (markout > fees)
+
+  ==> The FRONT buys the retail flow. The BACK declines the arbitrage flow.
+      There is no third thing being sold here.
+
+
+  AN ORDINARY UNISWAP DOLLAR TAKES BOTH HALVES AND CANNOT DECLINE EITHER
+
+    retail flow      109.5 turns x 0.30%             = +32.85%
+    arbitrage flow    73.0 turns x (0.30% - markout) = -21.90%   <-- undeclinable
+                                                       -------
+    net                                              = +10.95%
+</pre>
+
+    <div class="verdict ok">
+      <strong>That is the whole product.</strong> QUEUE is the first AMM position where capital can
+      choose <em>which half of the flow it takes</em>. Nothing else about it is new.
+    </div>
+
+    <h3 style="margin-top:26px">The book, and where the trap is</h3>
+<pre class="ascii">  y_net(depth) = fees from trades bigger than you - toxicity from trades bigger than you
+                 ^ dies at the biggest RETAIL trade  ^ dies at the biggest ARBITRAGE trade
+                                                       ...which is LARGER.
+
+  $1M book, $500k/day, 0.30% fee, arb markout 60bps    per $1 per year   vs pro-rata
+  ---------------------------------------------------------------------------------
+  depth $0    - $1k    every trade reaches you           +$177.39         +1,620x
+  depth $1k   - $10k   all but the smallest               +$13.14          +120x
+  depth $10k  - $50k   ONLY arbitrage reaches you          -$3.29           -30x  <-- TRAP
+  depth $50k  - $100k  only the largest arbitrage          -$1.09           -10x  <-- TRAP
+  depth $100k - $1M    nothing reaches you                  $0.00             0x
+                                                          -------
+  pool net                                                +$0.1095       (+10.95%)
+</pre>
+    <p class="small">
+      There is a <strong>dead zone</strong> between the biggest retail trade and the biggest arbitrage
+      trade that takes all of the toxicity and none of the fees &mdash; $90k of capital destroying
+      $186k/year, 1.7&times; the pool's entire profit. It <strong>cannot be left empty</strong> (the
+      queue is contiguous), only <strong>assigned</strong>.
+    </p>
+
+    <h3 style="margin-top:26px">The four positions</h3>
+    <table class="tbl">
+      <thead><tr><th></th><th>HEAD (seat 1)</th><th>MIDDLE (the trap)</th><th>TAIL (deep seats)</th><th>ordinary LP</th></tr></thead>
+      <tbody>
+        <tr><td><strong>What you are</strong></td><td>buying the retail flow</td><td>nobody</td><td>declining the arb flow</td><td>taking both</td></tr>
+        <tr><td><strong>Capital should be</strong></td><td>= biggest routine <em>arbitrage</em> trade</td><td><strong>none &mdash; do not create these</strong></td><td>whatever you have idle</td><td>anything</td></tr>
+        <tr><td><strong>You earn</strong></td><td>fees on huge turnover</td><td>fees on almost nothing</td><td><strong>rent only</strong>, plus zero LVR</td><td>the blend</td></tr>
+        <tr><td><strong>You pay</strong></td><td>rent to everyone behind</td><td>rent, for nothing</td><td>nothing</td><td>nothing</td></tr>
+        <tr><td><strong>You profit when</strong></td><td>you can hedge the inventory</td><td style="color:var(--bad)"><strong>never</strong></td><td>the pool is toxic, or you'd have held the tokens anyway</td><td>the pool is benign</td></tr>
+        <tr><td><strong>You lose when</strong></td><td>arb markout &gt; ~126 bps</td><td style="color:var(--bad)"><strong>always</strong></td><td>you had a better use for the capital</td><td>the pool is toxic</td></tr>
+      </tbody>
+    </table>
+    <p class="small">
+      <strong>Should seats hold the same capital? No &mdash; equal seats are the mistake that creates
+      the trap.</strong> Size the head to the largest routine <em>arbitrage</em> trade (not the largest
+      retail trade, which maximises the head's rate but manufactures the dead zone). Then the head
+      absorbs the trap inside a profitable bundle and <strong>no middle seat exists</strong>. What is
+      left is <strong>two products, not 32</strong>: one head, one undifferentiated tail.
+      <span class="mono">MAX_SEATS = 32</span> is room for <em>participants</em>, not 32 things to sell.
+    </p>
+
+    <h3 style="margin-top:26px">The same book under three conditions</h3>
+<pre class="ascii">  Head sized correctly ($100k). Tail = $900k. Rates are per year IN BAND.
+
+                          BENIGN            NORMAL            TOXIC
+  arb markout             0 bps             60 bps            100 bps
+  pool net (pro-rata)     +54.8%            +11.0%            -18.3%
+  -----------------------------------------------------------------------
+  HEAD  (seat 1)          +109.5%           +109.5%           -12.0%
+        vs pro-rata       +54.7 pts         +98.5 pts         +6.3 pts
+        verdict           BUY               BUY, strongly     marginal
+
+  TAIL  (seats 2..n)      +16.6%            +6.8%             +2.7%
+        vs pro-rata       -38.2 pts         -4.2 pts          +21.0 pts
+        vs A WALLET       +16.6 pts         +6.8 pts          +2.7 pts
+        verdict           LP instead        close             BUY
+</pre>
+    <div class="verdict ok">
+      <strong>The tail's benchmark is the question the whole product turns on.</strong> Against an
+      ordinary LP position it only wins in a toxic pool. Against <strong>tokens sitting idle in a
+      treasury it wins every time</strong> &mdash; and that is the honest customer: capital that was
+      never going to LP, paid a coupon to sit somewhere it also provides depth and takes almost none
+      of the arbitrage loss.
+    </div>
+    <div class="verdict" style="margin-top:12px">
+      <strong>The test, against a real pool, with no model of ours.</strong> Buy the tail when your
+      pool loses more to arbitrageurs than <strong>~89% of what it collects in fees</strong>. Stop
+      above <strong>~168%</strong> &mdash; past that the head stops paying rent and a plain wallet
+      wins. Measure it from the pool's own history: mark inventory at t+5min on every swap, sum the
+      signed P&amp;L, divide by fees. A subgraph query. Stablecoin pairs: never. Volatile and
+      long-tail pairs: common.
+    </div>
+
+    <h3 style="margin-top:26px">What is honestly wrong with this</h3>
+    <ol class="small">
+      <li><strong>The pools where the tail pays are the pools rational LPs are already leaving.</strong>
+        The addressable market is people who have concluded LPing there loses money and want the
+        exposure anyway &mdash; and there are at most 31 of them, because the roster is capped.</li>
+      <li><strong>Routing viability and seat value are anti-correlated.</strong> QUEUE is routed only
+        where it is the deepest venue &mdash; long-tail pairs &mdash; which are exactly the pairs with
+        thin, adversely-selected flow. That, not the +48% gas, is the sharpest objection, and no
+        engineering closes it.</li>
+      <li><strong>The tail's protection fails in the event it most cares about.</strong> Untouched by
+        every move that does not reach it &mdash; and reaching it means the price is at the band edge.
+        (The traversal costs the tail 0.25% of capital against a pro-rata LP's 2.42%, a tenth, but it
+        is one event, not a stream.)</li>
+      <li><strong>Rent can never make the tail whole.</strong> Only <span class="mono">&theta; =
+        &tau;/(&tau;+k) = 29%</span> of the head's advantage moves backward; the rest is capitalised
+        into the seat price. &theta;&rarr;1 only as &tau;&rarr;&infin;. Rent is a discipline device,
+        not the tail's income &mdash; the income is the avoided arbitrage loss.</li>
+      <li><strong>A QUEUE LP cannot re-mint around the price</strong>, which every ordinary v4 LP can.
+        Fixed term. Roll it.</li>
+    </ol>
+
+    <h3 style="margin-top:22px">What would make this strong &mdash; none of it built</h3>
+    <table class="tbl">
+      <tbody>
+        <tr><td><strong>Marginal pricing instead of average</strong></td><td>Today every seat a trade reaches gets that trade's <em>average</em> price, so the tail gets no price advantage &mdash; only the option to sit out. Credit each seat the <em>segment it actually absorbed</em> and the tail systematically fills nearer the post-move price. This is what makes the tail a genuine senior tranche. <strong>A different allocator, not a parameter.</strong></td></tr>
+        <tr><td><strong>A correct <span class="mono">recenter()</span></strong></td><td>Worth ~20&times; on the tail's coupon by ending the fixed term. Attempted and <strong>not shipped</strong>: eight targeted tests passed, the invariant campaign did not.</td></tr>
+        <tr><td><strong>&tau; at 25&ndash;50%, not 10%</strong></td><td>Raises &theta; from 29% to 51&ndash;81%. Already a constructor argument.</td></tr>
+        <tr><td><strong>A big book</strong></td><td>The trap is a fixed ~$90k: 9% of a $1M book, 0.9% of a $10M one. Dilution is the only lever on it.</td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 
@@ -525,9 +712,9 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
           That is the mechanism behaving correctly, and it is also the point at which the price signal is
           censored. Unsolved, and not solvable inside this design.</p></div>
       <div class="lim"><h4>A typical swap costs 48% more compute — not 48% more of the trade</h4>
-        <p>Measured: 128,406 vs 86,820 on an identical pool with no hook. That is extra network work, not
+        <p>Measured: 128,625 vs 87,039 on an identical pool with no hook. That is extra network work, not
           a worse price and not a higher trading fee. It is the same at 1 seat as at 32.
-          Walking the whole line is a different bill: +8,070 per seat, 426,470 for all 32. L2 product.</p></div>
+          Walking the whole line is a different bill: +8,070 per seat, 764,200 for all 32. L2 product.</p></div>
       <div class="lim"><h4>32 seats — a professional venue, not every pool</h4>
         <p>32 desks can empty the book the way any thin market-maker list can pull quotes. They cannot
           seize it, pause it, or trap withdrawals — taking money out does not destroy the seat.
@@ -567,18 +754,59 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 /* ==========================================================================================
    The pool model. Full-range constant product, which is exactly what the hook custodies:
      token0 = L / sqrtP      token1 = L * sqrtP      L = sqrt(t0 * t1)
-   A zeroForOne swap of `amtIn` (0.30% fee) moves sqrtP and releases token1:
-     sqrtP' = L / (t0 + amtIn*0.997)      out1 = L * (sqrtP - sqrtP')
-   Validated against the deployed contract: 2500 in -> 3745.7 here, 3746.34 on chain (0.02%).
+   A zeroForOne swap of `amtIn` (0.30% fee) moves sqrtP down inside the band and releases token1.
+   The band is finite: on this roster it holds 6,000 token1 and is emptied by ~1,578 token0.
+   NOT VALIDATED AGAINST A DEPLOYMENT. The old note here quoted "2500 in -> 3746.34 on chain",
+   which was measured on the pre-band, full-range hook and is no longer a number about this
+   contract. It is removed rather than restated: an unverified claim of on-chain agreement is
+   worse than none.
    ========================================================================================== */
 const FEE = 0.003;
 
+/* The hook custodies a CONCENTRATED band, not the whole curve, so the pool model here is
+   concentrated-liquidity maths and not x*y=k. This matters: it is the difference between a demo
+   that is a picture of the contract and a demo that is a picture of a contract we deleted.
+
+   BAND_HALF_WIDTH is 960 ticks, so the band runs from p*1.0001^-960 to p*1.0001^+960
+   = [0.9084p, 1.1008p]. Reserves inside a range [pa, pb] at price p are
+
+     t0 = L(1/sqrt(p) - 1/sqrt(pb))        t1 = L(sqrt(p) - sqrt(pa))
+
+   L is taken as the MINIMUM of the two legs, which is what `_liquidityForAmounts` does.
+   A zeroForOne swap moves sqrt(p) down:  sqrt(p') = L*sqrt(p) / (L + dx*sqrt(p)),
+   floored at sqrt(pa) -- at which point the band's ENTIRE token1 stock is gone and any further
+   input is served by the wings (ordinary Uniswap), not by the queue. */
+const BAND_LO = Math.pow(1.0001, -960);   // 0.9084
+const BAND_HI = Math.pow(1.0001,  960);   // 1.1008
+
+function bandState(t0, t1){
+  if (t0 <= 0 || t1 <= 0) return null;
+  const p   = t1 / t0;                      // the pool's price, token1 per token0
+  const sp  = Math.sqrt(p);
+  const spa = Math.sqrt(p * BAND_LO);
+  const spb = Math.sqrt(p * BAND_HI);
+  const L0  = t0 / (1/sp - 1/spb);
+  const L1  = t1 / (sp - spa);
+  return { p, sp, spa, spb, L: Math.min(L0, L1) };
+}
+
+/* Input (gross of fee) that empties the band of token1 completely. Past this the queue has
+   nothing left to give and the trade is filled by ordinary Uniswap out in the wings. */
+function bandCapacity(t0, t1){
+  const b = bandState(t0, t1);
+  if (!b) return 0;
+  return b.L * (1/b.spa - 1/b.sp) / (1 - FEE);
+}
+
+/* token1 released by a zeroForOne swap of `amtIn` gross. CAPPED AT THE BAND: this is the
+   `_queueShare` clip, and leaving it out is literally mutation M70. */
 function swapOut(t0, t1, amtIn){
-  if (t0 <= 0 || t1 <= 0) return 0;
-  const L  = Math.sqrt(t0 * t1);
-  const sp = Math.sqrt(t1 / t0);
-  const sp2 = L / (t0 + amtIn * (1 - FEE));
-  return Math.max(0, Math.min(t1, L * (sp - sp2)));
+  const b = bandState(t0, t1);
+  if (!b) return 0;
+  const dx  = amtIn * (1 - FEE);
+  let sp2 = b.L * b.sp / (b.L + dx * b.sp);
+  if (sp2 < b.spa) sp2 = b.spa;             // the band is exhausted; the rest is the wings'
+  return Math.max(0, Math.min(t1, b.L * (b.sp - sp2)));
 }
 
 /* Front-first: rank 0 is emptied before rank 1 gives up anything. This is `_allocate`. */
@@ -708,7 +936,10 @@ function renderBook(give){
 
 szEl.addEventListener('input', renderCompare);
 document.getElementById('preset-small').onclick = () => { szEl.value = 60;   renderCompare(); };
-document.getElementById('preset-sweep').onclick = () => { szEl.value = 2500; renderCompare(); };
+// 1,578 token0 empties the band's whole 6,000 token1. The old preset was 2,500, set when the
+// hook held a FULL-RANGE position; against the band that is ~60% past total exhaustion, so the
+// page showed "3 swept, 2 untouched" for a trade that in fact empties every seat.
+document.getElementById('preset-sweep').onclick = () => { szEl.value = 1400; renderCompare(); };
 
 /* ================================================================== the grief demo */
 let openSeats  = [{who:'Market maker A', amt:'500 token0', att:false},
@@ -791,6 +1022,14 @@ document.getElementById('paidReset').onclick = () => {
    Rent paid by each priced seat to the seats behind, weighted by capital (the contract
    weights token0; capital is the stand-in). Last seat's rent, if it asks, sits unallocated. */
 const BK_TAU = 0.10;
+/* A buyer's cost of capital for a claim on ONE pool's flow. The fair-ask rule needs it:
+   a seat priced at P also bills rent tau*P forever, so V = A/(tau + k), NOT A/tau.
+   A/tau is the zero-discount-rate limit and it OVERSTATES the fair ask by (tau+k)/tau = 3.4x. */
+const BK_K = 0.24;
+/* Fraction of the front's advantage that the rent actually MOVES to the seats behind.
+   theta = tau/(tau+k) = 0.29. The other 71% is capitalised into the seat price and kept by
+   whoever sells it. theta -> 1 only as tau -> infinity: no Harberger rent can make the tail whole. */
+const BK_THETA = BK_TAU / (BK_TAU + BK_K);
 const BK_FEE = 0.003;
 const BK_CAP0 = [20000, 50000, 100000, 300000, 530000];
 const BK_ASK0 = [50000, 20000, 8000, 2000, 500];
@@ -864,7 +1103,7 @@ function renderBuyin(){
   const pNet = proFee.map((f,i) => (f - proMk[i]) * M);
   const extraM = qNet[rank] - pNet[rank];
   const extraY = extraM * 12;
-  const fair = extraY > 0 ? extraY / BK_TAU : 0;
+  const fair = extraY > 0 ? extraY / (BK_TAU + BK_K) : 0;
 
   const dEl = document.getElementById('bkDelta');
   if (extraM < 0) dEl.textContent = '−$' + Math.abs(Math.round(extraM)).toLocaleString('en-US');
@@ -881,7 +1120,7 @@ function renderBuyin(){
   else if (extraY <= 0) fairLine = 'This seat is a liability on this day. A rational holder asks near zero (and will, which censors the signal). Rent still billed on a positive ask is money given away.';
   else if (rel < 0.4) fairLine = 'UNDERPRICED. Rent is cheap relative to the extra P&L. A buyer takes you at your number and keeps the residual.';
   else if (rel > 2.5) fairLine = 'OVERPRICED. You are paying more rent than this day is worth. Anyone who wants the seat waits; you bleed.';
-  else fairLine = 'Inside a rough band of the extra P&L / τ. Not a valuation — a consistency check on this day only.';
+  else fairLine = 'Inside a rough band of extra P&L / (τ + k). Not a valuation — a consistency check on this day only.';
   document.getElementById('bkFairN').textContent = fairLine;
 
   const maxAbs = Math.max(...qNet.map(Math.abs), 1);
@@ -983,10 +1222,12 @@ async function ethCall(to, data){
   return j.result;
 }
 
-/* The four selectors this page needs, so it can read the chain with no library and no build step.
+/* The six selectors this page needs, so it can read the chain with no library and no build step.
    A HARDCODED SELECTOR IS A WRITER/READER PAIR THAT CAN DISAGREE, which on this project has been
-   wrong five times — so `test/queue/Frontend.t.sol` READS THIS FILE, extracts these four literals,
-   and asserts each against the compiler's own selector for the function. Rename a view on the hook
+   wrong five times — so `test/queue/Hygiene.t.sol` (`test_7_6`) READS THIS FILE, extracts these
+   literals, and asserts each against the compiler's own selector for the function.
+   (This comment used to name `test/queue/Frontend.t.sol`, which does not exist, and to say "four"
+   when six are declared. A pointer to a file a judge cannot find is worse than no pointer.) Rename a view on the hook
    and that test goes red here, rather than this page silently rendering zeros at a judge.
    The first draft of this block was written from memory and three of the four were wrong. */
 const S_RANKING = '0x92105b6e'; // ranking()
@@ -1009,6 +1250,16 @@ async function loadLive(addr){
   const cur1 = '0x' + poolRaw.slice(90, 130);
   const isBound = word(poolRaw, 5) !== 0n;
   if (!isBound) throw new Error('this hook has not been bound to a pool yet');
+  /* Words 6 and 7 are tickLower and tickUpper — THE BAND. The hook exposes them precisely so an
+     integrator can show what range it custodies, and this page used to read words 0, 1 and 5 and
+     throw the rest away, which made live mode exactly as band-blind as the simulation. Ticks are
+     int24 two's-complement in a 256-bit word, so sign-extend rather than reading them unsigned. */
+  const asInt24 = (v) => v >= (1n << 255n) ? Number(v - (1n << 256n)) : Number(v);
+  const tickLower = asInt24(word(poolRaw, 6));
+  const tickUpper = asInt24(word(poolRaw, 7));
+  STATE.band = { tickLower, tickUpper,
+                 lo: Math.pow(1.0001, tickLower), hi: Math.pow(1.0001, tickUpper),
+                 halfWidthTicks: (tickUpper - tickLower) / 2 };
   const d0 = Number(word(await ethCall(cur0, S_DECIMALS), 0));
   const d1 = Number(word(await ethCall(cur1, S_DECIMALS), 0));
   if (!(d0 <= 36 && d1 <= 36)) throw new Error('implausible token decimals: ' + d0 + '/' + d1);

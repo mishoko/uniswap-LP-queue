@@ -27,11 +27,12 @@ contract QueueHarness is QueueHook {
         Currency c1_,
         uint24 f,
         int24 sp,
+        int24 bhw,
         address[] memory roster,
         uint256 rb,
         uint256 rp,
         uint256 fw
-    ) QueueHook(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
+    ) QueueHook(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
 
     /// @dev TEST-ONLY. `_afterInitialize` now snaps a ±10% Uniswap band. Tests written against
     ///      a full-range blob (reentrancy, packing fuzz that walks the whole curve) call this
@@ -107,7 +108,15 @@ contract QueueHarness is QueueHook {
     /// @dev The Phase 1 solvency oracle. LAW 3 as amended: a raw PoolManager-balance conservation
     ///      test is BLIND to accrued protocol fees, which sit inside PoolManager's ERC20 balance
     ///      until collected. Redeeming for real is the assertion that cannot be fooled.
+    /// @dev TEST-ONLY. Burns whatever the position still holds so a suite can assert REDEEMABILITY
+    ///      (LAW 3, second corollary) rather than merely ledger conservation.
+    ///
+    ///      The zero guard lives HERE and not in `_burnPosition`, because this is the only caller in
+    ///      the project that can pass zero: a fully-withdrawn position has `liquidity == 0`, and
+    ///      poking an empty position reverts `CannotUpdateEmptyPosition` inside v4. The production
+    ///      caller (`_payOut`) is already behind `if (dl != 0)`.
     function redeemAll() external returns (uint256 g0, uint256 g1) {
+        if (liquidity == 0) return (0, 0);
         return _burnPosition(liquidity);
     }
 }

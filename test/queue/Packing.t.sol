@@ -20,11 +20,12 @@ contract WrappingQueueHook is QueueHarness {
         Currency c1_,
         uint24 f,
         int24 sp,
+        int24 bhw,
         address[] memory roster,
         uint256 rb,
         uint256 rp,
         uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, roster, rb, rp, fw) {}
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
 
     function _u128(uint256 x) internal pure override returns (uint128) {
         return uint128(x); // WRAPS

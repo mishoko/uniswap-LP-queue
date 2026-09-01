@@ -44,6 +44,11 @@ abstract contract QueueFixture is BaseTest {
     ///      mechanism at several values rather than defending this one (PLAN §B.10).
     ///      `FIRM_WINDOW` is a SECURITY parameter, not an economic one: it only has to exceed the
     ///      time a holder needs to see a buyout and react to it.
+    /// @dev Band half-width, now a DEPLOYMENT parameter rather than a contract constant. 960 ticks
+    ///      is the fixture's choice (~+10.08%/-9.16%), kept so every pre-existing measurement stays
+    ///      comparable; `Wings.t.sol` and the gas suite are what vary it.
+    int24 constant BAND_HALF_WIDTH = 960;
+
     uint256 constant RENT_BPS = 1_000; // 10%
     uint256 constant RENT_PERIOD = 365 days;
     uint256 constant FIRM_WINDOW = 1 hours;
@@ -57,7 +62,8 @@ abstract contract QueueFixture is BaseTest {
     /// @dev The fee-tier overload: a hook fixes its pool at construction, so a suite that needs a
     ///      pool on a different tier needs a hook built for that tier.
     function _ctorArgs(address[] memory roster, uint24 fee) internal view returns (bytes memory) {
-        return abi.encode(poolManager, c0, c1, fee, SPACING, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW);
+        return
+            abi.encode(poolManager, c0, c1, fee, SPACING, BAND_HALF_WIDTH, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW);
     }
 
     /// @dev The governance-parameter overload, for the τ sweep. §B.10 is explicit that τ must not be
@@ -67,7 +73,7 @@ abstract contract QueueFixture is BaseTest {
         view
         returns (bytes memory)
     {
-        return abi.encode(poolManager, c0, c1, FEE, SPACING, roster, bps, period, window);
+        return abi.encode(poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, bps, period, window);
     }
 
     Currency c0;
