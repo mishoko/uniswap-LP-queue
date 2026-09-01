@@ -34,8 +34,9 @@ contract SettleWithoutChargingHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function _settleSeat(uint256 seatId) internal override {
         Lease storage l = lease[seatId];
@@ -67,8 +68,9 @@ contract RentPaidAheadHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function _distributeRent(uint256 payerId, uint256 amount) internal override {
         uint256 held = unallocatedRent0;
@@ -111,8 +113,9 @@ contract NoFirmQuoteHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function buyPrice(uint256 seatId) public view override returns (uint256) {
         return lease[seatId].selfPrice;
@@ -132,8 +135,9 @@ contract RentFromSeatCapitalHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function _settleSeat(uint256 seatId) internal override {
         Lease storage l = lease[seatId];
@@ -147,6 +151,7 @@ contract RentFromSeatCapitalHook is QueueHarness {
         bool short_ = due > have;
         uint256 charged = short_ ? have : due;
         q[seatId].a0 = _u128(have - charged);
+        standing0 -= charged;
         l.lastSettled = uint64(block.timestamp);
         if (short_) {
             l.selfPrice = 0;
@@ -168,8 +173,9 @@ contract NoSettleAheadHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function addToSeatNoSettle(uint256 seatId, uint256 amount0, uint256 amount1) external nonReentrant {
         if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);

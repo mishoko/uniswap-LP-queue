@@ -21,8 +21,9 @@ contract FaceValueQueueHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     error FloatShort(uint256 want, uint256 have);
 

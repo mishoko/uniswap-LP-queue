@@ -286,17 +286,16 @@ contract AllocatorTest is QueueFixture {
 
     /// @dev Force a seat's token1 balance to zero, leaving token0 alone.
     ///
-    ///      Since Phase 5b a `Seat` is ONE slot — `a0` in the low 128 bits, `a1` in the high ones —
-    ///      where it used to be two. The base slot is read from the contract rather than assumed
-    ///      (PITFALLS: never hardcode a storage layout in a test), but the LAYOUT WITHIN the
-    ///      element still has to be written down somewhere, so the write is READ BACK THROUGH THE
-    ///      CONTRACT'S OWN VIEW. A future repacking makes this fail loudly instead of poking an
+    ///      A `Seat`'s BALANCES are one slot — `a0` in the low 128 bits, `a1` in the high ones —
+    ///      but the struct is three slots wide since Phase 7, so the element STRIDE lives in
+    ///      `QueueFixture._seatSlot` rather than here. The base slot is read from the contract
+    ///      rather than assumed (PITFALLS: never hardcode a storage layout in a test), and the
+    ///      write is READ BACK THROUGH THE CONTRACT'S OWN VIEW. A future repacking makes this fail loudly instead of poking an
     ///      unrelated slot and letting the swap revert for some other reason — which is exactly how
     ///      a negative control passes while proving nothing (LAW 2).
     function _zeroSeatToken1(uint256 i) internal {
         (uint256 a0,) = hook.seat(i);
-        bytes32 slot = bytes32(uint256(keccak256(abi.encode(hook.seatArraySlot()))) + i);
-        vm.store(address(hook), slot, bytes32(a0));
+        vm.store(address(hook), _seatSlot(i), bytes32(a0));
 
         (uint256 got0, uint256 got1) = hook.seat(i);
         assertEq(got0, a0, "seat layout moved: the poke clobbered token0");

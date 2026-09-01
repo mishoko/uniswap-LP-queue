@@ -24,8 +24,9 @@ contract WrappingQueueHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function _u128(uint256 x) internal pure override returns (uint128) {
         return uint128(x); // WRAPS
@@ -193,8 +194,7 @@ contract PackingTest is QueueFixture {
     ///      these two tests make is about the CAST.
     function _maxOutSeatToken0(uint256 id) internal {
         (, uint256 a1) = hook.seat(id);
-        bytes32 slot = bytes32(uint256(keccak256(abi.encode(hook.seatArraySlot()))) + id);
-        vm.store(address(hook), slot, bytes32((a1 << 128) | uint256(type(uint128).max)));
+        vm.store(address(hook), _seatSlot(id), bytes32((a1 << 128) | uint256(type(uint128).max)));
 
         (uint256 got0, uint256 got1) = hook.seat(id);
         assertEq(got0, type(uint128).max, "seat layout moved: token0 was not filled");

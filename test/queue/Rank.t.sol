@@ -29,8 +29,9 @@ contract ForgetfulTransferFromHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function transferFrom(address sender, address receiver, uint256 seatId, uint256) public override returns (bool) {
         if (seatHolder[seatId] != sender) revert NotSeatOwner(seatId, sender);
@@ -55,12 +56,13 @@ contract MintingDepositHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function deposit(uint256 amount0, uint256 amount1) external returns (uint256 seatId) {
         seatId = q.length;
-        q.push(Seat({a0: 0, a1: 0}));
+        q.push(Seat({a0: 0, a1: 0, snap0: 0, snap1: 0}));
         // The new seat joins the order at the TAIL. Phase 4 made rank an explicit permutation, so a
         // variant that grows the roster has to say where the new rank goes — this control is about
         // rank being MINTABLE, not about the order word being maintainable, so it maintains it.
@@ -84,8 +86,9 @@ contract LedgerOnlyEvacuationHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function _onSeatTransfer(uint256 seatId, address from) internal override {
         Seat storage s = q[seatId];
@@ -93,6 +96,8 @@ contract LedgerOnlyEvacuationHook is QueueHarness {
         pending1[from] += s.a1;
         pendingTotal0 += s.a0;
         pendingTotal1 += s.a1;
+        standing0 -= s.a0;
+        standing1 -= s.a1;
         s.a0 = 0;
         s.a1 = 0;
     }
@@ -110,8 +115,9 @@ contract UnguardedTransferHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function transfer(address receiver, uint256 seatId, uint256 amount) public override returns (bool) {
         if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);

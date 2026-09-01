@@ -31,8 +31,9 @@ contract QueueHarness is QueueHook {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHook(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHook(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     /// @dev TEST-ONLY. `_afterInitialize` now snaps a ±10% Uniswap band. Tests written against
     ///      a full-range blob (reentrancy, packing fuzz that walks the whole curve) call this
@@ -73,6 +74,15 @@ contract QueueHarness is QueueHook {
             q[i].a0 = _u128(a0);
             q[i].a1 = _u128(a1);
         }
+
+        // **THE SEVENTH WRITER.** Phase 7's premium accumulators are denominated by `standing0` /
+        // `standing1`, and every site in `src/` that moves a seat balance moves those with it. This
+        // function is the one balance writer that lives OUTSIDE `src/`, so it has to obey the same
+        // rule or the first swap underflows `standing -= amtOut` against a book it never counted.
+        // `acc0`/`acc1` are exactly `s0`/`s1` by the loop's own remainder line, and `seed` runs once
+        // on an empty roster, so this is an assignment rather than an increment.
+        standing0 = s0;
+        standing1 = s1;
     }
 
     /// @dev The storage slot of `q`, read from the contract rather than assumed. An earlier version

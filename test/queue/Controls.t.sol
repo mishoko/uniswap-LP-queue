@@ -30,7 +30,26 @@ contract MutantQueueHook is QueueHarness {
     ///      AVERAGE price, which is what this hook did before marginal pricing landed.
     uint8 public constant AVERAGE_PRICE = 5;
 
-    uint8 public immutable mode;
+    /// @dev **NOT a constructor argument, and not `immutable`, for two reasons that both bit.**
+    ///
+    ///      One: appending it took the constructor to twelve parameters and Solidity's ABI decoder
+    ///      ran out of stack decoding them (`headStart is 1 slot too deep`), with no file or line
+    ///      attached.
+    ///
+    ///      Two, and the one that matters: an extra argument forced this file to write out the
+    ///      constructor's shape a SECOND time instead of calling `_ctorArgs`. The note below used
+    ///      to explain why that was unavoidable and record that it had already broken once, when
+    ///      `bandHalfWidth` was added. It broke again, identically, when the premium was added.
+    ///      Two failures from one duplicated list is this project's own rule about a fact living in
+    ///      two places, applied to itself — so the list is gone and this deploys through the single
+    ///      shared builder like every other suite.
+    ///
+    ///      Zero is the unset sentinel and `_allocate` refuses to run on it, so a control whose mode
+    ///      was never set fails LOUDLY rather than quietly behaving like production and passing.
+    uint8 public mode;
+
+    error ModeUnset();
+    error ModeAlreadySet();
 
     constructor(
         IPoolManager pm,
@@ -43,8 +62,12 @@ contract MutantQueueHook is QueueHarness {
         uint256 rb,
         uint256 rp,
         uint256 fw,
-        uint8 m
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+
+    function setMode(uint8 m) external {
+        if (mode != 0) revert ModeAlreadySet();
+        if (m == 0) revert ModeUnset();
         mode = m;
     }
 
@@ -53,6 +76,8 @@ contract MutantQueueHook is QueueHarness {
     ///      a control is only worth anything if it differs from production in ONE place, and leaving
     ///      the indirection out would be a second difference waiting to matter.
     function _allocate(bool outIsOne, uint256 amtIn, uint256 amtOut) internal override {
+        // A control that silently ran production's allocator would be a green test proving nothing.
+        if (mode == 0) revert ModeUnset();
         uint256 n = q.length;
         uint256 start = outIsOne ? cursor1 : cursor0;
 
@@ -141,13 +166,21 @@ contract MutantQueueHook is QueueHarness {
         return g - assigned;
     }
 
+    /// @dev The mutants override `_allocate` wholesale, so they also take on production's duty to
+    ///      keep `standing0`/`standing1` in step with the balances. Skipping it would make every
+    ///      control differ from production in TWO places — the mutation, and a broken denominator —
+    ///      and a control that dies of the difference it is not testing proves nothing (LAW 2).
     function _apply(uint256 i, bool outIsOne, uint256 take, uint256 give) private {
         if (outIsOne) {
             q[i].a1 -= _u128(take);
             q[i].a0 = _u128(uint256(q[i].a0) + give);
+            standing1 -= take;
+            standing0 += give;
         } else {
             q[i].a0 -= _u128(take);
             q[i].a1 = _u128(uint256(q[i].a1) + give);
+            standing0 -= take;
+            standing1 += give;
         }
     }
 }
@@ -164,8 +197,9 @@ contract UnguardedQueueHook is QueueHarness {
         address[] memory roster,
         uint256 rb,
         uint256 rp,
-        uint256 fw
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw) {}
+        uint256 fw,
+        uint256 pb
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
     function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         internal
@@ -286,29 +320,8 @@ contract ControlsTest is QueueFixture {
 
     function _deployMutant(uint8 mode, uint160 nonce) internal {
         address a = address(FLAGS ^ (nonce << 144));
-        deployCodeTo(
-            "Controls.t.sol:MutantQueueHook",
-            // NOTE: this call site builds the argument list INLINE rather than through
-            // `_ctorArgs`, which is what QueueFixture's "one place the constructor argument list is
-            // written" comment exists to prevent. Adding `bandHalfWidth` broke exactly here, and
-            // the symptom was `deployCodeTo` failing to create runtime bytecode — a constructor
-            // ABI mismatch, reported as if the artifact were bad. `mode` is why it cannot simply
-            // call `_ctorArgs`; it appends one argument.
-            abi.encode(
-                poolManager,
-                c0,
-                c1,
-                FEE,
-                SPACING,
-                BAND_HALF_WIDTH,
-                _syntheticRoster(3),
-                RENT_BPS,
-                RENT_PERIOD,
-                FIRM_WINDOW,
-                mode
-            ),
-            a
-        );
+        deployCodeTo("Controls.t.sol:MutantQueueHook", _ctorArgs(_syntheticRoster(3)), a);
+        MutantQueueHook(a).setMode(mode);
         hook = QueueHarness(a);
         _fundHook(a);
     }
@@ -350,13 +363,21 @@ contract ControlsTest is QueueFixture {
             require(a0 == ref0[i], string.concat(tag, ": seat a0"));
             require(a1 == ref1[i], string.concat(tag, ": seat a1"));
         }
+        // THE CURSORS ARE RANKS. `seat()` is indexed by SEAT ID. Reading `seat(i)` here was right
+        // only while the two were the same number, and the mutant `_allocate` twenty lines above
+        // carries the comment saying exactly that about ITSELF — the indirection was put in there
+        // and left out here, which is this project's most repeated defect shape (PITFALLS 5.37,
+        // 5.50, 5.52 twice, 5.105) landing inside the instrument rather than the mechanism.
+        // `QueueFixture._checkInvariantC` already resolves rank -> id; this is its twin and now
+        // agrees with it. Latent today because these controls never foreclose; it would have gone
+        // green against a leading cursor the moment anything permuted `order`.
         (uint256 k0, uint256 k1) = hook.cursors();
         for (uint256 i; i < k0; i++) {
-            (uint256 a0,) = hook.seat(i);
+            (uint256 a0,) = hook.seat(hook.idAtRank(i));
             require(a0 == 0, string.concat(tag, ": INVARIANT C cursor0 leads"));
         }
         for (uint256 i; i < k1; i++) {
-            (, uint256 a1) = hook.seat(i);
+            (, uint256 a1) = hook.seat(hook.idAtRank(i));
             require(a1 == 0, string.concat(tag, ": INVARIANT C cursor1 leads"));
         }
     }

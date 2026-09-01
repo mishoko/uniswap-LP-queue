@@ -53,6 +53,41 @@ abstract contract QueueFixture is BaseTest {
     uint256 constant RENT_PERIOD = 365 days;
     uint256 constant FIRM_WINDOW = 1 hours;
 
+    /// @dev φ — the priority premium, **ZERO for the shared fixture, and that is a deliberate
+    ///      experimental control rather than a default worth shipping.**
+    ///
+    ///      At φ = 0 the Phase 7 machinery moves no VALUE: `_premiumOn` returns 0 on its first
+    ///      line, so no accumulator ever advances and every claim is zero. So every one of the 205
+    ///      tests written against the pre-Phase-7 contract must still pass UNCHANGED, and if one of
+    ///      them moves, the premium has leaked into a path it has no business touching. That is the
+    ///      only baseline against which "this is a strict extension" is a claim rather than a hope.
+    ///
+    ///      **It is NOT gas-free, and saying so was wrong the first time this comment was written.**
+    ///      `_syncSeat` still reads two marks and two growths per settled seat, which measured
+    ///      +170k on a cold 32-seat sweep. There is deliberately no `PREMIUM_BPS == 0` fast path:
+    ///      it would make the code the gas suite measures a different path from the one the product
+    ///      ships. `Gas.t.sol` therefore overrides this to the SHIPPING φ.
+    ///
+    ///      `Premium.t.sol` overrides it to exercise φ > 0 against its own reference model.
+    function _premiumBps() internal view virtual returns (uint256) {
+        return 0;
+    }
+
+    /// @dev Storage address of seat `id`'s BALANCE word.
+    ///
+    ///      `q` is a dynamic array of a TWO-slot struct since Phase 7 — `(a0, a1)` packed in the
+    ///      first, `(snap0, snap1)` in the second — so element `id` starts at `keccak(slot) + 2*id`. Two
+    ///      suites poke this directly and both had the stride written into them independently; when
+    ///      the struct grew from one slot to three, the copies were wrong in the same way at the
+    ///      same time. It is written HERE once, and every caller reads its poke back through the
+    ///      contract's own view so a future repacking fails loudly rather than silently addressing
+    ///      an unrelated slot (LAW 2).
+    uint256 constant SEAT_SLOTS = 2;
+
+    function _seatSlot(uint256 id) internal view returns (bytes32) {
+        return bytes32(uint256(keccak256(abi.encode(hook.seatArraySlot()))) + SEAT_SLOTS * id);
+    }
+
     /// @dev One place the constructor argument list is written. Every suite deploys through it, so
     ///      adding a parameter cannot leave one call site silently on an old shape.
     function _ctorArgs(address[] memory roster) internal view returns (bytes memory) {
@@ -62,8 +97,30 @@ abstract contract QueueFixture is BaseTest {
     /// @dev The fee-tier overload: a hook fixes its pool at construction, so a suite that needs a
     ///      pool on a different tier needs a hook built for that tier.
     function _ctorArgs(address[] memory roster, uint24 fee) internal view returns (bytes memory) {
-        return
-            abi.encode(poolManager, c0, c1, fee, SPACING, BAND_HALF_WIDTH, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW);
+        return abi.encode(
+            poolManager,
+            c0,
+            c1,
+            fee,
+            SPACING,
+            BAND_HALF_WIDTH,
+            roster,
+            RENT_BPS,
+            RENT_PERIOD,
+            FIRM_WINDOW,
+            _premiumBps()
+        );
+    }
+
+    /// @dev The φ overload. `Premium.t.sol` needs TWO hooks alive at once — one with the premium on
+    ///      and one with it off — because the only honest way to state what the premium does is as a
+    ///      difference against the same pool without it. A per-contract `_premiumBps()` cannot
+    ///      express that, and building the argument list by hand at the call site is the exact
+    ///      duplication that broke `Controls.t.sol` and `QueueDeployBase.sol`.
+    function _ctorArgsPremium(address[] memory roster, uint256 premiumBps) internal view returns (bytes memory) {
+        return abi.encode(
+            poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW, premiumBps
+        );
     }
 
     /// @dev The governance-parameter overload, for the τ sweep. §B.10 is explicit that τ must not be
@@ -73,7 +130,8 @@ abstract contract QueueFixture is BaseTest {
         view
         returns (bytes memory)
     {
-        return abi.encode(poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, bps, period, window);
+        return
+            abi.encode(poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, bps, period, window, _premiumBps());
     }
 
     Currency c0;
@@ -609,13 +667,26 @@ abstract contract QueueFixture is BaseTest {
     ///      holder immediately, so the term is normally zero; it is non-zero only for whatever the
     ///      position could not release on the spot. Leaving it out would let a whole class of
     ///      evacuation bug hide behind the residual tolerance.
+    ///      Phase 7 adds `premiumOwed`. A priority premium is withheld from the fill and credited
+    ///      to a seat only when that seat is next touched, so between those two moments the tokens
+    ///      are inside the position while no seat's ledger claims them. Counting them on the LEDGER
+    ///      side is what keeps this an EXACT identity rather than one that drifts by however much
+    ///      premium happens to be unsettled — `premiumOwed` is incremented by the whole pot and
+    ///      decremented by each claim, so the sum is conserved to the wei by construction.
+    ///
+    ///      **`totals()` is the RAW slot sum here, deliberately, and `seat()` is not.** `seat()`
+    ///      reports what a holder owns (raw + accrued); this identity needs the raw ledger plus the
+    ///      whole unsettled pot, and those are two different quantities. Adding `seat()`'s numbers
+    ///      instead would double-count every claim that has already been formed and still miss the
+    ///      rounding residue and the held-with-nobody-standing pot.
     function _checkInvariantF(string memory tag, uint256 tol) internal view {
         (uint256 t0, uint256 t1) = hook.totals();
         (uint256 f0, uint256 f1) = hook.floats();
         (uint256 w0, uint256 w1) = hook.pendingTotals();
+        (uint256 q0, uint256 q1,,) = hook.premiums();
         (uint256 p0, uint256 p1) = _positionValue();
-        assertApproxEqAbs(t0 + w0, p0 + f0, tol, string.concat(tag, ": INVARIANT F token0"));
-        assertApproxEqAbs(t1 + w1, p1 + f1, tol, string.concat(tag, ": INVARIANT F token1"));
+        assertApproxEqAbs(t0 + w0 + q0, p0 + f0, tol, string.concat(tag, ": INVARIANT F token0"));
+        assertApproxEqAbs(t1 + w1 + q1, p1 + f1, tol, string.concat(tag, ": INVARIANT F token1"));
     }
 
     /// @dev What the position would actually hand back: PRINCIPAL **plus UNCOLLECTED LP FEES**.

@@ -48,6 +48,16 @@ import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 /// its capital in the head showed the pool's own work moving ~12,000 gas over that range. One
 /// variable at a time, or the slope is measuring Uniswap rather than QUEUE.
 contract GasTest is QueueFixture {
+    /// @dev **THE GAS SUITE MEASURES THE CONFIGURATION THE PRODUCT SHIPS, NOT THE NULL CONTROL.**
+    ///      The rest of the suites run at φ = 0 so that Phase 7 can be shown to change no
+    ///      pre-existing behaviour. A budget measured there would be a budget for a contract nobody
+    ///      deploys — the premium's settle path costs real cold storage, and pretending otherwise is
+    ///      the same class of mistake as measuring gas inside a test body (LAW 4). This is
+    ///      `QueueDeployBase.PREMIUM_BPS`.
+    function _premiumBps() internal view virtual override returns (uint256) {
+        return 8_500;
+    }
+
     /// @dev The depths §B.9 tabulated, capped at `MAX_SEATS`. 50 is no longer reachable: Phase 3
     ///      fixed the roster at construction and bounded it at 32, so 32 IS the worst case rather
     ///      than a point on the way to one.
@@ -92,7 +102,24 @@ contract GasTest is QueueFixture {
     ///        a proxy for "a full sweep is an ordinary transaction". `test_5_3c` asserts that
     ///        directly, in absolute terms, on a completely cold fixture: 826,799 gas against an
     ///        850,000 ceiling. THAT is the number that binds, and it is the one to argue with.
-    uint256 internal constant BUDGET = 400_000;
+    /// @dev **RAISED 400,000 -> 550,000 IN PHASE 7, AND THE REASON IS A REAL COST, NOT A
+    ///      REGRESSION TO BE TUNED AWAY.** The priority premium settles each seat it walks against
+    ///      an accumulator, and an accumulator needs a per-seat MARK. That mark is one extra cold
+    ///      storage slot, measured at **+4,832 gas per seat walked** (slope 9,945 -> 14,777) — and a
+    ///      slot is 5,000 gas whatever it holds, so no amount of packing removes it. Marks for both
+    ///      tokens now share one slot; unpacked they cost twice this.
+    ///
+    ///      So the choice was between the roster and the budget, and the roster is not free to
+    ///      move: `MAX_SEATS == 32` is the 32 BYTES OF THE PACKED `order` WORD (`test_4_41` asserts
+    ///      that coupling), which is what lets a demotion rewrite the whole queue in one `SSTORE`.
+    ///      Shrinking it to 25 would buy nothing back — the word is one slot at any width — and
+    ///      would shrink the product's stated capacity to protect a number that was itself derived,
+    ///      not chosen. The budget moves.
+    ///
+    ///      What it costs: a full 32-seat sweep is the extreme case (a single trade draining the
+    ///      entire book) and is measured separately by `test_5_3c`. The number a trader actually
+    ///      pays is the head-only swap, and that went 128,848 -> 148,892, +15.6%.
+    uint256 internal constant BUDGET = 550_000;
 
     // One roster per depth per shape, all seeded in `setUp()`.
     QueueHarness[6] internal headHooks;
@@ -126,7 +153,11 @@ contract GasTest is QueueFixture {
     address internal constant BOB = address(0xB0B);
     address internal constant CARL = address(0xCA71);
 
-    function setUp() public {
+    QueueHarness steadyHook;
+    PoolKey steadyKey;
+    uint256 steadyT0;
+
+    function setUp() public virtual {
         deployArtifactsAndLabel();
         vm.roll(100);
         dec0 = 18;
@@ -147,6 +178,20 @@ contract GasTest is QueueFixture {
         _buildRankRoster();
         _buildDepositRoster();
         _buildPlainPool();
+
+        // The steady-state pool: built AND traded here, so the premium's global slots and the head
+        // seat's mark are already non-zero when `test_5_8` measures the next swap.
+        _build(4, 0xBB00);
+        (steadyHook, steadyKey, steadyT0) = (hook, k, expT0);
+        uint256 warmAmt = expT0 / HEAD_DIVISOR;
+        _coldSwap(warmAmt);
+
+        // The CONTROL pool gets the same treatment. A v4 pool's first swap writes its own
+        // fee-growth slots from zero too, so comparing a warmed QUEUE against a virgin plain pool
+        // would flatter QUEUE by exactly the costs this is meant to expose.
+        k = plainKey;
+        this.doSwap(true, warmAmt);
+        k = steadyKey;
     }
 
     /// @dev The control pool: identical tokens, fee, spacing, price and liquidity **over the same
@@ -435,10 +480,37 @@ contract GasTest is QueueFixture {
     ///
     ///      850,000 gas is 2.8% of a 30M block. A sweeping trade through QUEUE is priced like a
     ///      trade, not like an event — which is the whole claim the bounded roster has to support.
+    /// @notice **WHAT THE PREMIUM ACTUALLY COSTS A TRADER, IN STEADY STATE.**
+    ///
+    /// @dev Every other number in this suite is taken on a pool whose premium accumulators have
+    ///      never been written. That prices `premGrowth`, `premiumOwed` and the settled seat's mark
+    ///      at the EIP-2200 zero-to-nonzero rate of 20,000 gas each — costs a pool pays ONCE in its
+    ///      life, reported as if a trader paid them on every swap. It is the same class of error as
+    ///      measuring gas inside a test body (LAW 4): not a wrong number, an unrepresentative one.
+    ///
+    ///      So this measurement puts one swap through the pool in `setUp()` — committed as its own
+    ///      transaction, so the slots are clean-nonzero afterwards — and measures the NEXT swap.
+    ///      That is what the ten-thousandth trade costs.
+    ///
+    ///      **It is only meaningful against a control, and `PremiumOffGasTest` below is it**: the
+    ///      identical contract, the identical `setUp`, the identical swap, with φ = 0 as the single
+    ///      changed variable. Quoting this figure on its own would be quoting the router, the
+    ///      PoolManager and two ERC-20s along with the premium.
+    function test_5_8_theSteadyStatePremiumCost() public {
+        _select(steadyHook, steadyKey, steadyT0);
+        (uint256 gas,) = _coldSwap(expT0 / 400);
+        emit log_named_uint("head-only swap, premium slots already live", gas);
+    }
+
     function test_5_3c_aFullSweepIsAnOrdinaryTransaction() public {
         uint256 g = _sweepAt(5, 32);
         emit log_named_uint("full 32-seat sweep, complete tx, nothing warmed", g);
-        assertLt(g, 850_000, "a full sweep has stopped being an ordinary transaction");
+        // 850,000 -> 1,050,000 in Phase 7, for the per-seat mark costed in `BUDGET` above: 32 seats
+        // x 4,832 is 155k of the 132k this moved by. Measured 996,805 = 3.3% of a 30M block, so the
+        // claim this test defends — that a sweeping trade is priced like a trade rather than like an
+        // event — still holds. It is the only measurement here that is an absolute rather than a
+        // comparison, so it keeps paying every cold cost a real first transaction pays.
+        assertLt(g, 1_050_000, "a full sweep has stopped being an ordinary transaction");
     }
 
     /// @dev One sweep against the pre-built roster at index `i`, asserting it really did reach the
@@ -492,7 +564,12 @@ contract GasTest is QueueFixture {
         // whole dust-policy path for nothing). The bound sits between the two — 14% above the real
         // number, 10% below the mutant — and is DERIVED from both measurements. It was NOT chosen
         // and then checked: the first bound written here was 37,000, which the mutant passed.
-        assertLt(cost, 26_500, "a pure-rank transfer is walking the withdrawal path");
+        // 26,500 -> 30,000 in Phase 7. `_onSeatTransfer` settles the seat's accrued premium before
+        // it reads the balances, because that premium belongs to the DEPARTING holder — so even a
+        // pure-rank transfer now reads the two accumulators and the seat's mark. Measured 28,719.
+        // The early return this test exists to defend is still there and still load-bearing: the
+        // withdrawal path it skips is worth several times this whole number.
+        assertLt(cost, 30_000, "a pure-rank transfer is walking the withdrawal path");
     }
 
     /// @dev **THE WORST-CASE DEPOSIT.** `addToSeat` settles every PRICED seat ahead of it, and each
@@ -547,10 +624,21 @@ contract GasTest is QueueFixture {
     ///      Front-first allocation only walks the queue when a swap is big enough to exhaust the
     ///      head seat, and most are not; `test_5_1` is what makes "flat in depth" a measurement
     ///      rather than a hope.
+    /// @dev **MEASURED IN STEADY STATE ON BOTH SIDES SINCE PHASE 7, AND THAT CHANGED THE ANSWER BY
+    ///      MORE THAN THE PREMIUM DID.** Taken on pools that had never traded, this comparison read
+    ///      121%: it was charging QUEUE the one-time EIP-2200 zero-to-nonzero writes of the premium
+    ///      accumulators — 20,000 gas apiece, paid once in a pool's entire life — on a single swap,
+    ///      and charging the plain pool nothing equivalent because its fee-growth slots were virgin
+    ///      too. Both pools are now traded once in `setUp()`, which Forge commits as its own
+    ///      transaction, so this measures what the ten-thousandth trade costs rather than the first.
+    ///
+    ///      The head-only cost is flat in roster depth (148,871 at one seat, 148,892 at thirty-two,
+    ///      from `test_5_1`), so using the four-seat steady pool here measures the same thing the
+    ///      thirty-two-seat one would.
     function test_5_7_theOverheadAgainstAPlainPoolIsMeasured() public {
         _warmUp();
 
-        _select(headHooks[5], headKeys[5], headT0[5]);
+        _select(steadyHook, steadyKey, steadyT0);
         uint256 amount = expT0 / HEAD_DIVISOR;
         (uint256 queued, uint256 touched) = _coldSwap(amount);
         assertEq(touched, 1, "the control swap was not head-only");
@@ -574,7 +662,27 @@ contract GasTest is QueueFixture {
         // the head must not cost half as much again as an ordinary one.
         // A CEILING, so a regression is loud. 48% measured; 50% is the line past which the
         // overhead stops being a constant a trader can shrug at.
-        assertLt((queued - plain) * 100, plain * 50, "QUEUE's per-swap overhead has grown past 50%");
+        // **50% -> 140%, AND TWO SEPARATE THINGS MOVED IT. BOTH ARE REPORTED, NEITHER IS BURIED.**
+        //
+        // Measured here, steady state on both sides, same swap, same pool shape:
+        //
+        //        plain v4 pool                     69,970
+        //        QUEUE, phi = 0                   131,821    +88%
+        //        QUEUE, phi = 8,500               162,766   +133%
+        //
+        // The first move is a CORRECTION, not a regression: **QUEUE's overhead was never 48%.**
+        // That figure compared a QUEUE pool against a plain pool that had never traded, so the
+        // control was paying its own one-time fee-growth writes and the comparison flattered the
+        // hook. Against a plain pool in the same state, the pre-premium hook costs 88% more. The
+        // published number was wrong in the project's favour and is corrected here.
+        //
+        // The second move is the premium itself: 88% -> 133%, or +30,945 gas, isolated by
+        // `test_5_8` against the phi = 0 control. That is the real price of the mechanism that
+        // makes the other 31 seats worth funding, and it is a PRODUCT cost, not an implementation
+        // detail — routers rank by gas, a pool that costs 2.3x a hookless one to trade is a pool
+        // some of them skip, and skipped flow is fee income no allocator rule can give back. It
+        // belongs in the pitch. See BUSINESS.md.
+        assertLt((queued - plain) * 100, plain * 140, "QUEUE's per-swap overhead has grown past 140%");
     }
 
     /// @dev Ordinary least squares for y = a + b·x over the points from `from` onward. Written out
@@ -597,5 +705,16 @@ contract GasTest is QueueFixture {
         }
         slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
         intercept = (sy - slope * sx) / n;
+    }
+}
+
+/// @notice The φ = 0 control for `test_5_8`. Same contract, same `setUp`, same swap, one variable.
+///
+/// @dev Without it, `test_5_8` reports a number that includes the router, the PoolManager, Permit2
+///      and both ERC-20s, and the premium's share of it is anybody's guess. The DIFFERENCE between
+///      the two is the only thing either measurement is entitled to claim.
+contract PremiumOffGasTest is GasTest {
+    function _premiumBps() internal view override returns (uint256) {
+        return 0;
     }
 }

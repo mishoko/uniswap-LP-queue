@@ -66,6 +66,24 @@ abstract contract QueueDeployBase is CommonBase {
     uint256 internal constant RENT_PERIOD = 365 days;
     uint256 internal constant FIRM_WINDOW = 1 hours;
 
+    /// @dev φ — the share of the LP fee a filled seat hands to the seats still standing behind it.
+    ///      8,500 bps = 85%.
+    ///
+    ///      **THIS IS THE NUMBER THAT DECIDES WHETHER THE BACK OF THE BOOK IS WORTH FUNDING**, and
+    ///      it is not a round figure somebody liked. Measured per rank over 30 price paths, at
+    ///      φ = 0 between 24 and 29 of 32 seats lose money in every regime tested, because rank 0
+    ///      takes four orders of magnitude more turnover than the tail and keeps the whole fee on
+    ///      it. Swept across four INDEPENDENT seed ranges on a ±30% band over a 25%-vol pair,
+    ///      φ ≈ 0.85 is the only setting that put 0 of 32 seats negative on ALL FOUR, with a spread
+    ///      of 10–15 points.
+    ///
+    ///      The honest limits, because the earlier version of this project shipped a headline that
+    ///      held on one seed range and nowhere else: on a 45%-vol pair the same φ leaves 0–4 seats
+    ///      negative depending on the draw, and the best φ per configuration ranges 0.55–0.90. φ is
+    ///      a per-deployment parameter for that reason, and `docs/research/seat-economics/` carries
+    ///      the sweep rather than a single recommended constant.
+    uint256 internal constant PREMIUM_BPS = 8_500;
+
     /// @dev The canonical deterministic CREATE2 proxy. Verified to have code on Unichain Sepolia.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
@@ -118,15 +136,27 @@ abstract contract QueueDeployBase is CommonBase {
 
     // ------------------------------------------------------------------------ constructor args
 
-    /// @dev THE ONE PLACE THE NINE-ARGUMENT CONSTRUCTOR IS WRITTEN for deployment, mirroring
-    ///      `QueueFixture._ctorArgs`. Writing that list out by hand at a second call site is how a
-    ///      parameter gets silently reordered.
+    /// @dev THE DEPLOYMENT COPY OF THE CONSTRUCTOR ARGUMENT LIST, and the reason this comment is
+    ///      now a warning rather than a note.
+    ///
+    ///      There are three hand-written copies of this list in the repo — `QueueFixture._ctorArgs`,
+    ///      this one, and (until Phase 7 deleted it) one inside `Controls.t.sol`. Adding
+    ///      `bandHalfWidth` broke the third. Adding `premiumBps` broke this one AND the third, and
+    ///      **this one failed silently**: `abi.encode` is untyped, so a ten-argument payload against
+    ///      an eleven-argument constructor compiles, deploys, and decodes the missing parameter out
+    ///      of whatever bytes follow the roster's tail. The pool came up with a garbage φ and the
+    ///      only symptom was `test_7_5` reporting the demo's seller short by 2.4e15 wei.
+    ///
+    ///      A typed call would have been a compile error. If a fourth copy is ever needed, give the
+    ///      constructor a parameter STRUCT instead, so the compiler checks the shape.
     function _ctorArgs(IPoolManager pm, Currency c0, Currency c1, address[] memory roster)
         internal
         pure
         returns (bytes memory)
     {
-        return abi.encode(pm, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW);
+        return abi.encode(
+            pm, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW, PREMIUM_BPS
+        );
     }
 
     // --------------------------------------------------------------------------------- the steps
