@@ -76,22 +76,64 @@ CONCLUSION of 5.160 stands — priority is a direction bet, not a gain — and i
 * **The identity.** Capital-weighted return == the passive LP return, exactly. It is a TRANSFER.
 * **Priority is worth negative money to its holder** (the mirror control reproduces).
 
-### THE HONEST CURRENT NUMBER, still on the wrong premium basis
+### ✅ THE GATE IS CLEARED — the economics have been re-run on the contract's own premium rule
 
-`results-shipping.txt`, the SHIPPED roster (5 seats, 5:4:3:2:1, $333,333 head), φ = 8500 — fraction of
-(path, seat) cells in seats 2–5 beating a pro-rata LP: **BENIGN 80.0%, NORMAL 86.5%, TOXIC 75.8%.**
-All of seats 2–5 clear the bar from φ = 7455 (BENIGN) and φ = 4114 (NORMAL); **in TOXIC there is no φ
-at which they all clear it — s2 never does.**
+The gate this section used to set (*"re-run on `PREM_WEIGHT` matching the shipped contract, on the
+shipped roster, and re-derive `PREMIUM_BPS` from that"*) was executed in Phase 11. See PITFALLS
+5.178 and 5.180.
 
-### THE GATE BEFORE ANY PITCH
+`report_shipping_basis.py` imports `report_shipping.py` **unchanged** and re-runs it at
+`PREM_WEIGHT = 'liquidity_excl'`, the rule the hook implements (`_claims` reads `s.liquidity`,
+`QueueHook.sol:1356`; denominator `standingL - excludedL`, `:1154`). **Control: at φ = 0 no premium
+is withheld and the weight vector is never read, so the φ = 0 column must be identical between the
+two runs — it is, in every row of every table, both sides, all three regimes.**
 
-**Re-run the economics on `PREM_WEIGHT` matching the shipped contract, on the shipped roster, and
-re-derive `PREMIUM_BPS` from that.** Until then the mechanism claim is sayable and no magnitude is.
+The feasible window moved, and **`PREMIUM_BPS` has been changed 7,900 → 5,100** accordingly:
+
+| regime | old window (stale basis) | **new window (contract's basis)** |
+|---|---|---|
+| BENIGN | [7455, 8312] | **[4542, 5670]** |
+| NORMAL | [4114, 8921] | **[2560, 6251]** |
+| TOXIC | EMPTY | **EMPTY** — s2 never clears the LP |
+
+### THE NUMBERS WE QUOTE — shipped roster, contract's basis, φ = 5,100
+
+**Source: `results-shipping-basis.txt`. Roster: 5 seats, 5:4:3:2:1, $333,333 head, c₁ = 1/3.
+Every row below names that fixture; 5.163 and 5.179 exist because rows that did not, drifted.**
+
+| regime | band life | passive LP | rank 1 (the subsidiser) | seats 2–5, capital-weighted | (path,seat) cells beating LP |
+|---|---|---|---|---|---|
+| BENIGN | 61.0 d | +5.02% | +3.28% (**−1.74 pp**) | **+0.87 pp** | 68.1% |
+| NORMAL | 19.1 d | +0.49% | −2.40% (**−2.89 pp**) | **+1.47 pp** | 84.8% |
+| TOXIC | 1.4 d | −2.17% | −3.70% (**−1.53 pp**) | **+0.73 pp** | 75.8% |
+
+**THE ONE NUMBER TO LEAD WITH, because it needs no simulator and cannot be quoted against the wrong
+fixture.** From the identity `Σ cᵢrᵢ = LP`:
+
+> `back's excess = c₁·(LP − r₁) / (1 − c₁)`  →  at c₁ = 1/3, **one point the front gives up buys the
+> back exactly half a point.**
+
+Verified against the contract-basis sweep in all three regimes: closed form **+0.87 / +1.44 / +0.77**
+against simulated **+0.87 / +1.47 / +0.73**. It is invariant to the premium weighting, because the
+premium is a transfer *inside* the book.
+
+**AND THE DIVERGENCE WAS NOT ALL BAD NEWS.** The contract's real rule is materially better at moving
+value backward than the basis we had been measuring: all of seats 2–5 clear the LP from φ = 4,542 in
+BENIGN (was 7,455) and 2,560 in NORMAL (was 4,114). Less premium buys more subordination.
+
+**WHAT IS STILL NOT SAYABLE.** `results-tranche.txt` and `results-book.txt` have NOT been re-run on
+the contract's basis, so no per-seat number from either is quotable. `report_depth_basis.py` answers
+the depth question and its run was still staging when Phase 11 ended.
 
 ### WHAT WE MUST NEVER CLAIM — each of these is disproven in this repo
 
 * ❌ "LPs earn more here." The capital-weighted average IS the passive LP return, by identity.
-* ❌ "Better execution / priority is valuable to the holder." Priority costs ~476 bps (5.160).
+* ❌ "Better execution / priority is valuable to the holder." Priority is worth NEGATIVE money to
+  its holder — but **do not quote "476 bps"**: `results-book.txt` was committed EMPTY and, when
+  regenerated, 5.160's LP bar of +135.9 bps does not exist (+50.2 does) and its rows mix φ blocks
+  (PITFALLS 5.177). Computed consistently the two-ended BOOK costs **392 bps**, and **what we
+  actually ship costs 133 bps**. The direction and the monotonicity reproduce; the magnitude did
+  not.
 * ❌ "A senior tranche with protected downside." Downdev ratio 0.0–1.6× and the TAIL IS WORSE (5.174).
 * ❌ Any per-seat number without naming its roster. Three are in play (5.163); four retractions came
   from mixing them.
