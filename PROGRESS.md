@@ -21,7 +21,7 @@ Newest entry first. Never delete an entry — supersede it.
 | 8 | Evacuation attack + premium hold branch | **CODE COMPLETE 2026-09-02** | **PARTLY** — 242 tests. `withdraw` now demotes; `_accruePremium` releases incrementally. **TWO EVACUATION DOORS REMAIN OPEN — PITFALLS 5.123.** |
 | 10 | Value question CLOSED + all four open defects fixed | **COMPLETE 2026-09-02** | **YES** — 311 tests, 0 failed. Four defects fixed at the root, 11 tests inverted, 3 new. The constrained-buyer door closed by MEASUREMENT (PITFALLS 5.160) |
 | 9 | Evacuation doors + the closed-form surplus | **COMPLETE 2026-09-02** | **PARTLY** — 308 tests. Ten defects found; four left OPEN and all four are now closed by Phase 10 |
-| 11 | Handoff §3.2/§3.3 closed + the solvency meter repaired | **COMPLETE 2026-09-02** | **YES** — 314 tests, 0 failed. INVARIANT W written down (5.175, closes 5.164), the campaign aimed at the premium (5.133 closed), and `_noteSolvency`'s missing `premiums()` found and fixed (5.176). `src/` untouched |
+| 11 | Handoff §3.2/§3.3 closed + the economics re-measured on the contract's own premium rule | **COMPLETE 2026-09-02** | **YES** — 316 tests, 0 failed. INVARIANT W (5.175, closes 5.164); campaign aimed at the premium (5.133 closed); solvency meter repaired (5.176); `results-book.txt` was the EMPTY BLOB and 5.160 partly does not reproduce (5.177); **every published φ number was on a replaced basis (5.178) so `PREMIUM_BPS` was re-derived 7,900 → 5,100 (5.180)**; the flagship application is takeable for gas (5.181); a third φ mirror made the quoted gas figure wrong (5.182). `src/` untouched throughout |
 | 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-02** | **PARTLY** — 224 tests. **THE MECHANISM IS SOUND AND THE BUSINESS CASE IS MISSING** — the 32 seats share one LP position, so they can at best TIE with not using the hook; the priority premium fixed the distribution (29/32 losing → 0/32) but creates no reason to participate. Next session is a BRAINSTORM for an outside payer, not a build. See `docs/research/seat-economics/VALUE.md`. Earlier note: 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
@@ -30,7 +30,7 @@ Newest entry first. Never delete an entry — supersede it.
 
 ## PHASE 11 — 2026-09-02. THE TWO OUTSTANDING HANDOFF ITEMS CLOSED, AND THE SOLVENCY METER WAS WRONG.
 
-**Status: code work COMPLETE. Suite 314 passed / 0 failed / 1 skipped (was 311/0/1). `src/` UNTOUCHED,
+**Status: COMPLETE. Suite 316 passed / 0 failed / 1 skipped (was 311/0/1). `src/` UNTOUCHED,
 so the 85-case mutation campaign is unaffected and was not re-run. Read `PITFALLS.md` 5.175, 5.176.**
 
 ### 1. INVARIANT W — and 5.164's recorded safety argument was dead (PITFALLS 5.175, closes 5.164)
@@ -83,7 +83,64 @@ into a second file is the one-rule-two-places hazard this repo has paid for nine
 is exactly what that hazard looks like when it lands in an instrument. Front-first (I4) and per-seat
 composition stay covered by the fixture's witness in the directed suites.
 
-### 3. NOT ASKED FOR, AND THE REAL FIND: the campaign's solvency meter omitted the premium (5.176)
+### 3b. THE SESSION'S LARGEST FINDING: every published φ number measured a rule the contract replaced
+
+`sim.py:66` defaults `PREM_WEIGHT = 'inventory'`. The hook weights the premium by **contributed
+liquidity with the payers excluded** and has since Phase 8. `report_shipping.py`, `report_tranche.py`
+and `book_report.py` never override the default — so `results-shipping.txt`, `results-tranche.txt`,
+`results-book.txt`, the feasible window `[7455, 8312]` and the shipped `PREMIUM_BPS = 7,900` derived
+as its midpoint were all measured on a rule the deployed contract does not implement.
+
+**The repo already knew.** `report_depth_basis.py` says exactly this in its own header — and had
+never been run, because it only prints to stdout and nobody redirected it. A research script whose
+output is not a committed file has not been run, however finished it looks.
+
+Both basis sweeps were run this session. Controls pass in both (at φ = 0 the weight vector is never
+read, so the φ = 0 column must be identical — it is, `0.000e+00` worst disagreement).
+
+| regime | old window (stale basis) | new window (contract's basis) |
+|---|---|---|
+| BENIGN | [7455, 8312] | **[4542, 5670]** |
+| NORMAL | [4114, 8921] | **[2560, 6251]** |
+| TOXIC | EMPTY | **EMPTY** — s2 never clears the LP |
+
+**`PREMIUM_BPS` re-derived 7,900 → 5,100** (owner-authorised). The old value sat 2,230 bps above the
+top of the real window. **And the divergence was not all bad news:** the contract's real rule is
+materially better at moving value backward — all of seats 2–5 clear the LP from φ = 4,542 in BENIGN
+(was 7,455). Less premium buys more subordination.
+
+### 3c. `results-book.txt` was the EMPTY GIT BLOB
+
+The evidence for PITFALLS 5.160 — the result that closed the last value door — was committed at zero
+bytes and was the only empty tracked file in the repo. `book_report.py` opens its output in mode `w`
+at the top of `main()`, truncating before it computes, with no `finally` and no `os.replace`. That is
+5.79's lesson, applied to `mutate.py` and never generalised to the tools that write the evidence.
+
+Regenerated. **The load-bearing falsification control reproduces exactly** (`+4.487 pp`, t = +61.96
+against `−1.277 pp`, t = −20.10). **Three of 5.160's numbers do not:** its LP bar of +135.9 bps
+appears nowhere (+50.2 does), its rows mix φ blocks, and `−476 bps` computes as **391.9** — while the
+figure for what we actually **ship** is **132.7 bps**. 5.160 amended in place.
+
+### 3d. The flagship application is takeable for gas (5.181, PROVEN)
+
+`buySeat(frontSeat, 0, 0)` from any stranger: costs zero, evacuates the subsidiser's capital out of
+the position, drops pool depth, demotes the emptied seat to the tail — **and promotes whoever was
+second into the front**, so by `Σ cᵢrᵢ = LP` the external LP who bought a *subordinated back seat* is
+moved into the first-loss position. Not a contract defect — `buyPrice`'s docblock calls the free take
+the deliberate bootstrap — but fatal to an application that asks a protocol to hold the front for
+months. **Remedy is operational: price the seat in the transaction that funds it, and pay rent.**
+`test_4_44`, every link asserted.
+
+### 3e. A third mirror of φ, and the gas figure we quote (5.182)
+
+`Gas.t.sol` hardcoded 8,500 as well, so the `+119%` caveat was measured at a φ we do not ship.
+Re-measured at 5,100: **153,177 vs 69,970 = +119%**. The headline survived because the premium's gas
+cost is the machinery, not the rate — 2,800 bps of φ moved it by 230 gas. Also cleared: 17 stale
+`+133% / 162,766` instances, `199 tests / 74 mutations`, the `recycle 122–543×` sentence 5.162 named,
+a retracted `~1%/yr` still sitting in BUSINESS.md's **SAY** box, and a `Ranks 2–5: LP + ~0.25 pp` row
+wrong by ~3.5×.
+
+### 3. NOT ASKED FOR: the campaign's solvency meter omitted the premium (5.176)
 
 `QueueHandler._noteSolvency` computed `owed = totals + pending` against `backing = positionValue +
 float` — **leaving out `premiumOwed`, the identical omission `invariant_I2_solvency` names in its own
