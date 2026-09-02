@@ -1,0 +1,208 @@
+====================================================================================================
+THE DEPTH SWEEP ON THE PREMIUM BASIS THE CONTRACT ACTUALLY IMPLEMENTS
+====================================================================================================
+  PREM_WEIGHT = 'liquidity_excl' -- contributed liquidity, the ranks this fill paid
+  excluded, pot HELD when every seat is excluded. Confirmed against QueueHook.sol at
+  lines 1150 / 1154 / 1494. results-depth.txt and results-shipping.txt are both on
+  PREM_WEIGHT = 'inventory', which the contract replaced in Phase 8.
+
+  N in (2, 5, 8, 16, 32), schedules ('LINEAR', 'EQUAL'), 120 paths, phi grid (0, 2000, 4000, 6000, 8000, 9500).
+  Same seeds, same regimes, same wing engine, same pro-rata baselines as
+  results-depth.txt -- the ONLY difference is the premium's weight vector.
+
+====================================================================================================
+1.  THE phi = 0 CONTROL -- the basis switch must be INVISIBLE where no premium is paid
+====================================================================================================
+  At phi = 0 nothing is withheld and the weight vector is never read, so every seat's
+  mean return must be BIT-IDENTICAL to the inventory-basis run. This is the control
+  that goes RED if setting PREM_WEIGHT reached something it must not reach, or if the
+  two runs are not actually on the same seeds.
+
+    sched  regime    N     max |basis - inventory| over all seats
+   LINEAR  BENIGN    2                                  0.000e+00
+   LINEAR  BENIGN    5                                  0.000e+00
+   LINEAR  BENIGN    8                                  0.000e+00
+   LINEAR  BENIGN   16                                  0.000e+00
+   LINEAR  BENIGN   32                                  0.000e+00
+
+   LINEAR  NORMAL    2                                  0.000e+00
+   LINEAR  NORMAL    5                                  0.000e+00
+   LINEAR  NORMAL    8                                  0.000e+00
+   LINEAR  NORMAL   16                                  0.000e+00
+   LINEAR  NORMAL   32                                  0.000e+00
+
+   LINEAR   TOXIC    2                                  0.000e+00
+   LINEAR   TOXIC    5                                  0.000e+00
+   LINEAR   TOXIC    8                                  0.000e+00
+   LINEAR   TOXIC   16                                  0.000e+00
+   LINEAR   TOXIC   32                                  0.000e+00
+
+    EQUAL  BENIGN    2                                  0.000e+00
+    EQUAL  BENIGN    5                                  0.000e+00
+    EQUAL  BENIGN    8                                  0.000e+00
+    EQUAL  BENIGN   16                                  0.000e+00
+    EQUAL  BENIGN   32                                  0.000e+00
+
+    EQUAL  NORMAL    2                                  0.000e+00
+    EQUAL  NORMAL    5                                  0.000e+00
+    EQUAL  NORMAL    8                                  0.000e+00
+    EQUAL  NORMAL   16                                  0.000e+00
+    EQUAL  NORMAL   32                                  0.000e+00
+
+    EQUAL   TOXIC    2                                  0.000e+00
+    EQUAL   TOXIC    5                                  0.000e+00
+    EQUAL   TOXIC    8                                  0.000e+00
+    EQUAL   TOXIC   16                                  0.000e+00
+    EQUAL   TOXIC   32                                  0.000e+00
+
+  WORST phi=0 disagreement anywhere: 0.000e+00   PASS
+
+====================================================================================================
+2.  HOW MUCH THE BASIS MOVES A SEAT, at phi = 9500
+====================================================================================================
+  If this were small the whole question would be moot. It is not.
+    sched  regime    N    r1 inv  r1 basis     delta    s2 inv  s2 basis     delta  tail inv  tail basis
+   LINEAR  BENIGN    2    +3.27%    -3.32%    -6.59p    +8.54%   +21.72%   +13.18p    +8.54%     +21.72%
+   LINEAR  BENIGN    5    +0.10%    -6.52%    -6.62p    +6.42%   +10.25%    +3.83p    +9.65%     +11.63%
+   LINEAR  BENIGN    8    -2.75%    -9.24%    -6.49p    +6.11%    +8.05%    +1.94p    +9.75%     +10.08%
+   LINEAR  BENIGN   16    -9.24%   -15.13%    -5.89p    +4.59%    +4.60%    +0.01p    +9.76%      +8.92%
+   LINEAR  BENIGN   32   -19.15%   -23.63%    -4.48p    +1.35%    -0.18%    -1.53p    +9.76%      +8.43%
+
+   LINEAR  NORMAL    2    -0.91%    -3.55%    -2.64p    +3.27%    +8.55%    +5.28p    +3.27%      +8.55%
+   LINEAR  NORMAL    5    -3.83%    -6.36%    -2.54p    +1.85%    +3.22%    +1.37p    +4.25%      +5.26%
+   LINEAR  NORMAL    8    -6.50%    -8.89%    -2.39p    +1.60%    +2.18%    +0.58p    +4.27%      +4.67%
+   LINEAR  NORMAL   16   -12.40%   -14.35%    -1.95p    +0.20%    -0.08%    -0.29p    +4.26%      +4.09%
+   LINEAR  NORMAL   32   -19.38%   -20.75%    -1.37p    -4.89%    -5.56%    -0.67p    +4.27%      +3.87%
+
+   LINEAR   TOXIC    2    -3.07%    -3.28%    -0.20p    -0.37%    +0.01%    +0.38p    -0.37%      +0.01%
+   LINEAR   TOXIC    5    -3.88%    -4.06%    -0.19p    -2.44%    -2.34%    +0.10p    +0.76%      +0.90%
+   LINEAR   TOXIC    8    -4.19%    -4.37%    -0.17p    -3.07%    -3.01%    +0.06p    +0.84%      +1.02%
+   LINEAR   TOXIC   16    -4.82%    -4.98%    -0.16p    -3.48%    -3.47%    +0.01p    +0.84%      +0.87%
+   LINEAR   TOXIC   32    -5.74%    -5.86%    -0.12p    -3.84%    -3.89%    -0.05p    +0.84%      +0.78%
+
+    EQUAL  BENIGN    2    +2.22%    -4.21%    -6.43p    +7.83%   +14.26%    +6.42p    +7.83%     +14.26%
+    EQUAL  BENIGN    5    -3.63%   -10.03%    -6.41p    +5.96%    +7.59%    +1.63p    +9.03%      +9.58%
+    EQUAL  BENIGN    8    -8.49%   -14.44%    -5.95p    +4.75%    +4.96%    +0.21p    +9.30%      +8.86%
+    EQUAL  BENIGN   16   -18.67%   -23.22%    -4.55p    +1.69%    +0.23%    -1.46p    +9.67%      +8.45%
+    EQUAL  BENIGN   32   -29.02%   -31.93%    -2.91p    -8.31%   -10.13%    -1.82p    +9.74%      +8.24%
+
+    EQUAL  NORMAL    2    -1.99%    -4.43%    -2.44p    +2.96%    +5.40%    +2.44p    +2.96%      +5.40%
+    EQUAL  NORMAL    5    -7.39%    -9.70%    -2.32p    +1.55%    +2.01%    +0.46p    +3.62%      +3.88%
+    EQUAL  NORMAL    8   -11.78%   -13.78%    -1.99p    +0.55%    +0.34%    -0.21p    +4.00%      +3.90%
+    EQUAL  NORMAL   16   -19.07%   -20.46%    -1.39p    -4.50%    -5.17%    -0.67p    +4.25%      +3.94%
+    EQUAL  NORMAL   32   -25.34%   -26.23%    -0.89p   -12.80%   -13.34%    -0.54p    +4.27%      +3.85%
+
+    EQUAL   TOXIC    2    -3.48%    -3.60%    -0.12p    -0.87%    -0.76%    +0.11p    -0.87%      -0.76%
+    EQUAL   TOXIC    5    -4.28%    -4.44%    -0.16p    -3.14%    -3.07%    +0.07p    +0.13%      +0.05%
+    EQUAL   TOXIC    8    -4.75%    -4.91%    -0.15p    -3.45%    -3.42%    +0.02p    +0.47%      +0.38%
+    EQUAL   TOXIC   16    -5.70%    -5.81%    -0.12p    -3.81%    -3.85%    -0.04p    +0.77%      +0.70%
+    EQUAL   TOXIC   32    -6.66%    -6.74%    -0.08p    -4.73%    -4.77%    -0.04p    +0.84%      +0.81%
+
+====================================================================================================
+3.  THE WINDOW AT EVERY DEPTH, on the contract's basis
+====================================================================================================
+  --- LINEAR / BENIGN ---   pro-rata LP +5.02% (se 0.573pp)   in-band life 61.0d
+     N  head/book   r1@phi=0    r1@9500  wing bar    front<=     back>=           window   binding   gap@9500       t
+     2      66.7%       7.4%      -3.3%   -11.54%   no bound       2104    [2104, 9500+]        s2    +16.70pp    +9.0
+     5      33.3%      14.7%      -6.5%    +2.00%       5670       4542     [4542, 5670]        s2     +5.22pp    +4.4
+     8      22.2%      21.9%      -9.2%    +4.59%       5259       5662    EMPTY (cross)        s2     +3.03pp    +2.8
+    16      11.8%      41.7%     -15.1%    +6.82%       5756      NEVER            EMPTY        s2     -0.43pp    -0.5
+    32       6.1%      80.3%     -23.6%   +13.04%       5955      NEVER            EMPTY      s2+1     -5.20pp    -7.8
+
+  --- LINEAR / NORMAL ---   pro-rata LP +0.49% (se 0.271pp)   in-band life 19.1d
+     N  head/book   r1@phi=0    r1@9500  wing bar    front<=     back>=           window   binding   gap@9500       t
+     2      66.7%       0.9%      -3.6%   -13.67%   no bound        788     [788, 9500+]        s2     +8.07pp    +8.6
+     5      33.3%       2.2%      -6.4%    -3.46%       6252       2565     [2565, 6252]        s2     +2.73pp    +4.2
+     8      22.2%       3.5%      -8.9%    -1.72%       3960       3170     [3170, 3960]        s2     +1.69pp    +2.8
+    16      11.8%       6.9%     -14.4%    -0.33%       3161      NEVER            EMPTY        s2     -0.57pp    -1.3
+    32       6.1%      15.0%     -20.7%    +0.37%       3680      NEVER            EMPTY      s2+1     -6.05pp    -9.6
+
+  --- LINEAR / TOXIC ---   pro-rata LP -2.17% (se 0.022pp)   in-band life 1.4d
+     N  head/book   r1@phi=0    r1@9500  wing bar    front<=     back>=           window   binding   gap@9500       t
+     2      66.7%      -2.8%      -3.3%    -7.16%   no bound          0       [0, 9500+]        s2     +2.18pp   +45.2
+     5      33.3%      -3.3%      -4.1%    -3.41%       1636      NEVER            EMPTY        s2     -0.17pp    -3.6
+     8      22.2%      -3.3%      -4.4%    -2.85%    below@0      NEVER            EMPTY      s2+1     -0.84pp   -14.4
+    16      11.8%      -3.1%      -5.0%    -2.42%    below@0      NEVER            EMPTY      s2+3     -1.29pp   -15.8
+    32       6.1%      -2.8%      -5.9%    -2.22%    below@0      NEVER            EMPTY      s2+8     -1.72pp   -18.8
+
+  --- EQUAL / BENIGN ---   pro-rata LP +5.02% (se 0.573pp)   in-band life 61.0d
+     N  head/book   r1@phi=0    r1@9500  wing bar    front<=     back>=           window   binding   gap@9500       t
+     2      50.0%       9.9%      -4.2%    -2.99%       8669       3264     [3264, 8669]        s2     +9.23pp    +6.8
+     5      20.0%      24.4%     -10.0%    +5.08%       5304       6046    EMPTY (cross)        s2     +2.56pp    +2.4
+     8      12.5%      39.2%     -14.4%    +6.67%       5697      NEVER            EMPTY        s2     -0.06pp    -0.1
+    16       6.2%      77.9%     -23.2%   +12.79%       5932      NEVER            EMPTY      s2+1     -4.80pp    -7.2
+    32       3.1%     153.8%     -31.9%   +21.84%       6389      NEVER            EMPTY      s2+4    -15.15pp   -14.6
+
+  --- EQUAL / NORMAL ---   pro-rata LP +0.49% (se 0.271pp)   in-band life 19.1d
+     N  head/book   r1@phi=0    r1@9500  wing bar    front<=     back>=           window   binding   gap@9500       t
+     2      50.0%       1.2%      -4.4%    -7.05%   no bound       1248    [1248, 9500+]        s2     +4.91pp    +6.9
+     5      20.0%       3.9%      -9.7%    -1.41%       3655       3203     [3203, 3655]        s2     +1.53pp    +2.6
+     8      12.5%       6.4%     -13.8%    -0.43%       3157      NEVER            EMPTY        s2     -0.14pp    -0.3
+    16       6.2%      14.5%     -20.5%    +0.35%       3644      NEVER            EMPTY      s2+1     -5.65pp    -9.5
+    32       3.1%      32.2%     -26.2%    +0.72%       4769      NEVER            EMPTY      s2+4    -13.83pp   -12.9
+
+  --- EQUAL / TOXIC ---   pro-rata LP -2.17% (se 0.022pp)   in-band life 1.4d
+     N  head/book   r1@phi=0    r1@9500  wing bar    front<=     back>=           window   binding   gap@9500       t
+     2      50.0%      -3.1%      -3.6%    -4.69%   no bound          0       [0, 9500+]        s2     +1.41pp   +33.1
+     5      20.0%      -3.2%      -4.4%    -2.75%    below@0      NEVER            EMPTY      s2+1     -0.89pp   -15.4
+     8      12.5%      -3.1%      -4.9%    -2.45%    below@0      NEVER            EMPTY      s2+2     -1.25pp   -15.9
+    16       6.2%      -2.8%      -5.8%    -2.23%    below@0      NEVER            EMPTY      s2+6     -1.68pp   -18.8
+    32       3.1%      -1.8%      -6.7%    -2.12%        627      NEVER            EMPTY     s2+15     -2.60pp   -20.3
+
+====================================================================================================
+4.  N_max ON THE CONTRACT'S BASIS, beside N_max on the inventory basis
+====================================================================================================
+    schedule   regime         N with a window (contract basis)    N_max
+      LINEAR   BENIGN                                     2, 5        5
+      LINEAR   NORMAL                                  2, 5, 8        8
+      LINEAR    TOXIC                                        2        2
+       EQUAL   BENIGN                                        2        2
+       EQUAL   NORMAL                                     2, 5        5
+       EQUAL    TOXIC                                        2        2
+
+====================================================================================================
+5.  THE DEEP TAIL AT phi = 9500, on the contract's basis
+====================================================================================================
+    sched  regime    N  best seat  its return  its turnover  r1 return  tail ret  tail turn
+   LINEAR  BENIGN    2         s2     +21.72%            1x     -3.32%   +21.72%         1x
+   LINEAR  BENIGN    5         s5     +11.63%            0x     -6.52%   +11.63%         0x
+   LINEAR  BENIGN    8         s8     +10.08%            0x     -9.24%   +10.08%         0x
+   LINEAR  BENIGN   16        s16      +8.92%            0x    -15.13%    +8.92%         0x
+   LINEAR  BENIGN   32        s18      +8.55%            1x    -23.63%    +8.43%         0x
+
+   LINEAR  NORMAL    2         s2      +8.55%            1x     -3.55%    +8.55%         1x
+   LINEAR  NORMAL    5         s5      +5.26%            0x     -6.36%    +5.26%         0x
+   LINEAR  NORMAL    8         s8      +4.67%            0x     -8.89%    +4.67%         0x
+   LINEAR  NORMAL   16        s14      +4.15%            0x    -14.35%    +4.09%         0x
+   LINEAR  NORMAL   32        s27      +3.94%            0x    -20.75%    +3.87%         0x
+
+   LINEAR   TOXIC    2         s2      +0.01%            1x     -3.28%    +0.01%         1x
+   LINEAR   TOXIC    5         s5      +0.90%            0x     -4.06%    +0.90%         0x
+   LINEAR   TOXIC    8         s8      +1.02%            0x     -4.37%    +1.02%         0x
+   LINEAR   TOXIC   16        s16      +0.87%            0x     -4.98%    +0.87%         0x
+   LINEAR   TOXIC   32        s29      +0.78%            0x     -5.86%    +0.78%         0x
+
+    EQUAL  BENIGN    2         s2     +14.26%            2x     -4.21%   +14.26%         2x
+    EQUAL  BENIGN    5         s5      +9.58%            1x    -10.03%    +9.58%         1x
+    EQUAL  BENIGN    8         s7      +8.92%            1x    -14.44%    +8.86%         0x
+    EQUAL  BENIGN   16        s13      +8.45%            1x    -23.22%    +8.45%         0x
+    EQUAL  BENIGN   32        s26      +8.30%            1x    -31.93%    +8.24%         0x
+
+    EQUAL  NORMAL    2         s2      +5.40%            1x     -4.43%    +5.40%         1x
+    EQUAL  NORMAL    5         s5      +3.88%            1x     -9.70%    +3.88%         1x
+    EQUAL  NORMAL    8         s8      +3.90%            0x    -13.78%    +3.90%         0x
+    EQUAL  NORMAL   16        s16      +3.94%            0x    -20.46%    +3.94%         0x
+    EQUAL  NORMAL   32        s32      +3.85%            0x    -26.23%    +3.85%         0x
+
+    EQUAL   TOXIC    2         s2      -0.76%            1x     -3.60%    -0.76%         1x
+    EQUAL   TOXIC    5         s5      +0.05%            1x     -4.44%    +0.05%         1x
+    EQUAL   TOXIC    8         s8      +0.38%            0x     -4.91%    +0.38%         0x
+    EQUAL   TOXIC   16        s16      +0.70%            0x     -5.81%    +0.70%         0x
+    EQUAL   TOXIC   32        s32      +0.81%            0x     -6.74%    +0.81%         0x
+
+====================================================================================================
+6.  THE IDENTITY, on the contract's basis
+====================================================================================================
+  Worst per-path |queue pool return - independently simulated pro-rata LP|, over phi.
+  worst residual anywhere: 3.797e-04
+====================================================================================================

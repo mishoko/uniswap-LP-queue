@@ -1128,6 +1128,82 @@ contract HarbergerTest is QueueFixture {
         // market happened to trade one way.
     }
 
+    /// @notice 4.44 — **TAKING THE FRONT SEAT FOR ZERO WEI PROMOTES THE SEAT BEHIND IT INTO THE
+    ///         FRONT, WHICH REVERSES THE SUBSIDY THE FLAGSHIP APPLICATION IS SOLD ON.**
+    ///
+    /// @dev This is NOT a claim that the contract is wrong. `buyPrice`'s docblock says a
+    ///      never-priced seat quotes zero and is free to take, and calls that the BOOTSTRAP rather
+    ///      than a hole — *"the deployer's endowment is worth a head start of one transaction and
+    ///      nothing else."* That is a defensible rule for a game where the roster is meant to
+    ///      change hands.
+    ///
+    ///      **It is fatal to the emissions-free-incentives pitch, and nothing anywhere asserted the
+    ///      consequence.** That application asks a protocol to stand at the FRONT for months so the
+    ///      seats behind it earn more. The chain below says the protocol's position is takeable by
+    ///      any stranger for zero wei plus gas until it posts a self-price, and that what follows is
+    ///      not merely "the DAO loses a seat":
+    ///
+    ///        1. the DAO's capital is EVACUATED out of the position into `pending` (the pool loses
+    ///           that depth in the same transaction);
+    ///        2. the emptied seat is DEMOTED to the tail, because the buyer replaced no depth;
+    ///        3. **so the seat that was second is now FIRST** — and by `Σ cᵢrᵢ = LP` somebody must
+    ///           sit below the line, which is now whoever was standing behind the subsidiser.
+    ///
+    ///      An external LP who bought a subordinated BACK seat is thereby moved into the first-loss
+    ///      position, by a stranger, for gas. `test_4_13b` already USES the free take, incidentally,
+    ///      to empty a seat; it asserts nothing about who ends up at the front.
+    ///
+    ///      **The remedy is operational, not a code change, and it is why this test exists rather
+    ///      than a patch:** the deploy script must `setSelfPrice` the subsidiser's seat in the same
+    ///      transaction that funds it, and the DAO then pays rent on that price forever. That is a
+    ///      real, quantifiable cost of running the application and it belongs in the pitch, said
+    ///      out loud, rather than discovered by whoever deploys it.
+    ///
+    ///      Reads FAIL if: the take reverts, costs anything, leaves the DAO's rank intact, or leaves
+    ///      the roster order unchanged. Every one of those is asserted, so a fix that closes the
+    ///      bootstrap turns this red rather than leaving it silently vacuous.
+    function test_4_44_takingTheUnpricedFrontSeatPromotesTheSeatBehindIt() public {
+        _four();
+
+        // The subsidiser is at the front with real depth, and the LP it is subsidising is behind it.
+        assertEq(hook.rankOfId(0), 0, "the subsidiser is not at the front: this test proves nothing");
+        assertEq(hook.rankOfId(1), 1, "the subsidised seat is not second: this test proves nothing");
+        assertGt(uint256(hook.seatLiquidity(0)), 0, "the front seat contributed no depth: nothing to evacuate");
+        assertEq(_price(0), 0, "the seat is already priced: the bootstrap window is closed and this proves nothing");
+        uint128 depthBefore = hook.positionLiquidity();
+        uint256 alice0 = _bal(c0, ALICE);
+        uint256 alice1 = _bal(c1, ALICE);
+
+        // EVE funds NOTHING and pays NOTHING. `maxPrice = 0` is the buyer's own guard, so this call
+        // is only possible because the quote really is zero.
+        uint256 eve0 = _bal(c0, EVE);
+        uint256 eve1 = _bal(c1, EVE);
+        vm.prank(EVE);
+        hook.buySeat(0, 0, 0);
+
+        assertEq(_bal(c0, EVE), eve0, "the take cost currency0: it was not free");
+        assertEq(_bal(c1, EVE), eve1, "the take cost currency1: it was not free");
+        assertEq(hook.ownerOf(0), EVE, "the seat did not change hands");
+
+        // 1. The subsidiser's capital left the POSITION, not just the seat. It is SENT, not
+        //    credited to `pending` -- `_onSeatTransfer` calls `_send(from, p0 + esc, p1)` directly,
+        //    so the tokens arrive in the outgoing holder's wallet in this same transaction. (The
+        //    first draft of this test asserted `pendingOf` and went red for exactly that reason;
+        //    the distinction matters because a DAO with no `claimPending` path is unaffected here
+        //    but IS affected by the buyout PRICE, which does go to `pending0`.)
+        assertTrue(
+            _bal(c0, ALICE) > alice0 || _bal(c1, ALICE) > alice1, "nothing was evacuated: the chain did not start"
+        );
+        assertLt(hook.positionLiquidity(), depthBefore, "the pool kept its depth: nothing was evacuated");
+
+        // 2. The emptied seat is at the tail, because EVE replaced no depth.
+        assertEq(hook.rankOfId(0), hook.seatCount() - 1, "the taken seat was not demoted to the tail");
+
+        // 3. AND THIS IS THE FINDING: the seat that was behind the subsidiser is now the front seat.
+        assertEq(hook.rankOfId(1), 0, "the seat behind the subsidiser was NOT promoted into the front");
+        assertGt(uint256(hook.seatLiquidity(1)), 0, "the new front seat holds no depth: it is not really the front");
+    }
+
     /// @dev The second, shorter argument for the same correction: an EMPTY seat is pure rank, which
     ///      Phase 3 exists to make holdable and sellable. Under the spec it cannot be priced at all.
     function test_4_13b_pureRankIsHoldableAtAPrice() public {
