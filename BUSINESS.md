@@ -68,19 +68,26 @@ Measured to **3e-14, and INVARIANT TO φ.** The mechanism creates nothing. **It 
 lose.** Any pitch of the form *"LPs earn more here"* is false. This project has made that claim twice
 and both times it was wrong.
 
-### 0.25 🚨 RETRACTION, SAME DAY — READ BEFORE §0.3
+### 0.25 🛑 SETTLED — THE ANSWER IS ZERO, BY IDENTITY. READ BEFORE §0.3.
 
-**The formula in §0.3 stands. The number I put in it does not, and it was wrong in this project's own
-favour for the fourth time.** I set `B₁` from the best keeper over the WIDTH axis (w = 10%, +4.45%)
-and reported a surplus of +0.19 pp of book ≈ 1.1%/yr. That keeper is modelled converting **against its
-own pool**, and that single term is 61.60 of its 70.23 points of cost — 88%. A real keeper routes
-through an aggregator. **At 5 bps off-venue it scores +6.20%, ABOVE the passive LP's +5.02%** — so
-`LP − B₁ < 0`, `SLACK < 0`, and **no φ clears in any regime, by identity.**
+**§0.3's formula is correct. The surplus it computes is zero or negative, and that is structural
+rather than empirical.**
 
-**Every "thin but real" statement in §0.3–§0.5 is suspended pending the exact measurement.** Treat the
-tables as UPPER BOUNDS that are probably negative. The `c₁` and constrained-capital arguments are
-unaffected in structure — what is unresolved is whether any modelled alternative puts `B₁` below `LP`
-at all, and so far none does.
+A **static** Uniswap position spanning exactly this pool's band, with the same capital, returns
+**exactly** the pro-rata LP return — measured, paired, per regime, to a maximum absolute deviation of
+**4.3e-14**. Rank 1 can hold one for free, in any pool for the same pair. **Therefore `B₁ ≥ LP` by
+construction and `SLACK = c₁·(LP − B₁) ≤ 0` before any measurement is taken.**
+
+The "+0.19 pp / ~1.1%/yr" figure once published here used the best *managed* keeper wing as the bar.
+**That is a strategy, not a bar.** It pays a conversion cost the static position over the same range
+does not, and the static position returns `LP` exactly. **Rank 1's outside option is not "the best
+keeper bot" — it is "the best of everything rank 1 may freely do", and that set contains ordinary
+passive LPing.**
+
+**Every per-seat number in §0.3–§0.5 stands as arithmetic and is void as a business case.** The
+mechanism redistributes a fixed pie and charges +119% gas to do it. The only party who can rationally
+take a seat is one whose mandate forbids the free alternative — which no simulator can price and for
+which we have no evidence.
 
 ### 0.3 Therefore the value is a formula, not a story
 
@@ -108,7 +115,7 @@ computation. Full derivation and the conditions under which it is exact:
 | if rank 1's real alternative is… | `LP − B₁` | surplus (shipped roster) | verdict |
 |---|---|---|---|
 | **a passive LP** | 0 | **exactly 0.0000** | **no product, at any φ, ever** |
-| a keeper bot at its best width | +0.57 pp | **0.19 pp of book ≈ 1.1%/yr** | thin, real |
+| ~~a keeper bot at its best width~~ **RETRACTED — see §0.25. A handicapped bar: the only positive cell in a 105-cell grid** | ~~+0.57 pp~~ | ~~0.19 pp~~ → **≤ 0** | **no product** |
 | a keeper bot at 1% width | +74 pp | 24.7 pp | nobody rational runs that |
 
 ### 0.4 Which means: QUEUE only works for CONSTRAINED capital

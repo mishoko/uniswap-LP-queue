@@ -109,8 +109,9 @@ CACHE = os.environ.get("DEPTH_CACHE", "/tmp/queue-depth-cache")
 #   DEPTH_PATHS   paths per SWEEP cell.    120 uses all four disjoint seed ranges; 60 uses ranges
 #                 A and C, which are still disjoint from each other. The RECONCILIATION cell
 #                 always uses all 120 -- it has to, because it is compared to a 120-path result.
-NS = tuple(int(x) for x in os.environ.get("DEPTH_NS", "2,4,5,8,16,32").split(","))
-NPATH = int(os.environ.get("DEPTH_PATHS", "60"))
+NS = tuple(int(x) for x in
+           os.environ.get("DEPTH_NS", "2,3,4,5,6,8,10,12,16,24,32").split(","))
+NPATH = int(os.environ.get("DEPTH_PATHS", "120"))
 if NPATH == 120:
     SWEEP_SEEDS = SEEDS
 elif NPATH == 60:
@@ -183,6 +184,32 @@ def cell(a):
     return out
 
 
+def wing_cell(a):
+    """The traced wing bars alone, for a given roster and seed.
+
+    THIS EXISTS BECAUSE THE RECONCILIATION CAUGHT A REAL DEFECT IN THIS FILE.  Section 1 compared
+    rank 1's curve, measured on the 120-path reconciliation cell, against a managed-wing bar taken
+    from the 60-path SWEEP cache -- two different price samples on the two sides of one inequality.
+    It reproduced results-shipping.txt's BENIGN front bar to 6 phi units (r1 falls steeply there,
+    so a small bar error barely moves the crossing) and missed NORMAL by 383 and TOXIC by 1350,
+    where r1 is nearly flat in phi and a small bar error moves the crossing a long way.  The BACK
+    constraint, whose two sides were already on matched samples, reproduced to under half a phi
+    unit in every regime.  That is the shape of a sample-mismatch bug and nothing else, and it is
+    the reason the known-answer control is run FIRST.
+    """
+    n, sch, vol, dr, seed = a
+    caps = caps_for(n, sch)
+    bk, Pf, Pt = run(caps, True, days=365, retail_per_hr=RPH, seed=seed, vol=vol, drift=dr,
+                     half=HALF, phi=0, trace=True)
+    ef, em, _ = wing.check_null(bk, Pf, Pt, BOOK, n)
+    out = dict(null_fee=ef, null_mk=em, static=float(ladder(bk, Pf, Pt, caps)[0]), hrs=bk.hrs)
+    for w_ in MW:
+        m = wing.managed_wing(bk, Pf, Pt, caps[0], w_, BOOK, 0.0)
+        for gn, g in GAS.items():
+            out[f"mw_{w_}_{gn}"] = m['ret'] - m['remints']*g/m['hold']
+    return out
+
+
 def cross(xs, ys, target):
     """First phi at which y crosses `target`, linearly interpolated.  VERBATIM from
     report_shipping.py -- the tables in the two files have to mean the same thing.
@@ -230,8 +257,12 @@ def _idx_cell(a):
     i, j = a; return i, cell(j)
 
 
+def _idx_wing(a):
+    i, j = a; return i, wing_cell(j)
+
+
 def lambda_wrap(fn):
-    return _idx_lp if fn is lp_cell else _idx_cell
+    return {lp_cell: _idx_lp, cell: _idx_cell, wing_cell: _idx_wing}[fn]
 
 
 def stage_lp(nproc):
@@ -281,13 +312,32 @@ def stage_cells(n, sch, nproc):
         # the WORST path's identity residual at each phi -- a mean of residuals would hide a
         # single divergent path, which is exactly what this check exists to catch.
         d[f"{rn}_poolerr"] = np.stack([r['pool'] for r in v]).max(axis=0)
-        g = lambda key: float(np.mean([r[key] for r in v]))
-        bw = max(MW, key=lambda w_: g(f"mw_{w_}_L2"))
-        d[f"{rn}_bars"] = np.array([MW.index(bw), g(f"mw_{bw}_L2"), g(f"mw_{bw}_L1"), g("static"),
-                                    max(r['null_fee'] for r in v), max(r['null_mk'] for r in v),
-                                    float(np.mean([r['hrs'] for r in v]))/24.0])
+        d[f"{rn}_bars"] = _bars_row(v)
     np.savez(_cpath(nm), **d)
     sys.stderr.write(f"[{nm}: {len(jobs)*(len(PHIS)+1)} runs, {time.time()-t:.0f}s]\n")
+
+
+def _bars_row(v):
+    g = lambda key: float(np.mean([r[key] for r in v]))
+    bw = max(MW, key=lambda w_: g(f"mw_{w_}_L2"))
+    return np.array([MW.index(bw), g(f"mw_{bw}_L2"), g(f"mw_{bw}_L1"), g("static"),
+                     max(r['null_fee'] for r in v), max(r['null_mk'] for r in v),
+                     float(np.mean([r['hrs'] for r in v]))/24.0])
+
+
+def stage_finewing(nproc):
+    """The wing bars for the RECONCILIATION cell, on ITS OWN 120 paths. See wing_cell."""
+    if os.path.exists(_cpath("finewing")): return
+    jobs, keys = [], []
+    for rn, v, dr in REG:
+        for sd in SEEDS:
+            jobs.append((5, "LINEAR", v, dr, sd)); keys.append(rn)
+    t = time.time(); res = _pool_run(wing_cell, jobs, nproc)
+    d = {}
+    for rn, _, _ in REG:
+        d[f"{rn}_bars"] = _bars_row([r for r, k in zip(res, keys) if k == rn])
+    np.savez(_cpath("finewing"), **d)
+    sys.stderr.write(f"[finewing: {len(jobs)} traced runs, {time.time()-t:.0f}s]\n")
 
 
 def load_all():
@@ -295,6 +345,12 @@ def load_all():
     LPv = {rn: LP[rn] for rn, _, _ in REG}
     FN = np.load(_cpath("fine"))
     FRET = {rn: FN[f"{rn}_ret"] for rn, _, _ in REG}
+    FW = np.load(_cpath("finewing"))
+    FWB = {}
+    for rn, _, _ in REG:
+        b = FW[f"{rn}_bars"]
+        FWB[rn] = dict(bw=MW[int(b[0])], mw=float(b[1]), mw_l1=float(b[2]), static=float(b[3]),
+                       nf=float(b[4]), nm=float(b[5]), life=float(b[6]))
     RET, SE, TURN, POOL, HRS, WB = {}, {}, {}, {}, {}, {}
     for n in NS:
         for sch in SCHED:
@@ -307,7 +363,7 @@ def load_all():
                 WB[k] = dict(bw=MW[int(b[0])], mw=float(b[1]), mw_l1=float(b[2]),
                              static=float(b[3]), nf=float(b[4]), nm=float(b[5]))
                 HRS[k] = float(b[6])
-    return LPv, FRET, RET, SE, TURN, POOL, HRS, WB
+    return LPv, FRET, FWB, RET, SE, TURN, POOL, HRS, WB
 
 
 def main():
@@ -318,11 +374,13 @@ def main():
     if args and args[0] == "lp":
         return stage_lp(nproc)
     if args and args[0] == "fine":
-        stage_lp(nproc); return stage_fine(nproc)
+        stage_lp(nproc); stage_fine(nproc); return stage_finewing(nproc)
+    if args and args[0] == "finewing":
+        return stage_finewing(nproc)
     if args and args[0] == "stage":
         stage_lp(nproc); return stage_cells(int(args[1]), args[2], nproc)
     if args and args[0] == "all":
-        stage_lp(nproc); stage_fine(nproc)
+        stage_lp(nproc); stage_fine(nproc); stage_finewing(nproc)
         for n in NS:
             for sch in SCHED:
                 stage_cells(n, sch, nproc)
@@ -330,10 +388,10 @@ def main():
         sys.exit(f"usage: {sys.argv[0]} [lp|fine|stage N SCHED|all|report]")
 
     missing = [f"n{n}_{sch}" for n in NS for sch in SCHED if not os.path.exists(_cpath(f"n{n}_{sch}"))]
-    missing += [x for x in ("lp", "fine") if not os.path.exists(_cpath(x))]
+    missing += [x for x in ("lp", "fine", "finewing") if not os.path.exists(_cpath(x))]
     if missing:
         sys.exit("REFUSING TO REPORT -- these stages have no cache: " + ", ".join(missing))
-    LPv, FRET, RET, SE, TURN, POOL, HRS, WB = load_all()
+    LPv, FRET, FWB, RET, SE, TURN, POOL, HRS, WB = load_all()
     jobs = [0]*(len(NS)*len(SCHED)*len(REG)*len(SEEDS))
     fjobs = [0]*(len(REG)*len(SEEDS))
     ljobs = [0]*(len(REG)*len(SEEDS))
@@ -413,7 +471,7 @@ def main():
 
     def fine_window(rn):
         r1 = FRET[rn][:, 0]
-        hi, hst = cross(FINE, r1, WB[(5, "LINEAR", rn)]['mw'])
+        hi, hst = cross(FINE, r1, FWB[rn]['mw'])          # the bar from the SAME 120 paths
         lows = [(i, ) + cross(FINE, FRET[rn][:, i], LPm120[rn]) for i in range(1, 5)]
         if any(st == 'never' for _, _, st in lows):
             return None, hi, hst, lows, "EMPTY"

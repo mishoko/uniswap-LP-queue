@@ -59,29 +59,35 @@ from report_addendum import ladder
 from report_depth import (BOOK, RPH, P0, HALF, REG, RANGES, MW, GAS, SEEDS, SCHED,
                           caps_for, cross, pct, lp_cell)
 
-PHIS = tuple(list(range(0, 10000, 1000)) + [9500])
-NS = (2, 5, 8, 16, 32)
+from report_depth import (BOOK, RPH, P0, HALF, REG, RANGES, MW, GAS, SEEDS, SCHED, PHIS,
+                          caps_for, cross, pct, lp_cell, _pool_run, _bars_row)
+
+NS = tuple(int(x) for x in os.environ.get("BASIS_NS", "2,5,8,16,32").split(","))
+CACHE = os.environ.get("BASIS_CACHE", "/tmp/queue-depth-basis")
+INV_CACHE = os.environ.get("DEPTH_CACHE", "/tmp/qd120")     # the inventory-basis caches
+BASIS = 'liquidity_excl'
 
 
 def _init():
-    sim.PREM_WEIGHT = 'liquidity_excl'
+    sim.PREM_WEIGHT = BASIS
 
 
 def cell(a):
-    n, sch, vol, dr, seed = a
+    n, sch, vol, dr, seed, lp = a
+    sim.PREM_WEIGHT = BASIS                       # belt and braces: also set inside the worker
     caps = caps_for(n, sch); head = caps[0]
     R = np.zeros((len(PHIS), n)); TURN = np.zeros((len(PHIS), n)); pool = np.zeros(len(PHIS))
     for j, phi in enumerate(PHIS):
         bk, _, Pt = run(caps, True, days=365, retail_per_hr=RPH, seed=seed, vol=vol, drift=dr,
                         half=HALF, phi=phi)
-        assert bk.weight == 'liquidity_excl', "basis switch did not reach this worker"
+        assert bk.weight == BASIS, "the basis switch did not reach this worker"
         bk.tie_out(Pt)
         d, h = bk.pnl(Pt)
         R[j] = d/h; TURN[j] = ((bk.gv0 + bk.tk0)*Pt + (bk.gv1 + bk.tk1))/h
-        pool[j] = float(d.sum()/h.sum())
+        pool[j] = abs(float(d.sum()/h.sum()) - lp)
     bk, Pf, Pt = run(caps, True, days=365, retail_per_hr=RPH, seed=seed, vol=vol, drift=dr,
                      half=HALF, phi=0, trace=True)
-    out = dict(ret=R, turn=TURN, pool=pool, hrs=bk.hrs,
+    out = dict(ret=R, turn=TURN, pool=pool, hrs=bk.hrs, null_fee=0.0, null_mk=0.0,
                static=float(ladder(bk, Pf, Pt, caps)[0]))
     for w_ in MW:
         m = wing.managed_wing(bk, Pf, Pt, head, w_, BOOK, 0.0)
@@ -90,40 +96,69 @@ def cell(a):
     return out
 
 
-def main():
-    from multiprocessing import Pool
-    nproc = max(1, os.cpu_count() or 4)
-    t0 = time.time()
-    ljobs, lkeys = [], []
-    for rn, v, dr in REG:
-        for sd in SEEDS: ljobs.append((v, dr, sd)); lkeys.append(rn)
+def _idx(a):
+    i, j = a; return i, cell(j)
+
+
+def _cp(nm): return os.path.join(CACHE, nm + ".npz")
+
+
+def stage(n, sch, nproc):
+    nm = f"n{n}_{sch}"
+    if os.path.exists(_cp(nm)): return
+    LP = np.load(os.path.join(INV_CACHE, "lp.npz"))
     jobs, keys = [], []
+    for rn, v, dr in REG:
+        for j, sd in enumerate(SEEDS):
+            jobs.append((n, sch, v, dr, sd, float(LP[rn][j]))); keys.append(rn)
+    from multiprocessing import Pool
+    t = time.time(); out = [None]*len(jobs)
+    with Pool(nproc, initializer=_init) as p:
+        for i, r in p.imap_unordered(_idx, list(enumerate(jobs)), chunksize=2):
+            out[i] = r
+    d = {}
+    for rn, _, _ in REG:
+        v = [r for r, k in zip(out, keys) if k == rn]
+        A = np.stack([r['ret'] for r in v])
+        d[f"{rn}_ret"] = A.mean(axis=0)
+        d[f"{rn}_se"] = A.std(axis=0, ddof=1)/math.sqrt(A.shape[0])
+        d[f"{rn}_turn"] = np.stack([r['turn'] for r in v]).mean(axis=0)
+        d[f"{rn}_poolerr"] = np.stack([r['pool'] for r in v]).max(axis=0)
+        d[f"{rn}_bars"] = _bars_row(v)
+    np.savez(_cp(nm), **d)
+    sys.stderr.write(f"[basis {nm}: {len(jobs)*(len(PHIS)+1)} runs, {time.time()-t:.0f}s]\n")
+
+
+def main():
+    nproc = int(os.environ.get("DEPTH_PROCS", max(1, (os.cpu_count() or 4) - 2)))
+    os.makedirs(CACHE, exist_ok=True)
+    args = sys.argv[1:]
+    if args and args[0] == "stage":
+        return stage(int(args[1]), args[2], nproc)
+    if args and args[0] == "all":
+        for n in NS:
+            for sch in SCHED:
+                stage(n, sch, nproc)
+    miss = [f"n{n}_{sch}" for n in NS for sch in SCHED if not os.path.exists(_cp(f"n{n}_{sch}"))]
+    if miss: sys.exit("REFUSING TO REPORT -- no cache for: " + ", ".join(miss))
+
+    LP = np.load(os.path.join(INV_CACHE, "lp.npz"))
+    LPm = {rn: float(LP[rn].mean()) for rn, _, _ in REG}
+    LPse = {rn: float(LP[rn].std(ddof=1)/math.sqrt(len(LP[rn]))) for rn, _, _ in REG}
+    RET, SE, TURN, POOL, WB, HRS = {}, {}, {}, {}, {}, {}
+    IRET = {}
     for n in NS:
         for sch in SCHED:
-            for rn, v, dr in REG:
-                for sd in SEEDS:
-                    jobs.append((n, sch, v, dr, sd)); keys.append((n, sch, rn))
-    sys.stderr.write(f"[basis=liquidity_excl: {len(jobs)} cells x {len(PHIS)} phi on {nproc}]\n")
-    with Pool(nproc, initializer=_init) as p:
-        lres = p.map(lp_cell, ljobs, chunksize=4)
-        cres = p.map(cell, jobs, chunksize=2)
-    sys.stderr.write(f"[done {time.time()-t0:.0f}s]\n")
-
-    LPv = {}
-    for k, v in zip(lkeys, lres): LPv.setdefault(k, []).append(v)
-    LPm = {k: float(np.mean(v)) for k, v in LPv.items()}
-    LPse = {k: float(np.std(v, ddof=1)/math.sqrt(len(v))) for k, v in LPv.items()}
-    C = {}
-    for k, v in zip(keys, cres): C.setdefault(k, []).append(v)
-    RET, SE, TURN, WB, HRS = {}, {}, {}, {}, {}
-    for k, v in C.items():
-        A = np.stack([r['ret'] for r in v])
-        RET[k] = A.mean(axis=0); SE[k] = A.std(axis=0, ddof=1)/math.sqrt(A.shape[0])
-        TURN[k] = np.stack([r['turn'] for r in v]).mean(axis=0)
-        HRS[k] = float(np.mean([r['hrs'] for r in v]))/24.0
-        g = lambda key: float(np.mean([r[key] for r in v]))
-        bw = max(MW, key=lambda w_: g(f"mw_{w_}_L2"))
-        WB[k] = dict(bw=bw, mw=g(f"mw_{bw}_L2"), static=g("static"))
+            z = np.load(_cp(f"n{n}_{sch}"))
+            zi = np.load(os.path.join(INV_CACHE, f"n{n}_{sch}.npz"))
+            for rn, _, _ in REG:
+                k = (n, sch, rn)
+                RET[k] = z[f"{rn}_ret"]; SE[k] = z[f"{rn}_se"]; TURN[k] = z[f"{rn}_turn"]
+                POOL[k] = z[f"{rn}_poolerr"]
+                b = z[f"{rn}_bars"]
+                WB[k] = dict(bw=MW[int(b[0])], mw=float(b[1]), static=float(b[3]))
+                HRS[k] = float(b[6])
+                IRET[k] = zi[f"{rn}_ret"]
 
     def window(n, sch, rn):
         k = (n, sch, rn)
@@ -145,32 +180,48 @@ def main():
     print("  PREM_WEIGHT = 'inventory', which the contract replaced in Phase 8.")
     print()
     print(f"  N in {NS}, schedules {SCHED}, {len(SEEDS)} paths, phi grid {PHIS}.")
-    print(f"  {len(jobs)*len(PHIS) + len(jobs) + len(ljobs):,} simulator runs, "
-          f"{time.time()-t0:.0f}s wall.")
+    print(f"  Same seeds, same regimes, same wing engine, same pro-rata baselines as")
+    print(f"  results-depth.txt -- the ONLY difference is the premium's weight vector.")
     print()
 
     rule("1.  THE phi = 0 CONTROL -- the basis switch must be INVISIBLE where no premium is paid")
     print("  At phi = 0 nothing is withheld and the weight vector is never read, so every seat's")
-    print("  return must be identical under both bases. This is what would go RED if setting")
-    print("  PREM_WEIGHT had reached something it must not reach.")
-    print(f"  {'sched':>7} {'regime':>7} {'N':>4} {'r1 @ phi=0':>12} {'tail @ phi=0':>14} "
-          f"{'pro-rata LP':>12}")
+    print("  mean return must be BIT-IDENTICAL to the inventory-basis run. This is the control")
+    print("  that goes RED if setting PREM_WEIGHT reached something it must not reach, or if the")
+    print("  two runs are not actually on the same seeds.")
+    print()
+    print(f"  {'sched':>7} {'regime':>7} {'N':>4} {'max |basis - inventory| over all seats':>42}")
+    worst0 = 0.0
     for sch in SCHED:
         for rn, _, _ in REG:
             for n in NS:
                 k = (n, sch, rn)
-                print(f"  {sch:>7} {rn:>7} {n:>4} {pct(RET[k][0, 0]):>12} "
-                      f"{pct(RET[k][0, -1]):>14} {pct(LPm[rn]):>12}")
+                e = float(np.max(np.abs(RET[k][0] - IRET[k][0])))
+                worst0 = max(worst0, e)
+                print(f"  {sch:>7} {rn:>7} {n:>4} {e:>42.3e}")
             print()
-    print("  Compare these against the identically-labelled cells in results-depth.txt section 2")
-    print("  ('r1@phi=0' column). They must agree to the printed precision.")
+    print(f"  WORST phi=0 disagreement anywhere: {worst0:.3e}   "
+          f"{'PASS' if worst0 < 1e-12 else 'FAIL -- THE TWO RUNS ARE NOT COMPARABLE'}")
     print()
 
-    rule("2.  THE WINDOW AT EVERY DEPTH, on the contract's basis")
+    rule("2.  HOW MUCH THE BASIS MOVES A SEAT, at phi = 9500")
+    print("  If this were small the whole question would be moot. It is not.")
+    print(f"  {'sched':>7} {'regime':>7} {'N':>4} {'r1 inv':>9} {'r1 basis':>9} {'delta':>9}"
+          f" {'s2 inv':>9} {'s2 basis':>9} {'delta':>9} {'tail inv':>9} {'tail basis':>11}")
+    for sch in SCHED:
+        for rn, _, _ in REG:
+            for n in NS:
+                k = (n, sch, rn); a_ = IRET[k][-1]; b_ = RET[k][-1]
+                print(f"  {sch:>7} {rn:>7} {n:>4} {pct(a_[0]):>9} {pct(b_[0]):>9}"
+                      f" {100*(b_[0]-a_[0]):>+8.2f}p {pct(a_[1]):>9} {pct(b_[1]):>9}"
+                      f" {100*(b_[1]-a_[1]):>+8.2f}p {pct(a_[-1]):>9} {pct(b_[-1]):>11}")
+            print()
+
+    rule("3.  THE WINDOW AT EVERY DEPTH, on the contract's basis")
     for sch in SCHED:
         for rn, _, _ in REG:
             print(f"  --- {sch} / {rn} ---   pro-rata LP {pct(LPm[rn])} (se {100*LPse[rn]:.3f}pp)"
-                  f"   in-band life {HRS[(5, sch, rn)]:.1f}d")
+                  f"   in-band life {HRS[(NS[0], sch, rn)]:.1f}d")
             print(f"  {'N':>4} {'head/book':>10} {'r1@phi=0':>10} {'r1@9500':>10} {'wing bar':>9}"
                   f" {'front<=':>10} {'back>=':>10} {'window':>16} {'binding':>9}"
                   f" {'gap@9500':>10} {'t':>7}")
@@ -185,8 +236,7 @@ def main():
                     bi = min((i for i, _, st in lows if st == 'never'),
                              key=lambda i: RET[k][-1, i])
                 else:
-                    lo_s = f"{lo:.0f}"; bi = max(lows, key=lambda t: t[1])[0]
-                    bind = f"s{bi+1}"
+                    lo_s = f"{lo:.0f}"; bi = max(lows, key=lambda t: t[1])[0]; bind = f"s{bi+1}"
                 gap = RET[k][-1, bi] - LPm[rn]
                 sd_ = math.sqrt(SE[k][-1, bi]**2 + LPse[rn]**2)
                 print(f"  {n:>4} {caps[0]/BOOK:>10.1%} {100*RET[k][0, 0]:>9.1f}%"
@@ -194,16 +244,16 @@ def main():
                       f" {wstr:>16} {bind:>9} {100*gap:>+9.2f}pp {gap/sd_:>+7.1f}")
             print()
 
-    rule("3.  HEADLINE ON THE CONTRACT'S BASIS -- N_max")
-    print(f"  {'schedule':>10} {'regime':>8} {'N with a window':>34} {'N_max':>8}")
+    rule("4.  N_max ON THE CONTRACT'S BASIS, beside N_max on the inventory basis")
+    print(f"  {'schedule':>10} {'regime':>8} {'N with a window (contract basis)':>40} {'N_max':>8}")
     for sch in SCHED:
         for rn, _, _ in REG:
             good = [n for n in NS if not window(n, sch, rn)[4].startswith("EMPTY")]
-            print(f"  {sch:>10} {rn:>8} {(', '.join(map(str, good)) or 'none'):>34} "
+            print(f"  {sch:>10} {rn:>8} {(', '.join(map(str, good)) or 'none'):>40} "
                   f"{(str(max(good)) if good else 'NONE'):>8}")
     print()
 
-    rule("4.  THE DEEP TAIL AT phi = 9500, on the contract's basis")
+    rule("5.  THE DEEP TAIL AT phi = 9500, on the contract's basis")
     print(f"  {'sched':>7} {'regime':>7} {'N':>4} {'best seat':>10} {'its return':>11}"
           f" {'its turnover':>13} {'r1 return':>10} {'tail ret':>9} {'tail turn':>10}")
     for sch in SCHED:
@@ -213,6 +263,11 @@ def main():
                 print(f"  {sch:>7} {rn:>7} {n:>4} {('s'+str(b+1)):>10} {pct(r[b]):>11}"
                       f" {t[b]:>12.0f}x {pct(r[0]):>10} {pct(r[-1]):>9} {t[-1]:>9.0f}x")
             print()
+
+    rule("6.  THE IDENTITY, on the contract's basis")
+    print("  Worst per-path |queue pool return - independently simulated pro-rata LP|, over phi.")
+    w6 = max(float(POOL[(n, sch, rn)].max()) for n in NS for sch in SCHED for rn, _, _ in REG)
+    print(f"  worst residual anywhere: {w6:.3e}")
     print("="*W)
 
 

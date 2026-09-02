@@ -1,36 +1,59 @@
 # THE FRONTIER — how much value QUEUE can create, in closed form
 
-> ## 🚨 RETRACTION IN PROGRESS, 2026-09-02, SAME DAY AS PUBLICATION — THE FORMULA STANDS, THE NUMBER
-> ## I PUT IN IT DOES NOT, AND IT WAS WRONG IN THIS PROJECT'S OWN FAVOUR FOR THE FOURTH TIME.
+> ## 🛑 SETTLED, 2026-09-02 — THE SLACK IS ZERO OR NEGATIVE **BY IDENTITY**, NOT BY MEASUREMENT.
+> ## THE FORMULA BELOW IS CORRECT. THE PRODUCT IT PRICES DOES NOT EXIST.
 >
-> The derivation below (`SLACK = c₁·(LP − B₁)`) is unaffected — it is algebra plus an identity and it
-> was checked to 2.4e-16. **What is retracted is my value for `B₁`, and therefore every "thin but
-> real" conclusion drawn from it.**
+> The derivation is right and was re-derived independently. **The input `B₁` was wrong, and the
+> correct value makes the answer structural rather than empirical.**
 >
-> I used `B₁ = +4.45%` — the best keeper over the WIDTH axis, at w = 10% — and reported
-> `SLACK = +0.19 pp of book ≈ 1.1%/yr`. That keeper is modelled converting **against its own pool**,
-> and `econ-audit` measured that this single term is **61.60 of the 70.23 points** of its cost (88%):
-> it forces the keeper to convert its entire $333,333 against a two-thirds-sized copy of its own pool
-> on **every re-mint**. A real keeper routes through an aggregator instead.
+> **`wing.check_null` (`wing.py:151-161`) proves that a STATIC position spanning exactly the pool's
+> own band `[pa, pb]` with capital `cap` IS `cap/BOOK` of the undivided pool.** Measured, paired,
+> per regime: BENIGN `+6.035%` against `+6.035%`, NORMAL `+0.767%` against `+0.767%`, TOXIC
+> `−2.181%` against `−2.181%` — differences of `−0.000%` at SE `0.000`, max absolute deviation
+> **4.3e-14**.
 >
-> **Let the keeper convert off-venue at 5 bps and it scores +6.20% at w = 5%, ABOVE the passive LP's
-> +5.02%.** Then `LP − B₁ = −1.18 pp`, `SLACK = −0.39 pp`, and **NO φ CLEARS IN ANY REGIME, BY
-> IDENTITY.**
+> **So rank 1 can always, for free, hold a plain never-touched Uniswap position returning EXACTLY the
+> pro-rata LP return. Therefore `B₁ ≥ LP` by construction, with equality achievable at zero cost,
+> and `SLACK = c₁·(LP − B₁) ≤ 0` BEFORE ANY MEASUREMENT IS TAKEN.**
 >
-> **This is 5.136 recurring within hours, on the axis I did not think to sweep.** I caught the
-> handicap on the WIDTH axis and published a corrected number that was still handicapped on the
-> CONVERSION-VENUE axis. The lesson generalises and is now the more important half of 5.136: *when a
-> benchmark has free parameters, "I swept the one that was wrong" is not the same as "the benchmark
-> is now allowed its best move."* Enumerate the axes before trusting the max.
+> **THE `B₁ = LP → slack = 0` CASE BELOW WAS NEVER A SANITY CONTROL. IT IS THE ANSWER.** It was
+> written to prove the machinery could compute a known value, it returned exactly `0.0000 pp`, and
+> the significance of what it was saying was walked straight past. That is LAW 5's own lesson
+> inverted: a control whose answer is known in advance was built, fired correctly, and its result
+> was read as a checkmark instead of as a finding.
 >
-> **Status: the exact `B₁` is being measured across the width × conversion-venue grid. Until that
-> lands, treat every SLACK figure below as an UPPER BOUND that is probably negative.** Do not quote
-> "1.1%/yr" — it is retracted.
-
-
-**Status: DERIVED and NUMERICALLY CONFIRMED, 2026-09-02.** This supersedes every phi-window argument
-in this directory, because it bounds all of them at once. Reproduce with
-`python3 docs/research/seat-economics/frontier.py`.
+> **WHY THE EARLIER `B₁` WAS WRONG.** It used the best *managed* wing (w = 10%, `+4.45%`). **That is
+> a strategy, not a bar** — it pays a conversion cost the STATIC position over the same range does
+> not, and the static position over the BAND returns `LP` exactly. Rank 1's outside option is not
+> "the best keeper bot"; it is **"the best of everything rank 1 may freely do", and that set contains
+> ordinary passive LPing.** Sweeping static widths, the alternative converges to `LP` **from ABOVE**:
+> best free alternative is `+6.415%` (static w = 8%) in BENIGN against `LP = +6.035%`, `+0.809%`
+> (w = 12%) in NORMAL against `+0.767%`, and `−0.732%` (w = 30%) in TOXIC against `−2.181%`.
+>
+> **HONEST LIMIT ON THAT LAST CLAIM:** taking the argmax over 13 widths *ex post* inflates the
+> t-statistics (PITFALLS 5.34), so `B₁ > LP` is **NOT** established in BENIGN or NORMAL at n = 30.
+> In TOXIC it is not close (t = +67). **It does not matter which reading is taken: `B₁ = LP` gives
+> slack exactly `0.000`, `B₁ > LP` gives slack negative. There is no reading in which slack is
+> positive.**
+>
+> **⚠ AND A PRECISION LIMIT ON EVERYTHING NUMERIC BELOW, WHICH MUST NOT BE GLOSSED.** The BENIGN
+> `LP` bar carries a **standard error of 0.573 pp over 120 paths**, while the entire ceiling under
+> discussion is **0.2875 pp** — half the SE of one of its own inputs. A 40-path subsample moved `LP`
+> by 0.565 pp. **So the SIGN of the slack is NOT resolvable at 120 paths; both the published
+> "+0.19 pp" and the corrected "−0.39 pp" sit inside the noise.**
+>
+> **This does not weaken the conclusion, because the conclusion does not rest on the simulation.**
+> `SLACK ≤ 0` follows from the `check_null` IDENTITY (4.3e-14) — a static position over the band
+> returns exactly `LP`, so `B₁ ≥ LP` by construction. That is exact. **What is NOT established is
+> `SLACK < 0` strictly, and it must not be claimed.** No positive surplus is proven; *how* negative
+> is unknown. Anyone re-opening this must size the path count to resolve `LP − B₁` first, or accept
+> that the answer comes from the identity alone.
+>
+> **CONCLUSION: no ordering rule, no φ, no roster, no band width and no capital schedule can make
+> this mechanism create surplus for its participants.** The identity forbids it and the outside
+> option caps it. What remains is a redistribution with a real cost attached (+119% gas), and the
+> only parties who can rationally take a seat are those whose mandate forbids the free alternative —
+> which is not something a simulator can price, and is not something we have evidence for.
 
 ---
 
@@ -106,8 +129,10 @@ And the EXACT form against the closed form, with `B1` = the best keeper width me
    TOXIC    seats 3, 4, 5                   -0.3680 pp     +0.1056 pp     -0.3660    -0.4716 pp   EMPTY
 ```
 
-**A window DOES exist in BENIGN and NORMAL — 98.3% of the calendar by band life — and it is thin:
-0.16-0.19 pp of book over the band's life, roughly 1.0-1.1%/yr.** TOXIC is empty for a different and
+**⛔ THE SENTENCE THAT STOOD HERE — "a window DOES exist in BENIGN and NORMAL … 0.16-0.19 pp,
+roughly 1.0-1.1%/yr" — IS RETRACTED.** It used the handicapped `B₁`; against the true bar the
+windows are EMPTY in all three regimes, and `SLACK ≤ 0` by the identity at the top of this file.
+The rows below are kept as the arithmetic that WAS computed, not as a result. TOXIC is empty for a different and
 simpler reason than the tables suggested: rank 1 is ALREADY below its own bar at `phi = 0`
 (-3.278% against -2.18%), so there is nothing to redistribute before the first wei moves.
 
@@ -121,7 +146,7 @@ can fire, and it fires correctly.
 | if rank 1's true alternative is… | `LP - B1` | SLACK (shipped roster, `c_1 = 1/3`) |
 |---|---|---|
 | a passive LP | 0 | **exactly 0** — no product, at any `phi`, ever |
-| a keeper at its BEST width (measured w=10%, BENIGN) | +0.57 pp | **0.19 pp of book** / 61d ~ **1.1%/yr** |
+| ~~a keeper at its BEST width (w=10%, own-pool)~~ **RETRACTED — a handicapped bar; 1 positive cell out of 105** | ~~+0.57 pp~~ | ~~0.19 pp~~ → **≤ 0** |
 | a keeper at 1% width (-69.19%) | +74.2 pp | 24.7 pp — but nobody rational runs that |
 
 **Three consequences, all of which change what this project should do:**
@@ -133,7 +158,10 @@ can fire, and it fires correctly.
    passive LPing, `B1 > LP`, the slack is NEGATIVE, and the mechanism cannot clear at any `phi`.
 
 2. **Depth was never the economic variable — `c_1` was.** Surplus is LINEAR in the head's capital
-   share. Shipped 5-seat linear (`c_1 = 0.333`) -> 0.19 pp. Thirty-two EQUAL seats
+   share, so a 32-seat roster is worth **11x less than the shipped one at any bar** — and since the
+   bar makes the whole quantity <= 0, that is 11x less than nothing. The RATIO is what survives;
+   the magnitudes below are the retracted arithmetic. Shipped 5-seat linear (`c_1 = 0.333`)
+   -> ~0.19 pp under the handicapped bar. Thirty-two EQUAL seats
    (`c_1 = 0.031`) -> **0.018 pp, essentially nothing.** So a deep roster does not fail because of
    depth, gas, or ordering; it fails because an equal schedule shrinks the head to 3% of the book.
    `MAX_SEATS` is a structural cap, not an economic one, and PITFALLS 5.129's gas question is

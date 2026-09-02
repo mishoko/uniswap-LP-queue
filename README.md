@@ -8,12 +8,14 @@
 > twice. This version is derived rather than asserted, and the derivation is reproducible:
 > `python3 docs/research/seat-economics/frontier.py`.
 >
-> **0. RETRACTION, SAME DAY, POINT 1 BELOW IS WRONG IN OUR OWN FAVOUR.** The formula stands. The
-> number I put in it does not. `B₁` was measured against a keeper forced to convert **against its own
-> pool** — 88% of that keeper's modelled cost is that one term. Let it route through an aggregator at
-> 5 bps and it scores **+6.20% against the passive LP's +5.02%**, i.e. `LP − B₁` is NEGATIVE and
-> **no φ clears in any regime, by identity.** The exact figure is being measured. **Do not quote
-> "1.1%/yr".** This is correction #4 in the same direction; see PITFALLS 5.136 and 5.140.
+> **0. 🛑 SETTLED — THIS MECHANISM CANNOT CREATE SURPLUS FOR ITS PARTICIPANTS, BY IDENTITY.**
+> A static Uniswap position over exactly this pool's band returns **exactly** the pro-rata LP return
+> (measured to 4.3e-14). Rank 1 can hold one for free. So its outside option `B₁ ≥ LP` by
+> construction, and `SLACK = c₁·(LP − B₁) ≤ 0` **before any measurement**. No φ, no ordering rule, no
+> roster, no band width changes it. Point 1 below is the correct formula; the "+1.1%/yr" once
+> published against it came from using a *keeper bot* as the bar — a strategy, not a bar. Rank 1's
+> alternative set contains ordinary passive LPing. **Do not quote any positive surplus figure.**
+> See `docs/research/seat-economics/FRONTIER.md` and PITFALLS 5.156.
 >
 > **1. THE VALUE OF THIS MECHANISM IS A FORMULA, AND IT IS SMALL.** With `c₁` = rank 1's share of the
 > capital, `LP` = what a passive LP earns and `B₁` = what rank 1 would earn doing its next best
@@ -24,8 +26,9 @@
 > ```
 >
 > Rank 1's own return **cancels** — and so do the roster size, the ordering rule, the premium's
-> weighting and φ. Confirmed to 2.4e-16. On the shipped roster that is **0.19 pp of book over the
-> band's life, about 1.1%/yr.** See [`FRONTIER.md`](docs/research/seat-economics/FRONTIER.md).
+> weighting and φ. Confirmed to 2.4e-16. **The "0.19 pp / 1.1%/yr" once quoted here is RETRACTED —
+> see point 0 above: `B₁ ≥ LP` by identity, so the value is ≤ 0.** See
+> [`FRONTIER.md`](docs/research/seat-economics/FRONTIER.md).
 >
 > **2. SO IT ONLY WORKS FOR CAPITAL THAT CANNOT SIMPLY BE AN LP.** Set `B₁ = LP` — a yield seeker's
 > alternative — and the surplus is **exactly zero**, at any φ. QUEUE is for *constrained* capital: a
@@ -39,8 +42,9 @@
 > PITFALLS 5.136.
 >
 > **4. IT SHIPS FIVE SEATS, NOT 32, AND `c₁` IS WHY.** Surplus is *linear* in the head's capital
-> share: shipped 5-seat (`c₁ = 0.333`) → 0.19 pp; 32 EQUAL seats (`c₁ = 0.031`) → 0.018 pp, i.e.
-> nothing. `MAX_SEATS = 32` is structural — one byte per rank in a 32-byte word — and was never an
+> share, so a deep roster is worth **11× less** than the shipped one at any bar (`c₁ = 0.333` vs
+> `0.031`). The RATIO is the point; the magnitudes once quoted here are retracted and the value is
+> ≤ 0 either way. `MAX_SEATS = 32` is structural — one byte per rank in a 32-byte word — and was never an
 > economic recommendation. Every "32 desks" below should read "five".
 >
 > **5. RANKS 2–5 ARE A POOL, NOT A LADDER.** Adjacent-rank separation is 2.37 between seats 1 and 2

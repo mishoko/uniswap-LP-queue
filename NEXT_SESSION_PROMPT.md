@@ -44,37 +44,68 @@ after you have a number you trust.** Do not trust the numbers below without re-r
 
 ---
 
+## 0b. WAS PHASE 9 WORTH IT? — READ THIS BEFORE JUDGING THE STATE YOU INHERIT
+
+**The session set out to find the value proposition and did not find one. That is because it PROVED
+there is none to find, which is a closed question rather than a failed search.** The distinction
+matters for how you spend your time: **do not go looking again.** §1 and §5 are why.
+
+It also, incidentally, found ten defects in code that had passed **248 tests, 80 mutations with zero
+survivors, and a 13/13 invariant campaign** — four evacuation doors, a 20%-of-position ledger break,
+a pool that bricks in its terminal state, and a premium that erases money every conservation
+assertion is blind to. **That baseline was true and it was not evidence of correctness** (5.92).
+
+**Six of the ten came from pointing an existing instrument somewhere it had never been pointed** —
+the reference witness at φ > 0, the invariant campaign at INVARIANT L, a test suite at the exit path,
+the keeper benchmark at a width nobody swept. Not cleverness. Just asking what each instrument was
+blind to. **That is the cheapest available source of findings on this project and it is not
+exhausted.**
+
+**And nine claims by the session's own orchestrator were refuted by reviewers, every one with a
+measurement rather than an argument** — including the headline surplus number after it had been
+published to four documents, and a fix that had already been written into this handoff for you.
+Several are recorded as PITFALLS rows with attribution. **Read 5.143, 5.156 and 5.158 specifically:
+they are about how a plausible diagnosis survives review, and they will save you from repeating
+three of them.**
+
 ## 1. THE ASSESSMENT — is this hook still interesting?
 
-**As engineering: yes, unusually so. As a product: not as measured, and we can now say exactly why in
-one line instead of by argument.**
+**The engineering is unusually good. The mechanism cannot create value for its participants, and
+that is now PROVEN rather than measured. Do not spend another session looking for a configuration
+that works — there isn't one, and §5 says why.**
 
-> ### SLACK = c₁ · (LP − B₁)
+> ### SLACK = c₁ · (LP − B₁)   and   B₁ ≥ LP   ⟹   SLACK ≤ 0, ALWAYS
 >
-> `c₁` = rank 1's share of the book's capital · `LP` = what a passive Uniswap LP earns on the same
-> range · `B₁` = what rank 1 would earn doing its **next best thing**.
->
-> **Rank 1's own return CANCELS** — and so do `N`, the capital schedule beyond `c₁`, the ordering
-> rule, the premium's weighting, the rent, and φ.
+> `c₁` = rank 1's capital share · `LP` = the pro-rata LP return · `B₁` = rank 1's best outside option.
 
-Derived from the identity `Σ cᵢ rᵢ == LP`, confirmed to **2.4e-16** against an independent long-form
-computation over 120 paths. The identity itself: 36 cells, worst residual **2.98e-14**, invariant to
-φ. Reproduce: `python3 docs/research/seat-economics/frontier.py`.
+**THE PROOF, and it is an identity rather than a simulation result.** `wing.check_null`
+(`wing.py:151-161`) shows a **STATIC** Uniswap position spanning exactly this pool's band, with the
+same capital, returns **exactly** the pro-rata LP return: BENIGN `+6.035%` vs `+6.035%`, NORMAL
+`+0.767%` vs `+0.767%`, TOXIC `−2.181%` vs `−2.181%` — paired differences `−0.000%` at SE `0.000`,
+max absolute deviation **4.3e-14**.
 
-**WHAT IT SETTLES PERMANENTLY — do not re-litigate any of it:**
+**Rank 1 can hold one of those for free, in any pool for the same pair. So `B₁ ≥ LP` by
+construction, and the slack is ≤ 0 BEFORE ANY MEASUREMENT.** Sweeping static widths, the best free
+alternative converges to `LP` **from ABOVE** — though an ex-post argmax over 13 widths inflates the
+t-stats (5.34), so `B₁ > LP` is NOT established in BENIGN/NORMAL at n=30. **It does not matter:
+`B₁ = LP` gives exactly zero; `B₁ > LP` gives negative. No reading is positive.**
 
-* Set `B₁ = LP` (a yield seeker's alternative) and the slack is **exactly 0.0000** at any φ. **QUEUE
-  can only clear for CONSTRAINED capital that cannot take the passive-LP option. The size of the
-  product is the size of the constraint.**
-* **Depth was never the economic variable; `c₁` was, linearly.** Shipped 5-seat (`c₁ = 0.333`) vs 32
-  equal seats (`c₁ = 0.031`) is an 11× difference. **The dial is the head's capital share and the
-  band width — never the seat count, never φ.**
-* **No re-weighting of the premium can create value, only stop destroying it.**
+**HOW THIS WAS MISSED FOR MOST OF A SESSION, because you will be tempted the same way.** The
+`B₁ = LP → slack = 0` case was built as a LAW 5 sanity control, returned exactly `0.0000`, and was
+read as a checkmark instead of as the answer. Three hours then went into hunting a `B₁` below `LP`
+that cannot exist. **The root error was treating `B₁` as "the best keeper bot" — a nominated
+competitor — rather than "the supremum of everything rank 1 may freely do", a set which contains
+ordinary passive LPing.** Nominating a competitor is how PITFALLS 5.136, 5.140 and 5.156 all
+happened. **A bar is a supremum over a SET, never a strategy you picked.**
 
-**AND THE PART THAT DECIDES EVERYTHING: every `B₁` we can model sits AT OR ABOVE `LP`** — passive
-LP, keeper at its best width, keeper routing conversions off-venue. **So measured slack is ≤ 0 and no
-φ clears in any regime, by identity.** The product exists only if a real constrained desk has
-`B₁ < LP`. **No simulator can measure that. Answer it with a phone call, not Solidity.**
+**WHAT REMAINS TRUE AND USEFUL:** the identity `Σ cᵢ rᵢ == LP` (2.98e-14, invariant to φ); the
+closed form itself; that surplus is linear in `c₁` and independent of `N`, the ordering rule and φ;
+and that a deep roster is economically dead because it shrinks `c₁`. The mechanism does exactly what
+it claims — it just redistributes a fixed pie and charges +119% gas to do it.
+
+**IF YOU WANT TO REVIVE THIS**, the only opening is a party whose MANDATE forbids the free
+alternative — a treasury that must work inventory, an issuer distributing supply. That is not
+measurable by simulation and we have no evidence for it. **It is a conversation, not a build.**
 
 ### The direct answer to "what does seat N gain?"
 
@@ -127,7 +158,30 @@ it was **still** handicapped on the conversion-venue axis nobody enumerated.
 
 **Each depends on the previous being trustworthy. This ordering was derived, not chosen.**
 
-### 4.0 FIRST: verify and commit the inherited tree
+### 4.0 FIRST: RUN THE MUTATION CAMPAIGN — IT WAS CUT SHORT AT 30 OF 85
+
+**Phase 9's campaign ran `30 of 85 cases: 30 RED, 0 SURVIVED, 0 NO-COMPILE, 0 BAD-PATTERN`, then was
+deliberately interrupted to close the session.** The 55 unrun cases are the gate this phase did not
+clear. Run it FIRST, before any new work:
+
+```bash
+ls .forge-snapshots/MUTATION_IN_PROGRESS      # must not exist
+python3 script/mutate.py > /tmp/c.log 2>&1; echo $?     # NEVER pipe (5.134)
+```
+
+**Note on interrupting it, learned the hard way:** SIGINT did **not** stop it — it was absorbed and
+the run advanced through several more cases. It had to be `kill -9`'d and `src/` restored with
+`git checkout -- src/`, which was safe ONLY because every line of `src/` was already committed.
+**Keep that property: never leave uncommitted work in `src/` while a campaign runs.** Delete the
+marker manually after a hard kill and verify `git diff --stat src/` is empty before believing
+anything.
+
+**Also unrun:** the campaign has never been pointed at the Phase 9 additions as a set — door (b)'s
+Rule A/Rule B, `maxRank`, `invariant_I9`. Their author mutated them by hand (7 + 11 cases, 3
+survivors found and closed, 1 documented and left open — see §7), but that is not the same as the
+standing campaign covering them.
+
+### 4.0b THEN: verify and commit the inherited tree
 Run §0's checklist. Get your own suite number. Then run the mutation campaign —
 `python3 script/mutate.py > /tmp/c.log 2>&1; echo $?` — **never piped** (5.134). Then commit.
 **Phase 9 could not do this because a teammate held a mutant at session end.**
@@ -149,10 +203,31 @@ the refined rule — *taking earnings does not cost a rank, taking DEPTH does* �
 earnings.** The same observable means "profit" to one test and "evacuation" to the other. **They
 cannot both stand as written, and choosing changes who keeps rank.**
 
-**The likely resolution, not built:** stop asking what was BURNED and ask whether the seat's
-`liquidityContributed` fell across the call — the quantity `_settleRankOnTransfer` already uses on
-the transfer path, which would make one rule serve both writers. **Verify that against BOTH tests
-before believing it.**
+**⚠ A DEAD END THAT LOOKS RIGHT — DO NOT SPEND A DAY ON IT.** The obvious suggestion is *"stop
+asking what was BURNED and ask whether the seat's `liquidityContributed` FELL across the call."*
+**Those are the same question, and the code already asks the second one.** `_chargeBurn` opens
+`if (burned == 0) return false;` and then debits `min(burned, s.liquidity)` — so `s.liquidity` falls
+**if and only if** something was burned. `test_8_15` defeats both phrasings with the identical move:
+pre-funding the float makes `_payOut` burn zero, nothing is charged, `s.liquidity` does not move, and
+the rank survives while the whole balance leaves. *(This was proposed by the orchestrator and refuted
+before it reached you — recorded so it is not re-proposed.)*
+
+**Why `_settleRankOnTransfer` looks like a counterexample and is not:** on a TRANSFER the seat is
+emptied outright and `s.liquidity` is zeroed unconditionally, whatever was burned — so there the
+depth genuinely does fall. **That asymmetry is exactly why door (a) is closed and the fourth door is
+not**, and it is the thing to reason from.
+
+**THE ONLY FORMULATION FOUND THAT SEPARATES THE TWO CASES — UNVERIFIED, NOT EXECUTED.** Ask whether
+the seat's REMAINING LEDGER can still back the depth it is credited with: compare `s.a0`/`s.a1`
+AFTER the payout against `s.liquidity`, rather than against what the position burned. That separates
+`test_8_9` (earnings out, principal still standing behind the contribution) from `test_8_15`
+(everything out, contribution standing behind nothing).
+
+**⚠ IT HAS A SERIOUS OBJECTION THAT MUST BE TESTED FIRST, AND IT IS THE SAME UNITS TRAP AS 5.126 AND
+5.127 ONE DIMENSION OVER.** Front-first allocation DELIBERATELY drives a seat to single-token
+composition, and `_liquidityForAmounts` takes the min of the two legs — **so a fully-FILLED front
+seat reads zero backing and would be demoted for doing exactly the job it is paid for.** Write that
+case FIRST and watch it go red before building anything on top of it.
 
 ### 4.1 THE BRICKED POOL — highest-value defect remaining
 Root-caused. The degenerate-fill branch is gated on `if (amtOut == 0)` — a **total** absence of
@@ -206,11 +281,75 @@ that is a bound question, not the defect. `_settlePremium`'s docblock calls this
 destroyed"; deferral is what a HELD pot does and this is not one. **Correct the docblock as part of
 the fix.** Likely closed by 4.1's fallback — check before building anything separate.
 
-### 4.4 Then: re-sweep φ on the rule we actually ship
-And evaluate **pure L-weighting with no exclusion** as the leading alternative: it caps `test_7_14`'s
-dust attack at 12.5% (the attacker's own capital share), removes the over-exclusion, and converts
-"the payer pays itself" from a hazard into a **known constant rescaling of φ** (measured: effective
-8500 → 6800 at n=5). **A hazard converted into a change of units is a good trade.**
+### 4.4 φ = 7,900 IS ABOVE THE FRONT'S BOUND UNDER THE RULE THAT SHIPS — RE-SOLVE IT
+
+**This is a live wrong constant, not just an unfounded one.** Swept on `PREM_WEIGHT = 'liquidity_excl'`
+(the rule the contract actually runs), BENIGN at φ = 8000: **the head returns −2.95% against a
+managed-wing bar of +1.94%.** The front constraint binds at **φ ≤ 5610** (NORMAL ≤ 6199).
+
+**The window to check is [4725, 5610], NOT the published [7455, 8312].** The published pair was
+solved on `'inventory'`, where the head kept a third of its own premium. The shipped rule excludes
+the head on **99.3% of swaps** and gives its whole weight to the back — which is why the back looks
+excellent (s2 at 8.14%) and **the head has no product at all.**
+
+**⚠ TWO DIAGNOSES THAT WERE MADE THIS SESSION AND REFUTED BY MEASUREMENT — do not repeat either:**
+
+* *"The boundary seat is seat 2, so the exclusion over-charges it."* **The boundary is RANK 0 on ~99%
+  of swaps.** Pro-rating it is a rebate to the HEAD paid by the back (BENIGN back-constraint moves
+  4725 → 6865). The proposal built on this was measured worse than what ships and reproduces
+  `test_7_14` at 100% of the pot.
+* *"Seat 2's TOXIC failure is a premium-weighting problem."* **It is a MARKOUT deficit.** Seat 2's
+  whole TOXIC curve moves 0.09 pp across φ 0→8000 against a 0.3 pp gap, under all four rules tested,
+  because a 1.4-day band with ~439 swaps has almost no fee flow to redistribute. **TOXIC opens under
+  NO rule and NO φ.** A distribution rule was blamed for a P&L gap.
+
+**But read §1 first.** `B₁ ≥ LP` means no φ makes the mechanism create surplus, so re-solving φ is
+about not shipping a constant that is provably wrong for the code — it is hygiene, not a route to a
+product.
+
+### 4.4b THE PREMIUM WEIGHTING — DO NOT CHANGE IT FOR ECONOMICS; CONSIDER IT FOR CORRECTNESS
+
+**Measured and settled: the weighting is NOT where the money goes missing.** All three candidate
+rules capture **0% of the ceiling** — worst back seat's excess over LP at the best admissible φ:
+shipped **−0.747 pp**, pro-rated boundary **−0.614 pp**, pure L **−0.791 pp**. None lifts the worst
+back seat to the bar at any φ that keeps rank 1 above its own bar, **and the SHIPPED rule is the best
+of the three.** So do not re-weight to chase economics.
+
+**But the reviewer who measured all three still recommends PURE L-WEIGHTING (no exclusion) on
+CORRECTNESS grounds alone, and I am recording it as the standing recommendation** because the
+argument does not depend on any window being non-empty:
+
+> The exclusion buys *"the payer is excluded exactly"* at the price of **a denominator that can
+> collapse to a single seat**. A collapsing denominator is the structural hazard here: it is what
+> `test_7_14` is, it is what the pro-rating proposal reopened at 100% of the pot, and it is a shape
+> that recurs under renormalisation **in ways nobody predicts correctly — the reviewer got it wrong,
+> the orchestrator got it wrong, and the docblock got it wrong.**
+>
+> Pure L makes the denominator `standingL`, **a quantity no fill can move**, so the failure mode
+> becomes UNREACHABLE rather than guarded against. It caps the dust attack at the attacker's own
+> capital share (12.5% measured against a 25% bar), removes the over-exclusion grief, deletes both
+> `O(k)` loops and the numerator/denominator agreement requirement that is the 5.124 bug class, and
+> turns "the payer pays itself" into `effective φ = φ·(1 − cᵢ)` — **a change of units, re-solvable by
+> moving one constant.**
+
+**A hazard converted into a change of units is a good trade.** The caveat, measured and not hidden:
+pure L is **not perfectly payer-neutral either** — on a full sweep the tail seat still nets close to
+the whole pot. And it costs the back (BENIGN back-constraint 4725 → 7167), which does not matter
+given §1 but would matter if §1 were ever overturned.
+
+**⚠ ONE QUESTION MUST BE ANSWERED BEFORE YOU ADOPT IT, AND IT NEEDS SOLIDITY, NOT PYTHON.**
+**Does the 18/6 decimals defect (5.126) RECUR under balance/pure-L weighting on the 256-bit X128
+accumulator?** 5.126 says the widening removed the arithmetic condition entirely — *"no arithmetic
+condition remains"* — which would mean moving the weight to `liquidityContributed` solved a problem
+the widening had ALREADY solved, and took on the tail-payment behaviour as the price. **If the
+widening alone is sufficient, pure L is strictly better than what ships. If it is not, pure L
+reopens the defect that made Phase 8's premium inert on the pool we deploy.**
+
+The reviewer who recommends pure L could not answer this — they were barred from running `forge`, by
+me, to protect the campaign. **It is the first thing to execute, at 18/6, in BOTH directions
+(LAW 1 as amended), before a single line of the re-weighting is written.**
+
+**If you take this, re-solve φ in the same commit** — the constant is a function of the rule.
 
 ### 4.5 Then: close PITFALLS 5.133 — `QueueHandler` still never calls `_refAllocate`
 The invariant campaign's 14/14 is incidental premium coverage, not aimed coverage. A spec exists.
