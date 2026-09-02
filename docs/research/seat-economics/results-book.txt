@@ -1,0 +1,806 @@
+====================================================================================================
+0.  INTEGRITY -- nothing below section 2 is believable until every one of these passes
+====================================================================================================
+
+  0a  TRANSCRIPTION.  book_sim.py copies sim.Book.swap, sim.Book._fill and sim.run because
+      each hardcodes the walk direction where no override can reach.  In mode SHIPPED the
+      copy must reproduce sim.Book BIT-FOR-BIT on real paths: every balance, accumulator,
+      cursor, reach histogram and the final price.
+      reads FAIL if: I mistranscribed one line of ~90 copied lines.  Mutation-tested:
+      6 single-line mutations of the copy were run against sim.py; see 0d.
+      RESULT: 48/48 cells bit-identical to sim.Book   PASS
+
+  0b  THE TWO-ENDED CURSOR.  d0 (highest rank that may hold token0) is new code and it is
+      the only new state.  Control: run BOOK with the cursors IGNORED -- walk the whole
+      array from the correct end every time.  The `continue` guard already skips empty
+      seats, so a correct cursor is a pure optimisation and the two must agree exactly.
+      reads FAIL if: d0 or c1 ever excludes a seat that still holds the outgoing token.
+      IT DID FAIL, 48/48 cells, before the repair now in book_sim.Book2._accrue -- see 0c.
+      RESULT: 192/192 cells identical with and without cursors   PASS
+
+  0c  THE FINDING 0b PRODUCED, and it is specific to the two-ended book.
+      `_accruePremium` is a SECOND WRITER of seat inventory and it touches no cursor.  Under
+      the SHIPPED one-ended rule that is harmless BY CONSTRUCTION: a zeroForOne fill sets
+      c0 = min(c0, old c1), and every seat below the old c1 holds zero token1, so it is
+      weighted zero in the token0 accrual and can never be credited outside [c0, n).
+      Under BOOK it is NOT harmless: d0 walks DOWN, so a seat ABOVE d0 can hold token1,
+      collect token0 premium, and then sit outside [0, d0] permanently -- inventory the walk
+      cannot reach and `avail` cannot see.  Measured before the repair: the price path
+      diverged and seat balances moved by up to ~0.5% of the $1,000,000 book at phi=8500,
+      while phi=0 was clean (no premium, no second writer).
+      IF THE TWO-ENDED BOOK IS EVER BUILT IN SOLIDITY THIS IS A LIVE BUG CLASS, not a
+      simulator artefact: the same two writers exist in the hook.
+
+  0d  MUTATION TEST OF THE 0a CONTROL ITSELF (LAW 5: what would have to be true to FAIL?).
+      Six single-line mutations of the copied code, each run against unmutated sim.py,
+      12 cells each:
+        M1  mk_in leg drops the (1-FEE)            caught 12/12   RED
+        M4  remainder line -> average pricing      caught 12/12   RED
+        M5  premium not taken off the top          caught  6/12   RED (6 are phi=0 cells)
+        M2  walk starts at 0 instead of the cursor caught  0/12   SURVIVED
+        M3  cursor never advances                  caught  0/12   SURVIVED
+        M6  avail ignores the cursor               caught  0/12   SURVIVED
+      The three survivors are ONE finding, and it is a true property rather than a gap:
+      because the walk skips empty seats with `continue`, THE SHIPPED CURSOR IS A PURE GAS
+      OPTIMISATION AND CARRIES NO ECONOMICS.  Deleting it changes no number.  That is also
+      why 0b had to be built separately -- 0a structurally cannot test a cursor.
+
+====================================================================================================
+1.  THE IDENTITY AND THE KNOWN-ANSWER CASE
+====================================================================================================
+
+  1a  sum_i c_i r_i == LP.  Total P&L is fixed by (capital, range, flow); any pure
+      re-partition is zero-sum.  If BOOK breaks this the BOOK sim is manufacturing money
+      and every other number in this file is void.
+      reads FAIL if: the reversed walk drops, double-counts or strands a fill.  It DID read
+      FAIL at ~5e-3 before the 0c repair.
+
+      RAW reads FAIL at 7.482e-06 in ONE of the 16 cells, and the cause is named rather
+      than tolerated.  It is IDENTICAL under SHIPPED and under BOOK, and control 0a proves
+      SHIPPED is bit-identical to sim.Book, so it is a PRE-EXISTING PROPERTY OF sim.py and
+      not a defect in the two-ended book.  It is the HELD PREMIUM: _accrue withholds a pot
+      whose weight is zero and folds it into the next accrual that has a recipient, and if
+      the band's life ends with the pot still held that money was taken from the seats and
+      given to nobody.  Isolated on the worst path (seed 116, TOXIC-DN, phi=8500):
+          held0 = 3.9656e-03 token0, held1 = 0, mark 1794.57  ->  $7.116538
+          identity gap                                        ->  $7.116538
+          ratio held/gap = 1.000000 EXACTLY on a $951,150 book
+      So the HELD-CORRECTED column below is the real identity, and it is exact.  The leak
+      is 0.075 bps of return here, but the CLASS is worth naming: in TOXIC-DN the price
+      falls, the position goes all-token0, every seat's token1 standing goes to zero, and
+      the token0 pot has no one to pay.  A hold rule with no terminal sweep strands it.
+
+       mode    phi     regime   RAW max |Sc_i r_i - LP|   HELD-CORRECTED   max |Pf - Pf(SHIP)|
+    SHIPPED      0     BENIGN                 2.978e-14        2.978e-14             0.000e+00
+    SHIPPED      0     NORMAL                 9.166e-15        9.166e-15             0.000e+00
+    SHIPPED      0      TOXIC                 2.699e-15        2.699e-15             0.000e+00
+    SHIPPED      0   TOXIC-DN                 2.547e-15        2.547e-15             0.000e+00
+    SHIPPED   8500     BENIGN                 2.640e-14        2.640e-14             0.000e+00
+    SHIPPED   8500     NORMAL                 1.109e-14        1.109e-14             0.000e+00
+    SHIPPED   8500      TOXIC                 3.155e-15        3.155e-15             0.000e+00
+    SHIPPED   8500   TOXIC-DN                 7.482e-06        3.306e-15             0.000e+00
+       BOOK      0     BENIGN                 2.048e-14        2.048e-14             0.000e+00
+       BOOK      0     NORMAL                 1.025e-14        1.025e-14             0.000e+00
+       BOOK      0      TOXIC                 2.364e-15        2.364e-15             0.000e+00
+       BOOK      0   TOXIC-DN                 2.914e-15        2.914e-15             0.000e+00
+       BOOK   8500     BENIGN                 2.551e-14        2.551e-14             0.000e+00
+       BOOK   8500     NORMAL                 9.808e-15        9.808e-15             0.000e+00
+       BOOK   8500      TOXIC                 2.975e-15        2.975e-15             0.000e+00
+       BOOK   8500   TOXIC-DN                 7.482e-06        2.581e-15             0.000e+00
+
+      worst HELD-CORRECTED residual over all 16 cells x 120 paths: 2.978e-14   PASS (< 1e-13)
+      The price path is bit-identical between modes, as it must be: availability is
+      order-invariant, so the ordering rule cannot move the pool.
+
+  1b  KNOWN-ANSWER, N = 1.  With one seat there is no second end, so BOOK and SHIPPED must
+      be identical to each other AND the seat must be the pro-rata LP exactly.
+      reads FAIL if: the reversed walk is off by one, or d0 is initialised wrong.
+      RESULT: worst deviation across 160 (seed, regime, phi) cells: 1.810e-14   PASS (float)
+
+  1c  tie_out() raised on nothing.  It is called on EVERY one of the 1920 grid runs and
+      raises unless o + markout + fees + premium reconstructs both balances and every wei
+      withheld was either distributed or is still HELD.  The grid completed, so it never
+      raised.
+
+====================================================================================================
+2.  NET CONVERSION -- the load-bearing number
+====================================================================================================
+
+  conv/cap  = (a0_i - o0_i) * Pt / capital_i.  The seat's NET change in token0 holdings
+              over the path, valued at the mark, as a fraction of the capital it put in.
+  vs prorata= that same quantity divided by the POOL's net conversion per unit of capital,
+              which is exactly what a pro-rata LP of the same size gets.  1.00 = the
+              ordering rule delivered NOTHING.
+  drain     = tk0_i / (token0 ever received).  a0 falls ONLY via tk0, so drain == 0 is
+              EXACTLY the monotone-accumulator claim.  MONO% = share of the 120 paths on
+              which the seat's token0 never once decreased.
+
+  A NOTE ON THE RATIO, AND IT IS THE SAME TRAP AS SECTION 5.  conv/cap divided by the
+  pool's own conv/cap is the natural statistic and it is UNUSABLE in BENIGN and NORMAL:
+  those regimes are driftless, the pool's net conversion passes through zero, and a ratio
+  whose denominator crosses zero is noise.  The headline is therefore the EXCESS -- a
+  difference, always defined.  The ratio is printed only on the paths where the pool
+  converted at least 10% of capital, with N stated.
+
+  reads FAIL if: the reversed walk fails to concentrate conversion at the ends -- the
+  'EXCESS' column then sits at 0.0000 for every rank and the mechanism is a no-op.  The
+  numerator is per-rank and ordering-dependent; the denominator is the pool total, which is
+  fixed by the price path and is bit-identical between modes (section 1a).  They are not
+  the same quantity.
+
+  --- BENIGN  phi=0 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4
+      SHIPPED     0.0509   -0.0124   -0.0043    0.0425    0.0071   conv/cap
+                  0.0319   -0.0314   -0.0232    0.0236   -0.0118   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.169     1.079     1.066     0.759     0.122   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.997     1.175     0.481     0.166     0.000   drain
+                     0.0      23.3      34.2      48.3      86.7   MONO% of paths
+         BOOK     0.0843    0.0162    0.0366    0.0112   -0.3348   conv/cap
+                  0.0654   -0.0027    0.0177   -0.0077   -0.3537   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   0.826     1.143     1.184     1.142     0.461   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.703     0.988     1.851     0.600     0.647   drain
+                    27.5       0.0       0.0       0.0       0.0   MONO% of paths
+
+  --- NORMAL  phi=0 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4
+      SHIPPED     0.0105   -0.0052   -0.0050    0.0145    0.0145   conv/cap
+                  0.0065   -0.0092   -0.0090    0.0105    0.0105   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.090     1.083     1.085     0.931     0.100   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.999     1.048     0.945     4.710     0.071   drain
+                     0.0      24.2      41.7      47.5      80.0   MONO% of paths
+         BOOK     0.0526    0.0005    0.0198    0.0147   -0.2933   conv/cap
+                  0.0486   -0.0036    0.0158    0.0107   -0.2974   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   0.885     1.100     1.141     1.132     0.489   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.673     0.955     1.023     1.236     0.611   drain
+                    28.3       2.5       0.0       0.0       0.0   MONO% of paths
+
+  --- TOXIC  phi=0 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4
+      SHIPPED    -0.5111   -0.5261   -0.5256   -0.4233   -0.0562   conv/cap
+                 -0.0351   -0.0501   -0.0496    0.0526    0.4198   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.075     1.108     1.107     0.879     0.114   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   1.587     0.140     0.030     0.000     0.000   drain
+                     0.0       0.0       0.0       1.7      60.0   MONO% of paths
+         BOOK    -0.3757   -0.5261   -0.5261   -0.5261   -0.5261   conv/cap
+                  0.1002   -0.0501   -0.0501   -0.0501   -0.0501   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   0.783     1.108     1.108     1.108     1.108   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   1.469    42.837     0.333     0.022     0.000   drain
+                     0.0       0.0       0.0       0.0       0.0   MONO% of paths
+
+  --- TOXIC-DN  phi=0 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4
+      SHIPPED     0.4709    0.4942    0.5065    0.4427    0.1047   conv/cap
+                  0.0149    0.0382    0.0504   -0.0134   -0.3514   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.034     1.086     1.113     0.961     0.222   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.660     0.002     0.000     0.000     0.000   drain
+                     0.0      98.3     100.0     100.0     100.0   MONO% of paths
+         BOOK     0.4736    0.4845    0.5074    0.5222   -0.0316   conv/cap
+                  0.0175    0.0284    0.0513    0.0661   -0.4876   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.041     1.065     1.115     1.143    -0.095   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.002     0.140     0.486     0.620     1.499   drain
+                    96.7      63.3       8.3       0.0       0.0   MONO% of paths
+
+  --- BENIGN  phi=8500 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4
+      SHIPPED    -0.0036    0.0109    0.0176    0.0765    0.0519   conv/cap
+                 -0.0225   -0.0080   -0.0013    0.0576    0.0330   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.069     1.125     1.127     0.824     0.124   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.999     8.434    13.351    13.829     3.545   drain
+                     0.0      21.7      34.2      43.3      86.7   MONO% of paths
+         BOOK     0.0979   -0.0039    0.0191    0.0292   -0.3059   conv/cap
+                  0.0790   -0.0228    0.0002    0.0103   -0.3248   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   0.852     1.105     1.150     1.174     0.518   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.704     0.989     6.566     9.205     9.747   drain
+                    27.5       0.0       0.0       0.0       0.0   MONO% of paths
+
+  --- NORMAL  phi=8500 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4
+      SHIPPED    -0.0152    0.0053    0.0084    0.0279    0.0345   conv/cap
+                 -0.0192    0.0012    0.0044    0.0238    0.0304   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.040     1.103     1.113     0.968     0.115   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   1.001    26.052    33.680    35.460     4.186   drain
+                     0.0      24.2      40.8      47.5      80.0   MONO% of paths
+         BOOK     0.0609   -0.0103    0.0091    0.0240   -0.2777   conv/cap
+                  0.0568   -0.0144    0.0051    0.0199   -0.2818   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   0.902     1.078     1.119     1.151     0.521   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.673     2.179    17.707    21.840    23.465   drain
+                    28.3       2.5       0.0       0.0       0.0   MONO% of paths
+
+  --- TOXIC  phi=8500 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4
+      SHIPPED    -0.5113   -0.5260   -0.5255   -0.4235   -0.0556   conv/cap
+                 -0.0353   -0.0500   -0.0495    0.0524    0.4204   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.075     1.108     1.107     0.879     0.112   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   1.588   658.910   782.992   691.632   105.311   drain
+                     0.0       0.0       0.0       1.7      60.0   MONO% of paths
+         BOOK    -0.3757   -0.5261   -0.5261   -0.5261   -0.5261   conv/cap
+                  0.1002   -0.0501   -0.0501   -0.0501   -0.0501   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   0.783     1.108     1.108     1.108     1.108   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   1.469   490.792   560.860   530.168   505.593   drain
+                     0.0       0.0       0.0       0.0       0.0   MONO% of paths
+
+  --- TOXIC-DN  phi=8500 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4
+      SHIPPED     0.4659    0.4953    0.5086    0.4467    0.1117   conv/cap
+                  0.0098    0.0392    0.0525   -0.0094   -0.3443   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.023     1.089     1.118     0.970     0.238   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.662     0.002     0.000     0.000     0.000   drain
+                     0.0      98.3     100.0     100.0     100.0   MONO% of paths
+         BOOK     0.4740    0.4842    0.5051    0.5219   -0.0247   conv/cap
+                  0.0179    0.0281    0.0491    0.0658   -0.4808   EXCESS over prorata  (0.0000 = the rule delivered nothing)
+                   1.042     1.064     1.110     1.142    -0.081   ratio vs prorata, on the 120/120 paths with |pool conv| >= 10% of cap
+                   0.002     0.140     0.486     0.620     8.108   drain
+                    96.7      63.3       9.2       0.0       0.0   MONO% of paths
+
+====================================================================================================
+3.  COMPLETION -- how far the head actually gets converted
+====================================================================================================
+
+  The head does NOT start at 100% token1: all five seats open with the band's own mix,
+  which at P0 = 2000 over [1800, 2200] is 47.6% of value in token0.  So the honest
+  statistic is the SHARE OF THE SEAT'S VALUE HELD IN TOKEN0 AT PATH END, distribution over
+  the 120 paths, against the pro-rata LP whose share is pinned by the terminal price.
+
+  reads FAIL if: BOOK leaves rank 0's terminal token0 share indistinguishable from the
+  pro-rata LP's.  The LP column is computed from a SEPARATE n=1 run, not from the book.
+
+  --- BENIGN  phi=0 ---   token0 share of seat value at path end
+                                p10       p25    median       p75       p90      mean        SE
+           SHIPPED rank 0     0.000    0.004    0.080    0.991    1.000    0.491   0.0443
+           SHIPPED rank 4     0.391    0.449    0.499    0.500    0.579    0.485   0.0108
+              BOOK rank 0     0.107    0.148    0.446    1.000    1.000    0.582   0.0382
+              BOOK rank 4     0.000    0.000    0.000    0.242    0.508    0.141   0.0202
+              pro-rata LP     0.037    0.052    0.135    0.948    0.965    0.496   0.0407
+
+  --- NORMAL  phi=0 ---   token0 share of seat value at path end
+                                p10       p25    median       p75       p90      mean        SE
+           SHIPPED rank 0     0.000    0.000    0.482    1.000    1.000    0.500   0.0447
+           SHIPPED rank 4     0.431    0.449    0.499    0.500    0.599    0.491   0.0097
+              BOOK rank 0     0.097    0.138    0.630    1.000    1.000    0.570   0.0395
+              BOOK rank 4     0.000    0.000    0.000    0.377    0.544    0.182   0.0219
+              pro-rata LP     0.034    0.047    0.480    0.956    0.968    0.501   0.0415
+
+  --- TOXIC  phi=0 ---   token0 share of seat value at path end
+                                p10       p25    median       p75       p90      mean        SE
+           SHIPPED rank 0     0.000    0.000    0.000    0.003    0.056    0.015   0.0034
+           SHIPPED rank 4     0.317    0.399    0.500    0.501    0.502    0.447   0.0074
+              BOOK rank 0     0.072    0.089    0.127    0.177    0.223    0.141   0.0061
+              BOOK rank 4     0.000    0.000    0.000    0.000    0.000    0.000   0.0000
+              pro-rata LP     0.025    0.031    0.044    0.061    0.077    0.049   0.0021
+
+  --- TOXIC-DN  phi=0 ---   token0 share of seat value at path end
+                                p10       p25    median       p75       p90      mean        SE
+           SHIPPED rank 0     0.951    0.983    1.000    1.000    1.000    0.984   0.0031
+           SHIPPED rank 4     0.447    0.449    0.508    0.657    0.721    0.559   0.0116
+              BOOK rank 0     1.000    1.000    1.000    1.000    1.000    1.000   0.0000
+              BOOK rank 4     0.000    0.210    0.449    0.631    0.694    0.397   0.0234
+              pro-rata LP     0.916    0.943    0.961    0.974    0.978    0.954   0.0022
+
+====================================================================================================
+4.  TURNOVER BY RANK -- is the claimed U-shape there?
+====================================================================================================
+
+  turn = gross volume through the seat (both tokens, both legs, marked at Pt) / capital.
+  The claim under test is a U: high at rank 0 and rank 4, LOW in the middle.
+  reads FAIL if: BOOK's middle ranks turn over as much as SHIPPED's, i.e. reading the book
+  from two ends does not idle the centre.  Turnover is measured from gv/tk, which are
+  written in the fill loop and are independent of the conversion and P&L columns.
+
+  --- BENIGN  phi=0 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4     U-ratio
+      SHIPPED     149.71      2.66      1.49      0.87      0.12       44.79
+       +/- SE      11.26      0.17      0.09      0.04      0.02
+         BOOK      36.07     90.29     55.73     26.34      4.15        0.35
+       +/- SE       4.18      8.75      6.14      3.19      0.52
+   BOOK fills       5443     10718      4860      1517       129
+   SHIP fills      22435       178        77        31         3
+     per swap   TOTAL seat-fills per path: SHIPPED 22724, BOOK 22668 (1.00x) -- a HYPOTHESIS THAT DIED:
+                BOOK spreads the same work over more ranks, it does not do more of
+                it, so there is NO aggregate gas penalty.  Reported because it was
+                the obvious objection and the number does not support it.
+
+  --- NORMAL  phi=0 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4     U-ratio
+      SHIPPED      60.70      2.44      1.43      0.96      0.12       18.89
+       +/- SE       5.23      0.19      0.09      0.04      0.02
+         BOOK      12.27     36.66     28.35     11.74      3.06        0.30
+       +/- SE       1.28      4.06      3.22      1.40      0.36
+   BOOK fills       1405      3293      1879       516        78
+   SHIP fills       7047        99        42        20         3
+     per swap   TOTAL seat-fills per path: SHIPPED 7211, BOOK 7171 (0.99x) -- a HYPOTHESIS THAT DIED:
+                BOOK spreads the same work over more ranks, it does not do more of
+                it, so there is NO aggregate gas penalty.  Reported because it was
+                the obvious objection and the number does not support it.
+
+  --- TOXIC  phi=0 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4     U-ratio
+      SHIPPED       5.79      1.01      0.99      0.80      0.11        3.16
+       +/- SE       0.29      0.02      0.01      0.02      0.01
+         BOOK       4.71      2.05      1.01      0.97      0.95        2.11
+       +/- SE       0.20      0.18      0.04      0.01      0.00
+   BOOK fills        349       106        31        19        19
+   SHIP fills        500        18        13         7         1
+     per swap   TOTAL seat-fills per path: SHIPPED 541, BOOK 525 (0.97x) -- a HYPOTHESIS THAT DIED:
+                BOOK spreads the same work over more ranks, it does not do more of
+                it, so there is NO aggregate gas penalty.  Reported because it was
+                the obvious objection and the number does not support it.
+
+  --- TOXIC-DN  phi=0 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4     U-ratio
+      SHIPPED       5.94      1.08      1.09      0.94      0.22        2.98
+       +/- SE       0.26      0.01      0.00      0.02      0.02
+         BOOK       1.06      1.81      4.23      5.54      3.08        0.54
+       +/- SE       0.00      0.15      0.23      0.25      0.21
+   BOOK fills         61        85       177       160        60
+   SHIP fills        512        20        15         8         2
+     per swap   TOTAL seat-fills per path: SHIPPED 557, BOOK 543 (0.97x) -- a HYPOTHESIS THAT DIED:
+                BOOK spreads the same work over more ranks, it does not do more of
+                it, so there is NO aggregate gas penalty.  Reported because it was
+                the obvious objection and the number does not support it.
+
+  --- BENIGN  phi=8500 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4     U-ratio
+      SHIPPED     149.28      3.06      1.62      0.96      0.13       39.75
+       +/- SE      11.21      0.22      0.10      0.04      0.02
+         BOOK      37.85     86.22     56.51     28.37      5.08        0.38
+       +/- SE       4.24      8.03      6.07      3.46      0.64
+   BOOK fills       9884     13242      9276      6842      5757
+   SHIP fills      22416       264       100        35         3
+     per swap   TOTAL seat-fills per path: SHIPPED 22818, BOOK 45001 (1.97x) -- a HYPOTHESIS THAT DIED:
+                BOOK spreads the same work over more ranks, it does not do more of
+                it, so there is NO aggregate gas penalty.  Reported because it was
+                the obvious objection and the number does not support it.
+
+  --- NORMAL  phi=8500 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4     U-ratio
+      SHIPPED      60.50      2.62      1.49      1.00      0.13       17.81
+       +/- SE       5.19      0.22      0.10      0.04      0.02
+         BOOK      12.74     35.72     28.32     12.38      3.31        0.31
+       +/- SE       1.33      3.80      3.20      1.49      0.39
+   BOOK fills       2840      4124      3135      2165      1835
+   SHIP fills       7042       137        54        21         3
+     per swap   TOTAL seat-fills per path: SHIPPED 7257, BOOK 14100 (1.94x) -- a HYPOTHESIS THAT DIED:
+                BOOK spreads the same work over more ranks, it does not do more of
+                it, so there is NO aggregate gas penalty.  Reported because it was
+                the obvious objection and the number does not support it.
+
+  --- TOXIC  phi=8500 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4     U-ratio
+      SHIPPED       5.78      1.01      0.99      0.80      0.11        3.15
+       +/- SE       0.29      0.02      0.01      0.02      0.01
+         BOOK       4.71      2.04      1.01      0.97      0.96        2.11
+       +/- SE       0.20      0.18      0.04      0.01      0.00
+   BOOK fills        370       172       130       131       140
+   SHIP fills        500        28        17         8         1
+     per swap   TOTAL seat-fills per path: SHIPPED 554, BOOK 943 (1.70x) -- a HYPOTHESIS THAT DIED:
+                BOOK spreads the same work over more ranks, it does not do more of
+                it, so there is NO aggregate gas penalty.  Reported because it was
+                the obvious objection and the number does not support it.
+
+  --- TOXIC-DN  phi=8500 ---
+                  rank 0    rank 1    rank 2    rank 3    rank 4     U-ratio
+      SHIPPED       5.93      1.08      1.09      0.94      0.22        2.97
+       +/- SE       0.26      0.01      0.00      0.02      0.02
+         BOOK       1.06      1.81      4.21      5.54      3.13        0.54
+       +/- SE       0.00      0.15      0.23      0.25      0.21
+   BOOK fills        164       160       228       229       172
+   SHIP fills        512        31        20         9         2
+     per swap   TOTAL seat-fills per path: SHIPPED 573, BOOK 954 (1.66x) -- a HYPOTHESIS THAT DIED:
+                BOOK spreads the same work over more ranks, it does not do more of
+                it, so there is NO aggregate gas penalty.  Reported because it was
+                the obvious objection and the number does not support it.
+
+====================================================================================================
+5.  EXECUTION QUALITY -- the number that decides the product
+====================================================================================================
+
+  A DISCARDED METRIC, RECORDED BECAUSE IT IS THE EXACT LAW 5 SHAPE.  The first draft of this
+  section reported a NET price, -(a1_i - o1_i)/(a0_i - o0_i): the price of rank 0's net
+  position change.  It is economically the right question and it is numerically worthless.
+  Net conversion is a DIFFERENCE of two large numbers and goes through zero on any path that
+  round-trips, so the denominator is dust and the ratio explodes.  Measured: it printed a
+  mean net price of 8.48 against a TWAP of 1994.13, and 'rank 0 beats a taker by 9715 bps
+  (SE 6318)'.  A 97% edge is not a finding, it is a divide-by-almost-zero, and the SE being
+  two thirds of the mean is the tell.  It is reported below ONLY on the paths where the net
+  conversion is at least 25% of the seat's opening token0, with N stated.
+
+  THE WELL-CONDITIONED FORM.  Buy and sell legs separately.  Both denominators are GROSS
+  quantities traded, which are large whenever the seat trades at all:
+    buy  VWAP = numeraire paid / token0 received, INCLUDING the fee the seat retains and
+                net of premium forfeited.  LOWER is better.
+    sell VWAP = numeraire received (same basis) / token0 given up.  HIGHER is better.
+    spread    = sell VWAP - buy VWAP, in bps of TWAP.  This is the market-maker's actual
+                round-trip edge and it is what front-first pricing is supposed to buy.
+    TWAP      = hourly mean of the EXTERNAL price over the band's life -- built from the
+                price process, never from a fill, so it cannot move with the ordering rule.
+    vs taker  = against a taker doing the same side clip-by-clip and paying FEE:
+                buy  leg: 1e4*(TWAP*(1+FEE) - buyVWAP)/TWAP   POSITIVE = seat better
+                sell leg: 1e4*(sellVWAP - TWAP*(1-FEE))/TWAP  POSITIVE = seat better
+
+  reads FAIL if: front-first pricing hands rank 0 the stale end of every move.  It can and
+  does read negative -- results-exec.txt already measured the head's per-fill edge at -5 to
+  -27 bps under the shipped rule.
+
+  ===== phi = 0 =====
+       regime       mode/who    buyVWAP   sellVWAP       TWAP  spread bps      SE  buy vs tkr      SE  sell vs tkr      SE
+       BENIGN     SHIPPED r0    1987.31    1997.51    1994.13        51.1     0.6        63.9     1.2         47.2     1.2
+       BENIGN        BOOK r0    2062.97    2112.93    1994.13       116.6     5.7      -318.9    15.7        476.0    21.7
+       BENIGN     SHIPPED r4    1800.26    2200.06    1994.13         n/a     n/a       648.8    29.6        655.8    40.8
+       BENIGN        BOOK r4    1806.75    1952.26    1994.13       415.1    33.8       716.9    28.0       -178.5    20.4
+                 pro-rata LP    1985.26               1994.13                            74.3     1.0
+
+       NORMAL     SHIPPED r0    1984.07    1992.26    1989.66        41.1     1.4        57.5     2.6         43.6     2.6
+       NORMAL        BOOK r0    2048.40    2107.07    1989.66       179.2     8.4      -268.7    15.8        488.1    21.6
+       NORMAL     SHIPPED r4    1802.44    2197.62    1989.66      1990.0    11.9       701.4    23.4        776.0    42.0
+       NORMAL        BOOK r4    1809.79    1960.81    1989.66       540.8    34.6       705.4    19.1       -112.2    21.8
+                 pro-rata LP    1979.70               1989.66                            79.8     1.6
+
+        TOXIC     SHIPPED r0    2066.85    2063.22    2085.15       -16.8     5.5       117.9     4.6        -74.8     5.4
+        TOXIC        BOOK r0    2071.63    2131.48    2085.15       287.9     9.7        94.7     6.0        253.2     8.5
+        TOXIC     SHIPPED r4        n/a    2194.71    2085.15         n/a     n/a         n/a     n/a        517.9    17.9
+        TOXIC        BOOK r4        n/a    2004.48    2085.15         n/a     n/a         n/a     n/a       -355.6     9.9
+                 pro-rata LP    2066.60               2085.15                           119.2     4.6
+
+     TOXIC-DN     SHIPPED r0    1932.41    1927.17    1911.00       -28.2     6.4       -82.5     6.2        114.3     5.2
+     TOXIC-DN        BOOK r0    1981.82    2067.71    1911.00       245.2    70.4      -341.7     9.9        552.3    11.5
+     TOXIC-DN     SHIPPED r4    1804.90        n/a    1911.00         n/a     n/a       570.4    14.7          n/a     n/a
+     TOXIC-DN        BOOK r4    1812.43    1948.17    1911.00       672.8    22.6       537.1    12.4        224.4    18.0
+                 pro-rata LP    1906.99               1911.00                            50.2     5.7
+
+  ===== phi = 8500 =====
+       regime       mode/who    buyVWAP   sellVWAP       TWAP  spread bps      SE  buy vs tkr      SE  sell vs tkr      SE
+       BENIGN     SHIPPED r0    1992.49    1992.31    1994.13        -0.9     0.5        38.0     1.2         21.1     1.2
+       BENIGN        BOOK r0    2066.02    2105.63    1994.13        63.2     5.4      -334.0    15.1        439.8    21.0
+       BENIGN     SHIPPED r4    1805.16    2194.33    1994.13         n/a     n/a       644.7    32.8        628.1    40.7
+       BENIGN        BOOK r4    1812.27    1942.69    1994.13       317.6    28.4       688.5    28.1       -227.1    18.7
+                 pro-rata LP    1985.26               1994.13                            74.3     1.0
+
+       NORMAL     SHIPPED r0    1989.22    1987.10    1989.66       -10.7     1.4        31.6     2.7         17.6     2.6
+       NORMAL        BOOK r0    2052.65    2100.73    1989.66       125.3     8.2      -290.0    15.6        456.5    21.2
+       NORMAL     SHIPPED r4    1807.17    2191.91    1989.66      1936.2    11.2       689.4    25.8        748.0    41.9
+       NORMAL        BOOK r4    1814.85    1953.33    1989.66       468.5    32.8       679.3    19.2       -150.1    20.6
+                 pro-rata LP    1979.70               1989.66                            79.8     1.6
+
+        TOXIC     SHIPPED r0    2072.13    2057.91    2085.15       -67.6     5.4        92.6     4.6       -100.2     5.4
+        TOXIC        BOOK r0    2076.90    2126.04    2085.15       236.5     9.7        69.4     6.0        227.1     8.4
+        TOXIC     SHIPPED r4        n/a    2189.10    2085.15         n/a     n/a         n/a     n/a        491.1    17.8
+        TOXIC        BOOK r4        n/a    1999.54    2085.15         n/a     n/a         n/a     n/a       -379.3     9.9
+                 pro-rata LP    2066.60               2085.15                           119.2     4.6
+
+     TOXIC-DN     SHIPPED r0    1937.39    1922.25    1911.00       -80.0     6.4      -108.6     6.2         88.6     5.2
+     TOXIC-DN        BOOK r0    1986.72    2062.39    1911.00       192.0    69.6      -367.3     9.9        525.2    11.6
+     TOXIC-DN     SHIPPED r4    1809.53        n/a    1911.00         n/a     n/a       546.2    14.7          n/a     n/a
+     TOXIC-DN        BOOK r4    1817.17    1941.63    1911.00       614.1    22.2       512.3    12.5        190.3    17.7
+                 pro-rata LP    1906.99               1911.00                            50.2     5.7
+
+  5b.  THE NET-CONVERSION PRICE, on the paths where the net change is MATERIAL only.
+       Filter: |a0_i - o0_i| >= 25% of o0_i.  price = -(a1_i - o1_i)/(a0_i - o0_i), which is
+       signed correctly for a net buyer AND a net seller.  N is stated because the filter
+       is doing real work -- and where N is small the row is not evidence.
+
+       regime    phi      mode   N/120  net side     net px       TWAP  vs TWAP bps       SE
+       BENIGN      0   SHIPPED     120      SELL    2244.13    1994.13       1198.4    408.7
+       BENIGN      0      BOOK     116       BUY    2439.52    1993.91      -2189.1    340.2
+       NORMAL      0   SHIPPED     120      SELL    2026.56    1989.66        165.0    146.8
+       NORMAL      0      BOOK     120      SELL    2244.42    1989.66       1259.4    121.2
+        TOXIC      0   SHIPPED     120      SELL    2063.15    2085.15       -103.8     16.2
+        TOXIC      0      BOOK     120      SELL    2293.41    2085.15       1002.6     39.6
+     TOXIC-DN      0   SHIPPED     120       BUY    1937.06    1911.00       -138.6     16.6
+     TOXIC-DN      0      BOOK     120       BUY    1981.72    1911.00       -371.2      9.9
+
+       BENIGN   8500   SHIPPED     120      SELL    2048.45    1994.13        254.5    134.5
+       BENIGN   8500      BOOK     116       BUY    2474.82    1993.91      -2359.9    420.3
+       NORMAL   8500   SHIPPED     120      SELL    1992.04    1989.66          9.5     42.5
+       NORMAL   8500      BOOK     120      SELL    2248.79    1989.66       1278.5    168.0
+        TOXIC   8500   SHIPPED     120      SELL    2038.36    2085.15       -223.0     13.4
+        TOXIC   8500      BOOK     120      SELL    2292.73    2085.15        999.5     39.0
+     TOXIC-DN   8500   SHIPPED     120       BUY    1958.85    1911.00       -252.4     15.0
+     TOXIC-DN   8500      BOOK     120       BUY    1980.25    1911.00       -363.6     10.3
+
+  THE MIRROR CONTROL.  A monotone token0 accumulator is LONG DELTA against a pro-rata LP,
+  so if BOOK's rank-0 advantage is a direction bet it MUST change sign when the drift is
+  mirrored between TOXIC (+0.35) and TOXIC-DN (-0.35).  If it is queue value, it must not.
+  Differences are taken PATH BY PATH, so the path noise cancels and the SE is the SE of the
+  paired difference.
+
+       regime    phi   r0 SHIPPED      r0 BOOK    BOOK-SHIP   SE(paired)        t
+       BENIGN      0       14.690        3.576      -11.114        1.167    -9.52
+       NORMAL      0        2.186       -0.266       -2.452        0.621    -3.95
+        TOXIC      0       -3.278        1.209        4.487        0.072    61.96
+     TOXIC-DN      0       -4.070       -5.347       -1.277        0.064   -20.10
+       BENIGN   8500        1.703        6.290        4.587        0.597     7.69
+       NORMAL   8500       -3.184        1.065        4.249        0.516     8.24
+        TOXIC   8500       -3.815        1.203        5.017        0.085    58.99
+     TOXIC-DN   8500       -4.620       -5.311       -0.691        0.041   -16.74
+
+====================================================================================================
+6.  THE MIDDLE'S PRODUCT -- and who pays for it
+====================================================================================================
+
+  Per-rank decomposition from tie_out(): total = fees(incl. premium received) + markout,
+  all as a fraction of the seat's own opening capital.  Differences are PAIRED (same seed,
+  same price path), so the SE is the SE of the paired difference, not of the level.
+  reads FAIL if: BOOK moves nothing per rank.  The identity in 1a pins the CAPITAL-WEIGHTED
+  total to zero change, so a non-zero per-rank column has to be matched by an opposite one
+  elsewhere -- that cross-check is printed as 'sum c_i*d' and must read ~0.
+
+  --- BENIGN  phi=0 ---
+                         rank 0     rank 1     rank 2     rank 3     rank 4   sum c_i*d
+     total ret SHIP      14.690      0.170      0.285      0.194     -0.009
+     total ret BOOK       3.576      8.848      5.262      2.846      0.619
+              delta     -11.114      8.678      4.976      2.652      0.627     -0.0000
+         SE(paired)       1.167      1.071      0.820      0.714      0.479
+     fees+prem SHIP      22.479      0.399      0.224      0.131      0.018
+     fees+prem BOOK       5.416     13.557      8.367      3.955      0.623
+              delta     -17.063     13.158      8.143      3.824      0.605      0.0000
+         SE(paired)       1.416      1.295      0.915      0.478      0.078
+       markout SHIP      -7.789     -0.228      0.061      0.064     -0.027
+       markout BOOK      -1.840     -4.709     -3.106     -1.109     -0.004
+              delta       5.949     -4.480     -3.167     -1.172      0.023     -0.0000
+         SE(paired)       0.538      0.301      0.374      0.381      0.433
+   premium recv SHIP       0.000      0.000      0.000      0.000      0.000
+   premium recv BOOK       0.000      0.000      0.000      0.000      0.000
+              delta       0.000      0.000      0.000      0.000      0.000      0.0000
+         SE(paired)       0.000      0.000      0.000      0.000      0.000
+        pro-rata LP       5.025   (the bar every rank must clear)
+
+  --- NORMAL  phi=0 ---
+                         rank 0     rank 1     rank 2     rank 3     rank 4   sum c_i*d
+     total ret SHIP       2.186     -0.565     -0.298     -0.277      0.066
+     total ret BOOK      -0.266      1.020      1.092      0.432      0.401
+              delta      -2.452      1.584      1.390      0.709      0.334     -0.0000
+         SE(paired)       0.621      0.370      0.500      0.463      0.460
+     fees+prem SHIP       9.108      0.366      0.213      0.144      0.018
+     fees+prem BOOK       1.839      5.501      4.254      1.762      0.460
+              delta      -7.269      5.135      4.041      1.618      0.442     -0.0000
+         SE(paired)       0.722      0.587      0.477      0.209      0.053
+       markout SHIP      -6.922     -0.931     -0.512     -0.421      0.048
+       markout BOOK      -2.106     -4.482     -3.163     -1.330     -0.059
+              delta       4.817     -3.551     -2.651     -0.909     -0.107      0.0000
+         SE(paired)       0.490      0.282      0.332      0.359      0.440
+   premium recv SHIP       0.000      0.000      0.000      0.000      0.000
+   premium recv BOOK       0.000      0.000      0.000      0.000      0.000
+              delta       0.000      0.000      0.000      0.000      0.000      0.0000
+         SE(paired)       0.000      0.000      0.000      0.000      0.000
+        pro-rata LP       0.486   (the bar every rank must clear)
+
+  --- TOXIC  phi=0 ---
+                         rank 0     rank 1     rank 2     rank 3     rank 4   sum c_i*d
+     total ret SHIP      -3.278     -2.570     -1.532     -0.652     -0.040
+     total ret BOOK       1.209     -3.158     -4.086     -4.530     -4.705
+              delta       4.487     -0.588     -2.554     -3.878     -4.665     -0.0000
+         SE(paired)       0.072      0.043      0.056      0.038      0.026
+     fees+prem SHIP       0.863      0.148      0.146      0.119      0.016
+     fees+prem BOOK       0.708      0.303      0.145      0.138      0.136
+              delta      -0.155      0.155     -0.002      0.019      0.120      0.0000
+         SE(paired)       0.022      0.026      0.005      0.004      0.002
+       markout SHIP      -4.141     -2.718     -1.678     -0.771     -0.056
+       markout BOOK       0.500     -3.461     -4.231     -4.668     -4.841
+              delta       4.641     -0.743     -2.552     -3.897     -4.786      0.0000
+         SE(paired)       0.083      0.049      0.059      0.039      0.027
+   premium recv SHIP       0.000      0.000      0.000      0.000      0.000
+   premium recv BOOK       0.000      0.000      0.000      0.000      0.000
+              delta       0.000      0.000      0.000      0.000      0.000      0.0000
+         SE(paired)       0.000      0.000      0.000      0.000      0.000
+        pro-rata LP      -2.174   (the bar every rank must clear)
+
+  --- TOXIC-DN  phi=0 ---
+                         rank 0     rank 1     rank 2     rank 3     rank 4   sum c_i*d
+     total ret SHIP      -4.070     -3.177     -1.886     -0.832     -0.094
+     total ret BOOK      -5.347     -4.204     -1.790      1.844      4.763
+              delta      -1.277     -1.028      0.096      2.676      4.857     -0.0000
+         SE(paired)       0.064      0.041      0.079      0.101      0.056
+     fees+prem SHIP       0.885      0.157      0.160      0.140      0.033
+     fees+prem BOOK       0.150      0.265      0.632      0.834      0.469
+              delta      -0.734      0.108      0.472      0.694      0.436     -0.0000
+         SE(paired)       0.039      0.023      0.035      0.038      0.029
+       markout SHIP      -4.955     -3.334     -2.046     -0.971     -0.127
+       markout BOOK      -5.498     -4.469     -2.422      1.010      4.294
+              delta      -0.543     -1.136     -0.376      1.982      4.421     -0.0000
+         SE(paired)       0.038      0.048      0.062      0.092      0.046
+   premium recv SHIP       0.000      0.000      0.000      0.000      0.000
+   premium recv BOOK       0.000      0.000      0.000      0.000      0.000
+              delta       0.000      0.000      0.000      0.000      0.000      0.0000
+         SE(paired)       0.000      0.000      0.000      0.000      0.000
+        pro-rata LP      -2.698   (the bar every rank must clear)
+
+  --- BENIGN  phi=8500 ---
+                         rank 0     rank 1     rank 2     rank 3     rank 4   sum c_i*d
+     total ret SHIP       1.703      5.734      6.593      7.781      8.574
+     total ret BOOK       6.290      2.524      3.940      6.735      8.530
+              delta       4.587     -3.209     -2.653     -1.047     -0.044      0.0000
+         SE(paired)       0.597      0.242      0.403      0.585      0.681
+     fees+prem SHIP       9.447      5.977      6.580      7.729      8.603
+     fees+prem BOOK       8.169      7.040      7.084      8.022      8.641
+              delta      -1.278      1.064      0.503      0.293      0.038     -0.0000
+         SE(paired)       0.248      0.131      0.142      0.272      0.288
+       markout SHIP      -7.744     -0.243      0.013      0.053     -0.029
+       markout BOOK      -1.879     -4.516     -3.143     -1.287     -0.111
+              delta       5.864     -4.273     -3.156     -1.340     -0.082     -0.0000
+         SE(paired)       0.565      0.296      0.394      0.426      0.496
+   premium recv SHIP       6.085      5.908      6.544      7.707      8.600
+   premium recv BOOK       7.317      5.098      5.811      7.383      8.526
+              delta       1.232     -0.809     -0.733     -0.324     -0.074     -0.0000
+         SE(paired)       0.186      0.073      0.079      0.208      0.279
+        pro-rata LP       5.025   (the bar every rank must clear)
+
+  --- NORMAL  phi=8500 ---
+                         rank 0     rank 1     rank 2     rank 3     rank 4   sum c_i*d
+     total ret SHIP      -3.184      1.594      2.396      2.923      3.795
+     total ret BOOK       1.065     -1.493     -0.051      2.117      3.858
+              delta       4.249     -3.088     -2.448     -0.806      0.062      0.0000
+         SE(paired)       0.516      0.237      0.376      0.424      0.551
+     fees+prem SHIP       3.706      2.557      2.903      3.367      3.748
+     fees+prem BOOK       3.209      2.904      3.103      3.516      3.947
+              delta      -0.497      0.347      0.200      0.149      0.199      0.0000
+         SE(paired)       0.108      0.052      0.074      0.099      0.126
+       markout SHIP      -6.890     -0.963     -0.507     -0.444      0.047
+       markout BOOK      -2.144     -4.397     -3.155     -1.400     -0.089
+              delta       4.746     -3.435     -2.648     -0.956     -0.136     -0.0000
+         SE(paired)       0.501      0.268      0.351      0.375      0.469
+   premium recv SHIP       2.344      2.498      2.870      3.345      3.745
+   premium recv BOOK       2.922      2.100      2.466      3.238      3.872
+              delta       0.578     -0.398     -0.404     -0.107      0.127      0.0000
+         SE(paired)       0.081      0.038      0.054      0.076      0.120
+        pro-rata LP       0.486   (the bar every rank must clear)
+
+  --- TOXIC  phi=8500 ---
+                         rank 0     rank 1     rank 2     rank 3     rank 4   sum c_i*d
+     total ret SHIP      -3.815     -2.453     -1.305     -0.239      0.671
+     total ret BOOK       1.203     -3.211     -4.041     -4.493     -4.669
+              delta       5.017     -0.757     -2.736     -4.255     -5.340     -0.0000
+         SE(paired)       0.085      0.050      0.061      0.041      0.032
+     fees+prem SHIP       0.316      0.272      0.378      0.535      0.728
+     fees+prem BOOK       0.689      0.251      0.199      0.185      0.184
+              delta       0.373     -0.021     -0.179     -0.350     -0.543     -0.0000
+         SE(paired)       0.007      0.003      0.004      0.007      0.015
+       markout SHIP      -4.131     -2.725     -1.683     -0.774     -0.056
+       markout BOOK       0.514     -3.462     -4.240     -4.679     -4.853
+              delta       4.645     -0.737     -2.557     -3.905     -4.797      0.0000
+         SE(paired)       0.083      0.049      0.059      0.040      0.027
+   premium recv SHIP       0.187      0.249      0.356      0.517      0.725
+   premium recv BOOK       0.583      0.205      0.177      0.165      0.164
+              delta       0.396     -0.044     -0.179     -0.353     -0.561      0.0000
+         SE(paired)       0.008      0.003      0.004      0.007      0.015
+        pro-rata LP      -2.174   (the bar every rank must clear)
+
+  --- TOXIC-DN  phi=8500 ---
+                         rank 0     rank 1     rank 2     rank 3     rank 4   sum c_i*d
+     total ret SHIP      -4.620     -3.061     -1.659     -0.418      0.685
+     total ret BOOK      -5.311     -4.231     -2.031      1.745      5.608
+              delta      -0.691     -1.170     -0.371      2.163      4.923     -0.0000
+         SE(paired)       0.041      0.048      0.065      0.096      0.052
+     fees+prem SHIP       0.324      0.280      0.392      0.556      0.812
+     fees+prem BOOK       0.198      0.241      0.386      0.724      1.281
+              delta      -0.126     -0.039     -0.006      0.167      0.468      0.0000
+         SE(paired)       0.008      0.002      0.005      0.010      0.017
+       markout SHIP      -4.944     -3.342     -2.051     -0.974     -0.127
+       markout BOOK      -5.509     -4.473     -2.417      1.021      4.328
+              delta      -0.565     -1.131     -0.365      1.996      4.455     -0.0000
+         SE(paired)       0.038      0.048      0.063      0.092      0.047
+   premium recv SHIP       0.191      0.257      0.368      0.535      0.807
+   premium recv BOOK       0.176      0.202      0.292      0.598      1.209
+              delta      -0.016     -0.055     -0.076      0.063      0.402      0.0000
+         SE(paired)       0.004      0.003      0.003      0.007      0.013
+        pro-rata LP      -2.698   (the bar every rank must clear)
+
+====================================================================================================
+6b.  THE BACK-OF-BOOK CONSTRAINT -- the one report_shipping.py picks phi to satisfy
+====================================================================================================
+
+  results-shipping.txt section 2: the bar for seats 2-5 is the ORDINARY PRO-RATA LP, not
+  zero.  A back seat that merely returns something positive has not earned its rent, lock
+  or gas.  phi = 8500 ships BECAUSE it is the constant that lifts the back over that bar.
+  Below: each rank's mean return MINUS the pro-rata LP on the same path, and the share of
+  the 480 individual (path, rank) cells in ranks 1-4 that clear it.
+  reads FAIL if: BOOK leaves the back where SHIPPED leaves it.  The bar comes from a
+  SEPARATE n=1 run on the same seed, never from the book's own numbers.
+
+       regime    phi      mode    r0-LP pp   r1-LP pp   r2-LP pp   r3-LP pp   r4-LP pp   ranks1-4 clear LP
+       BENIGN      0   SHIPPED        9.67      -4.85      -4.74      -4.83      -5.03                9.2%
+       BENIGN      0      BOOK       -1.45       3.82       0.24      -2.18      -4.41               47.7%
+
+       NORMAL      0   SHIPPED        1.70      -1.05      -0.78      -0.76      -0.42               37.9%
+       NORMAL      0      BOOK       -0.75       0.53       0.61      -0.05      -0.09               49.2%
+
+        TOXIC      0   SHIPPED       -1.10      -0.40       0.64       1.52       2.13               75.4%
+        TOXIC      0      BOOK        3.38      -0.98      -1.91      -2.36      -2.53                0.0%
+
+     TOXIC-DN      0   SHIPPED       -1.37      -0.48       0.81       1.87       2.60               75.2%
+     TOXIC-DN      0      BOOK       -2.65      -1.51       0.91       4.54       7.46               74.0%
+
+       BENIGN   8500   SHIPPED       -3.32       0.71       1.57       2.76       3.55               80.0%
+       BENIGN   8500      BOOK        1.27      -2.50      -1.08       1.71       3.51               37.5%
+
+       NORMAL   8500   SHIPPED       -3.67       1.11       1.91       2.44       3.31               86.5%
+       NORMAL   8500      BOOK        0.58      -1.98      -0.54       1.63       3.37               37.9%
+
+        TOXIC   8500   SHIPPED       -1.64      -0.28       0.87       1.94       2.85               75.8%
+        TOXIC   8500      BOOK        3.38      -1.04      -1.87      -2.32      -2.50                0.0%
+
+     TOXIC-DN   8500   SHIPPED       -1.92      -0.36       1.04       2.28       3.38               75.2%
+     TOXIC-DN   8500      BOOK       -2.61      -1.53       0.67       4.44       8.31               73.1%
+
+
+====================================================================================================
+7.  VERDICT
+====================================================================================================
+
+  DOES THE TWO-ENDED BOOK DELIVER A MONOTONE PRIORITY LIMIT ORDER THAT BEATS A TAKER?
+
+                                    NO.  Not in any regime, and not for either reason.
+
+  1. IT IS NOT MONOTONE.  Rank 0's token0 never decreases on 27.5% of BENIGN paths, 28.3%
+     of NORMAL, 0.0% of TOXIC and 96.7% of TOXIC-DN.  Read that row again: monotonicity is
+     pinned by the DRIFT, not by the ordering rule.  Rank 0 is a monotone accumulator
+     exactly when the price falls -- i.e. exactly when accumulating is the losing side --
+     and never when it rises.  A limit buy you cannot stop working when the market runs
+     away from you is not a limit buy, it is adverse selection with extra steps.
+
+  2. IT LOSES ON PRICE.  Rank 0's buy VWAP goes from 1984.07 (SHIPPED) to 2048.40 (BOOK)
+     against a TWAP of 1989.66 -- NORMAL, phi=0.  Against a taker buying the same clip by
+     clip and paying the 0.30% fee, BOOK's rank 0 is -269 bps (NORMAL), -319 bps (BENIGN)
+     and -342 bps (TOXIC-DN).  A mandated buyer under BOOK is WORSE OFF THAN A TAKER, by
+     roughly three tenths of a percent to a third of a percent, in every driftless or
+     falling regime.  It is +95 bps in TOXIC only, and section 5's mirror control shows
+     that sign is the drift talking.
+
+  3. THE U-SHAPE IS NOT THERE -- IT IS INVERTED.  Claimed: high turnover at both ends, low
+     in the middle.  Measured (BENIGN, phi=0, turnover/capital): SHIPPED 149.7 / 2.7 / 1.5
+     / 0.9 / 0.1, a clean monotone decline.  BOOK 36.1 / 90.3 / 55.7 / 26.3 / 4.2 -- a HUMP
+     with its peak at rank 1.  Reading the book from both ends does not idle the centre, it
+     makes the centre the only place BOTH directions can be served, so the centre churns.
+     End/middle turnover ratio: 44.79 under SHIPPED, 0.35 under BOOK.
+
+  4. THE MIDDLE'S MARKOUT GETS WORSE, NOT BETTER.  NORMAL, phi=8500: rank 1 markout goes
+     -0.96% -> -4.40%, rank 2 -0.51% -> -3.16%.  That follows directly from (3): markout
+     is what turnover buys you.
+
+  5. WHO PAYS.  The identity holds to 0.0000, so rank 0's gain is somebody's loss and
+     section 6 names them.  NORMAL, phi=8500: rank 0 +4.25pp, rank 1 -3.09pp, rank 2
+     -2.45pp, rank 3 -0.81pp, rank 4 +0.06pp.  THE MIDDLE PAYS THE HEAD.  That is the exact
+     opposite of the proposal's stated intent, which was to pay the middle from both ends.
+
+  6. IT BREAKS THE CONSTRAINT phi = 8500 EXISTS TO SATISFY.  Share of (path, rank) cells in
+     ranks 1-4 clearing the pro-rata LP, at the shipped phi: BENIGN 80.0% -> 37.5%, NORMAL
+     86.5% -> 37.9%, TOXIC 75.8% -> 0.0%.  There is no phi that repairs this, because the
+     premium is what was lifting the back over the bar and BOOK reroutes the premium TO THE
+     HEAD: rank 0 ends up holding the token0 that the token1-direction premium is weighted
+     by, so it collects the coupon it is supposed to be paying.  NORMAL phi=8500, premium
+     received: rank 0 2.344% -> 2.922%, ranks 1-3 all DOWN.
+
+  7. NO GAS SAVING EITHER.  Total seat-fills per path are within 1% between the two rules;
+     BOOK redistributes the work, it does not reduce it.
+
+  WHAT ACTUALLY KILLED IT, IN ONE SENTENCE.  Rank 0 already drains FIRST in the
+  zeroForOne direction under the shipped rule, so reversing the OTHER direction changes
+  nothing about how rank 0 BUYS -- it only stops rank 0 SELLING.  The whole economic effect
+  is therefore 'the head holds its token0 longer', which is a LONG-DELTA TILT and not a
+  queue-position product: it pays +4.49pp in TOXIC (drift +0.35) and -1.28pp in TOXIC-DN
+  (drift -0.35), at phi=0, on 120 paths each, t = +61.96 and -20.10.  A mechanism whose
+  sign is set by the drift is a directional bet wearing a market-structure costume, and it
+  is sold to a seat holder who cannot choose the drift.
+
+  ONE THING THE BOOK DOES DO, STATED SO IT IS NOT LOST.  Rank 0's round-trip spread widens
+  from 41.1 to 179.2 bps (NORMAL, phi=0) because its inventory now cycles at the top of the
+  band.  It is real and it is not enough: turnover falls 60.7 -> 12.3, so fee income falls
+  9.11% -> 1.84% of capital while markout only improves -6.92% -> -2.11%.  The head pays
+  7.27pp of fees to save 4.82pp of markout.  That is the trade, and it is a bad one.
+
+====================================================================================================
+7b.  THE HEADLINE NUMBERS
+====================================================================================================
+
+  phi = 0:
+        BENIGN  r0 delta -11.114pp (SE 1.167, t=-9.52)   r0 monotone  27.5% of paths   r0 buy vs taker  -318.9 bps (SE 15.7)   r0 round-trip spread  +116.6 bps (SE 5.7)
+        NORMAL  r0 delta  -2.452pp (SE 0.621, t=-3.95)   r0 monotone  28.3% of paths   r0 buy vs taker  -268.7 bps (SE 15.8)   r0 round-trip spread  +179.2 bps (SE 8.4)
+         TOXIC  r0 delta  +4.487pp (SE 0.072, t=+61.96)   r0 monotone   0.0% of paths   r0 buy vs taker   +94.7 bps (SE 6.0)   r0 round-trip spread  +287.9 bps (SE 9.7)
+      TOXIC-DN  r0 delta  -1.277pp (SE 0.064, t=-20.10)   r0 monotone  96.7% of paths   r0 buy vs taker  -341.7 bps (SE 9.9)   r0 round-trip spread  +245.2 bps (SE 70.4)
+
+  phi = 8500:
+        BENIGN  r0 delta  +4.587pp (SE 0.597, t=+7.69)   r0 monotone  27.5% of paths   r0 buy vs taker  -334.0 bps (SE 15.1)   r0 round-trip spread   +63.2 bps (SE 5.4)
+        NORMAL  r0 delta  +4.249pp (SE 0.516, t=+8.24)   r0 monotone  28.3% of paths   r0 buy vs taker  -290.0 bps (SE 15.6)   r0 round-trip spread  +125.3 bps (SE 8.2)
+         TOXIC  r0 delta  +5.017pp (SE 0.085, t=+58.99)   r0 monotone   0.0% of paths   r0 buy vs taker   +69.4 bps (SE 6.0)   r0 round-trip spread  +236.5 bps (SE 9.7)
+      TOXIC-DN  r0 delta  -0.691pp (SE 0.041, t=-16.74)   r0 monotone  96.7% of paths   r0 buy vs taker  -367.3 bps (SE 9.9)   r0 round-trip spread  +192.0 bps (SE 69.6)
+
+====================================================================================================
