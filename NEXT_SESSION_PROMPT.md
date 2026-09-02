@@ -154,7 +154,14 @@ that credits a seat must leave it inside a window some cursor can still reach.**
    (5.160). **This is the one Phase 10 added; Phase 9 left it open.**
 4. **A two-ended book** (one roster read from both ends). Designed, simulated, killed: it makes the
    execution price WORSE, and the advantage flips sign under mirrored drift.
-5. **A senior/junior tranche. LIFO. `sponsor()` / a DAO paying rent.**
+5. **A senior/junior tranche — RE-TESTED AND RE-KILLED IN PHASE 10, with the strongest version of
+   the argument.** "Tranching allocates RISK, not return, and three sessions measured only return"
+   is a good argument and it is still wrong here. `results-tranche.txt` §11 states the bar before
+   the numbers — *"one to two orders of magnitude … or there is nothing being sold"* — and measures
+   **0.0× to 1.6×**. In BENIGN ±30% the passive LP is strictly safer. **The tail is not protected at
+   all: TOXIC ±30% worst is −6.49% for the back against −6.43% for the LP.** The seductive numbers
+   (48× downside, 4,600× markout spread) are all back-vs-FRONT; the front is not a benchmark. See
+   PITFALLS 5.174. **LIFO. `sponsor()` / a DAO paying rent.**
 6. **Reducing LVR with a curve; detecting toxic flow.**
 7. **Rolling the band without paying the keeper's conversion bill.** `recenter()` stays unshipped.
 
