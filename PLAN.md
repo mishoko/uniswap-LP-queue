@@ -30,10 +30,19 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 | **5** | Gas + scale | ✅ **COMPLETE** 2026-08-28 | §D.7 PASS | all 6 criteria; the gas table re-measured honestly and §B.9 CORRECTED; 61 mutations red, **0 survivors** |
 | **6** | Adversarial + invariant campaign | ✅ **COMPLETE** 2026-08-28 | §D.8 PASS | all 5 criteria; 11 invariants x 256 runs x 64 depth; **3 REAL BUGS FOUND AND FIXED** (PITFALLS 5.73, 5.74, 5.76/5.77); 66 mutations red, **0 survivors** |
 | **7** | Testnet + demo + video | 🟨 **IN PROGRESS** 2026-08-29 | §D.9 | Deploy script + demo built and **fork-verified against live Unichain Sepolia**; frontend built; `pool()` disclosure added; §5.17's orthogonality claim PROVEN; **broadcast and video still outstanding** |
+| **8** | Evacuation + premium hold branch | ✅ **COMPLETE** 2026-09-02 | — | 248 tests; five defects found and fixed; 80 mutations RED, 0 survivors; invariant campaign green at φ > 0 for the first time. **Left TWO evacuation doors OPEN — PITFALLS 5.123** |
+| **9** | The value question, answered in closed form | 🟨 **IN PROGRESS** 2026-09-02 | — | **`SLACK = c₁·(LP − B₁)`** derived and confirmed to 2.4e-16 — the mechanism's entire value, independent of `N`, the ordering rule and φ (PITFALLS 5.137, `docs/research/seat-economics/FRONTIER.md`). The published φ windows were measured against a **handicapped competitor** (5.136) and the shipped φ = 7,900 sat in an empty one. Security: a **THIRD** evacuation door found and executed (sybil buyout, +267 bps); **INVARIANT L breaks by 20% of the position on an ordinary buyout, in band, on committed HEAD**; the exit path of a fixed-term instrument had zero coverage until this phase |
 
-**Whole suite as of 2026-09-01: `forge test` → 183 passed, 0 failed, 1 loudly skipped (the fork
-suite, which needs `QUEUE_FORK=true`). Hook implementation is done. Phase 7 video and broadcast
-are not. M70–M74 RED. Full re-campaign of the older 69 is not claimed.**
+**⚠ THE TWO NUMBERS BELOW WERE STALE FOR TWO PHASES — 183 was the Phase 7 count and this dashboard
+still carried it after Phase 8 took the suite to 248. Recorded rather than quietly corrected, because
+a status board nobody updates is worse than no status board: §4 says this table is the authoritative
+answer to "what is done", and for two phases it was not.**
+
+**Whole suite as of 2026-09-02 (start of Phase 9): `forge test` → 248 passed, 0 failed, 1 loudly
+skipped (the fork suite, which needs `QUEUE_FORK=true`). Mutation campaign 80 RED, 0 SURVIVED,
+0 NO-COMPILE, 0 BAD-PATTERN. Invariant campaign 13/13 at φ > 0 — but its handler is premium-blind,
+so that is not the coverage it looks like (PITFALLS 5.133), and INVARIANT L is not in it at all,
+which is why the 20%-of-position break above went unseen.**
 
 **⚠ PHASE 7 FOUND THAT THE DEPLOYMENT PATH HAD NEVER EXECUTED.** After six green phases, every suite
 reached the pool through the TEST-ONLY `QueueHarness.seed()` or through `deployCodeTo` — neither of
@@ -54,7 +63,7 @@ all three.
 **Two things §C.6 asked for turned out to rest on false premises, and are corrected in place rather
 than deleted quietly:** `seatIndex`/`indexSeat` (I6) no longer exist — Phase 4 replaced them with one
 packed word — and `QueueUnderflow` is **structurally unreachable through the pool** (PITFALLS 5.78),
-so "a swap one wei larger than the queue" is not a test that can be written.
+so "a swap one wei larger than the queue" is not a test that can be written. **⚠ THAT SENTENCE IS FALSE AS OF PHASE 7 AND WAS CORRECTED 2026-09-02 — see PITFALLS 5.78 and `Adversarial.t.sol` `test_6_15`. The test IS writable and IS written; `QueueUnderflow` is reachable through an ordinary swap on a pool whose roster has exited, because Phase 7 added `premiumOwed` to the very INVARIANT F identity this claim rests on.**
 
 **Phase 5 found that every gas number the project had recorded was optimistic**, because `vm.cool()`
 restores cold *access* pricing but not cold *write* pricing — see LAW 4 as amended and PITFALLS
@@ -197,7 +206,7 @@ managed; they are the honest scope, and stating them is what makes the rest cred
 | "QUEUE recaptures value from searchers." | It does not. It creates no new payment and takes nothing from anyone. |
 | "QUEUE detects toxic flow." | It does not, **and it must not try** — proven impossible (§E.19). It sells LPs different slices of the flow and lets them bid. |
 | "The queue's face value is redeemable." | **Still not claimed, and Phase 6 measured why.** Both original blockers are closed — Phase 2 built the shared float and dust policy F1, which pays `min(face, available)` — but face value remains an **upper bound**, because v4 computes a swap's amounts and a position's redeemable value with two differently-rounded formulas. Measured over the Phase 6 campaign: worst SURPLUS **exactly 0 wei**, worst SHORTFALL **under 1 part per billion of everything ever deposited**, and it is borne by **the last holders to withdraw**. The "~0.26 wei per swap" figure holds at the seeded price and **does not generalise** (PITFALLS 5.80). Conservation ≠ solvency (§D.1 LAW 3, second corollary). |
-| "Sweeps are O(1)." | **They are O(entries touched)**, at 8,070 gas per seat. The O(1) redesign is DECIDED NOT SHIPPED (§B.11). And the roster is bounded by `addToSeat`, which is **quadratic** at 2,610,805 gas worst case — not by the sweep (PITFALLS 5.72). |
+| "Sweeps are O(1)." | **They are O(entries touched)**, at **19,280 gas per seat** (2026-09-02; it was 8,070 before the marginal-pricing and premium work). The O(1) redesign is DECIDED NOT SHIPPED (§B.11). And the roster is bounded by `addToSeat`, which is **superlinear** at **2,667,379 gas** worst case — not by the sweep (PITFALLS 5.72). |
 | "QUEUE is price–time priority." | **It is not, and saying so invites an objection we cannot answer.** The roster is closed, you cannot join by arriving, and rank goes to willingness to pay rent. What QUEUE reproduces is the **scarcity and value** of queue position, made explicit and payable to the LPs behind you. See §A.3. |
 | "A queue is obviously better than pro-rata." | **We do not know, and that is the point.** QUEUE produces the number — the self-assessed price of the head seat — and both answers are results. Claiming to know it in advance is the one thing that would make this uninteresting. |
 | "The overhead is negligible." | **It is +36% gas versus a bare pool** (117,989 vs 87,039, measured). The defensible claim is that it is a **constant a trader can price**, flat from 1 to 32 seats — not that it is small (PITFALLS 5.71). |
@@ -1126,8 +1135,10 @@ conservative.**
 | | measured | verdict |
 |---|---:|---|
 | head-only swap (most swaps) | 117,990, **flat in depth** | not a problem |
-| full 32-seat sweep, complete tx | 416,053 | 1.4% of a 30M block |
-| queue-attributable cost at `MAX_SEATS` | 278,110 | inside the stated 300k budget |
+| full sweep, **the roster we SHIP (5 seats)** | **668,013** | **2.2% of a 30M block — quote this one** |
+| full 32-seat sweep, complete tx | 1,188,528 | 4.0% of a 30M block (structural extreme; see below) |
+| queue-attributable cost at `MAX_SEATS` | 641,163 | ⚠ the "stated 300k budget" was FICTION — deleted, PITFALLS 5.144 |
+| worst-case `addToSeat` at 32 seats | 2,667,379 | 8.9% — **this is the cost that actually binds**, not the sweep |
 | worst-case `addToSeat` | 2,610,805 | fits a 30M block 11× |
 
 Against that, §B.11's own objection stands unanswered: **the remainder line has no lazy analogue.**
@@ -1527,7 +1538,7 @@ parameter — and *only then* consider the O(1) redesign.
 |---|---|---|
 | 5.1 | ✅ A cold gas table for **our** hook exists and is in `PROGRESS.md` | `test_5_1`, §B.9 re-measured; 1/2/5/10/25/32 seats (50 is unreachable — Phase 3 bounded the roster at 32) |
 | 5.2 | ✅ Head-only cost is **flat in depth**, measured | 117,971 → 117,992 across 1 → 32 seats: a spread of **21 gas** |
-| 5.3 | ✅ `MAX_SEATS` keeps a full sweep under a **stated, justified** budget | 300,000 (§B.9's own figure); queue cost at 32 seats = **278,110**. `test_5_3b` derives the supportable depth (34) from the measurement rather than asserting it |
+| 5.3 | ✅ The sweep is linear, decomposed, and both real costs are bounded **against a fraction of a real block** | ⚠ **THE "STATED BUDGET" WAS DELETED 2026-09-02 — IT DID NOT EXIST (PITFALLS 5.144).** The suite constant read `550_000` while every label said "300k", and the depth it "supported" (27) was arithmetic on a number back-formed to make 32 look comfortable. `test_5_3b` now pins the SLOPE directly (19,280 ± 150, tolerance derived from the 1-gas spread between the suite's two independent estimators against the ≥2,100 a single added cold slot costs); `test_5_3d` measures the roster we ship (**668,013**, 2.2%); `test_5_3c` the structural extreme (**1,188,528**, 4.0%); `test_5_6` the binding deposit cost (**2,667,379**, 8.9%) |
 | 5.4 | ✅ Every optimisation backed by a differential showing **wei-identical** results | `testFuzz_5_4` / `5_4b`: >2,000 randomised swaps, both directions, 18/18 and 18/6 and 6/18, checked seat-by-seat against the **independent `uint256` reference** after every swap |
 | 5.5 | ✅ `uint128` packing **reverts** on overflow rather than wrapping | `test_5_5` (exact boundary), `test_5_5b` (forced through a real `addToSeat`), `test_5_5c` (a control that wraps and erases the seat) |
 | 5.6 | ✅ 5c not attempted, and `PROGRESS.md` says so | §B.11 — 5a/5b left no problem; the remainder line still has no lazy analogue |
@@ -1590,7 +1601,7 @@ not save it for the end. The invariant handler written early catches things unit
 | **Zero-amount and one-wei swaps** | No revert, no drift beyond the stated residual | edge cases |
 | **Empty queue / single seat / all seats empty** | Defined behaviour, asserted | edge cases |
 | **A swap that exactly exhausts the whole queue** | Fills exactly, no `QueueUnderflow` | boundary |
-| ~~**A swap one wei larger than the queue** → `QueueUnderflow`~~ | ⚠ **FALSE PREMISE, CORRECTED 2026-08-28. There is no such swap.** A swap can only take out what the POSITION holds; INVARIANT F says the position never exceeds the ledger (surplus measured at **exactly 0 wei** over the whole campaign); INVARIANT C says everything below the cursor is empty. So `amtOut <= Σ_{rank >= cursor} a` **always**. `QueueUnderflow` is not a trader-reachable boundary — it is the loud failure that fires when the ledger and the position have come apart, which is what `Rank.t.sol`'s ledger-only-evacuation control demonstrates. An empty queue does not underflow either: the swap is a complete no-op. `test_6_15` asserts this by executing a swap **fifty times the size of the queue**, repeatedly. | PITFALLS 5.78 |
+| ~~**A swap one wei larger than the queue** → `QueueUnderflow`~~ | ⚠ **THIS "CORRECTION" WAS ITSELF FALSIFIED — RE-CORRECTED 2026-09-02.** It was right on 2026-08-28 and Phase 7 made it wrong again by adding `premiumOwed` to the INVARIANT F identity it argues from. **The swap exists and the test is written** (`Adversarial.t.sol` `test_6_15`, `Maturity.t.sol` `test_M7f`/`M13`/`M13b`/`M13c`); shortfall measured at `min(amtOut, premiumHeld)`. See PITFALLS 5.78. Original, now-superseded text follows: A swap can only take out what the POSITION holds; INVARIANT F says the position never exceeds the ledger (surplus measured at **exactly 0 wei** over the whole campaign); INVARIANT C says everything below the cursor is empty. So `amtOut <= Σ_{rank >= cursor} a` **always**. `QueueUnderflow` is not a trader-reachable boundary — it is the loud failure that fires when the ledger and the position have come apart, which is what `Rank.t.sol`'s ledger-only-evacuation control demonstrates. An empty queue does not underflow either: the swap is a complete no-op. `test_6_15` asserts this by executing a swap **fifty times the size of the queue**, repeatedly. | PITFALLS 5.78 |
 
 **Exit criteria — all must be TRUE**
 
@@ -2032,7 +2043,7 @@ forge test --gas-report --match-path "test/queue/*"
 | G1 | ✅ Every measurement preceded by `vm.cool()` — **on all six accounts the swap path crosses**, and with the state built in `setUp()`, without which the cool is only half a measurement (LAW 4 as amended) |
 | G2 | ✅ Head-only cost flat across 1..**32** seats (50 is unreachable since Phase 3): 117,971 → 117,992, a spread of **21 gas**, far inside ±5% |
 | G3 | ✅ Sweep linear in seats walked. **Slope 8,070, intercept 137,866, plus a 19,900 one-off for `cursor1`'s first non-zero write.** The model reproduces every row to within 3 gas. Recorded in `PROGRESS.md` and §B.9 |
-| G4 | ✅ Queue-attributable cost at `MAX_SEATS` = **278,110**, inside the stated 300,000. Full sweep, complete tx = 416,053 |
+| G4 | ✅ Re-measured 2026-09-02. **Shipped 5-seat sweep = 668,013 (2.2% of a 30M block) — the number to quote.** Structural extreme at 32 seats = 1,188,528 (4.0%); worst-case `addToSeat` = 2,667,379 (8.9%), which is the cost that binds. ⚠ The "stated 300,000" was fiction and has been deleted (PITFALLS 5.144) |
 | G5 | ✅ `testFuzz_5_4` / `testFuzz_5_4b` — >2,000 randomised swaps, both directions, three decimal pairs, checked **seat by seat** against the independent `uint256` reference after every swap |
 | G6 | ✅ `test_5_5` (boundary), `test_5_5b` (forced through `addToSeat`), `test_5_5c` (control that wraps and erases the seat) |
 | G7 | ✅ Not attempted, therefore **not shipped**. §B.11 records the decision and the numbers behind it |
