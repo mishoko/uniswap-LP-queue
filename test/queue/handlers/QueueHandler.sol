@@ -260,6 +260,162 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
         }
     }
 
+    // ------------------------------------------------- the premium-aimed actions (PITFALLS 5.133)
+    //
+    // **THE CAMPAIGN EXERCISED THE PREMIUM INCIDENTALLY AND CALLED IT COVERAGE.** 5.133 recorded
+    // the gap precisely: nothing in this handler deliberately settled a seat between two accruals,
+    // drove `_settlePremium`'s payer exclusion to a chosen boundary, or aimed at the sweep. The
+    // premium's two worst defects — a mark advanced for a seat the walk never visited (5.152,
+    // 7.17e19 wei stranded) and a whole-book fill that HELD the pot and bricked the pool (5.170) —
+    // both live at boundaries a uniform `amountIn` draw reaches with probability ~0. They were
+    // found by hand-built exact-output swaps, not by the fuzzer, and that is the whole point.
+    //
+    // Each action carries its own coverage counter, because "the campaign is green" and "the
+    // campaign asked the question" are different observations (PITFALLS 5.54) and `test_6_0`
+    // asserts the floors.
+
+    /// @dev How many `settlePremiumOnSeat` calls actually CASHED a claim. A settle that found
+    ///      nothing owed proves nothing about the accumulator.
+    uint256 public premiumSettlements;
+    /// @dev Exact-output fills that left the outgoing cursor exactly one PAST the seat they
+    ///      exhausted — 5.152's boundary.
+    uint256 public boundaryFills;
+    /// @dev Fills that reached every standing seat, so `standingL - lTouched == 0` and
+    ///      `_settlePremium` takes its `sweptBook` branch — 5.170's bricked pool.
+    uint256 public bookSweepingFills;
+
+    /// @dev **SETTLE ONE SEAT, AT A MOMENT OF THE CAMPAIGN'S CHOOSING, MOVING NO MONEY.**
+    ///
+    ///      `withdraw(id, 0, 0)` is a pure premium settlement: `_syncSeat` runs FIRST and credits
+    ///      the accrued claim, `_payOut(0, 0)` takes the `d0 != 0 || d1 != 0` branch not at all and
+    ///      returns `(0, 0, 0)`, and the demotion is gated on a non-zero payout so the rank
+    ///      survives (`QueueHook.sol:1762`). Nothing else here settles a SINGLE seat: every other
+    ///      path either settles the whole walk or moves capital at the same time, which confounds
+    ///      the accumulator with the ledger.
+    ///
+    ///      The ghost is untouched on purpose — `_syncSeat` moves value from `premiumOwed` into
+    ///      `standing`, and neither crosses the hook's boundary, so I1 must not see it.
+    function settlePremiumOnSeat(uint256 seatSeed) external {
+        uint256 id = _seat(seatSeed);
+        address who = hook.ownerOf(id);
+        (uint256 o0, uint256 o1,,) = hook.premiums();
+
+        vm.prank(who);
+        try hook.withdraw(id, 0, 0) {
+            calls["settlePremiumOnSeat"]++;
+            (uint256 n0, uint256 n1,,) = hook.premiums();
+            // `premiumOwed` only ever FALLS on a settlement, so a strict drop is proof this call
+            // cashed a real claim rather than finding a seat with nothing accrued.
+            if (o0 + o1 > n0 + n1) premiumSettlements++;
+            _noteSolvency();
+        } catch (bytes memory err) {
+            _bad("settlePremiumOnSeat", err);
+        }
+    }
+
+    /// @dev **A FILL SIZED TO STOP EXACTLY ON A CHOSEN RANK — 5.152's BOUNDARY, ON PURPOSE.**
+    ///
+    ///      `_allocate` sets `next = take == bal ? i + 1 : i`, so the state where `next` runs one
+    ///      past every seat the walk actually touched is reachable ONLY by a fill that exactly
+    ///      exhausts its last seat. An exact-output swap for the summed outgoing balance of ranks
+    ///      `[cursor, r]` asks for precisely that. It is attacker-chooseable in production —
+    ///      every router exposes exact-output — so it belongs in the campaign rather than in one
+    ///      directed test.
+    ///
+    ///      The wings can source part of the output, so the boundary is not hit on every call;
+    ///      `boundaryFills` counts the ones that landed and `test_6_0` asserts the floor.
+    function swapToSeatBoundary(uint256 actorSeed, uint256 rankSeed, bool zeroForOne) external {
+        uint256 n = hook.seatCount();
+        (uint256 k0, uint256 k1) = hook.cursors();
+        uint256 start = zeroForOne ? k1 : k0;
+        if (start >= n) return;
+        uint256 r = bound(rankSeed, start, n - 1);
+
+        // `seat()` is the SETTLED view, which is what the walk sees: `_allocate` calls `_syncBal`
+        // before reading a balance, so the pending premium is part of what a seat can be filled
+        // from. Reading the raw slot here would undershoot every seat with an unsettled claim.
+        uint256 want;
+        for (uint256 i = start; i <= r; i++) {
+            (uint256 a0, uint256 a1) = hook.seat(hook.idAtRank(i));
+            want += zeroForOne ? a1 : a0;
+        }
+        if (want == 0) return;
+
+        _exactOutFill(_actor(actorSeed), zeroForOne, want, "swapToSeatBoundary");
+
+        (uint256 j0, uint256 j1) = hook.cursors();
+        if ((zeroForOne ? j1 : j0) == r + 1) boundaryFills++;
+    }
+
+    /// @dev **A FILL THAT SWEEPS THE WHOLE BOOK — 5.170's `sweptBook` BRANCH.**
+    ///
+    ///      When the fill reaches every standing seat there is no seat left OUT of the payer set,
+    ///      so `standingL - excludedL == 0`. Before Phase 10 that made `_accruePremium` take its
+    ///      HOLD branch, and a held pot is money the position holds that `standing0/1` does not
+    ///      count — the next fill could not be sourced and `_afterSwap` reverted `QueueUnderflow`.
+    ///      A bricked pool, not a lost wei. Nothing in the campaign aimed at it.
+    ///
+    ///      Asking for the entire standing balance of the outgoing token is the cheapest way to
+    ///      request it. It will often overshoot into `QueueUnderflow`, which is an EXPECTED revert,
+    ///      so `bookSweepingFills` counts the ones that actually landed.
+    function swapSweepingTheWholeBook(uint256 actorSeed, bool zeroForOne) external {
+        (uint256 s0, uint256 s1) = hook.standings();
+        uint256 want = zeroForOne ? s1 : s0;
+        if (want == 0) return;
+
+        uint256 filled = _exactOutFill(_actor(actorSeed), zeroForOne, want, "swapSweepingTheWholeBook");
+        if (filled == 0) return;
+
+        // The book was swept iff nothing is left standing in the outgoing token.
+        (uint256 t0, uint256 t1) = hook.standings();
+        if ((zeroForOne ? t1 : t0) == 0) bookSweepingFills++;
+    }
+
+    /// @dev The exact-output twin of `swap`, with IDENTICAL ghost accounting. Shared rather than
+    ///      copied: the protocol-fee subtraction is the line that makes I1 correct under a
+    ///      protocol fee, and this project has been wrong in exactly one of two copies of a rule
+    ///      six times (PITFALLS 5.37, 5.50, 5.52 twice, 5.73, 5.125).
+    /// @return outAmt what the swap actually delivered, 0 if it reverted.
+    function _exactOutFill(address who, bool zeroForOne, uint256 want, bytes32 tag) internal returns (uint256 outAmt) {
+        // At 1:4 sourcing `x` out costs roughly `4x` of token0 or `x/4` of token1. Mint well over
+        // that and let `amountInMax` be the real cap, so a mint shortfall can never masquerade as
+        // a mechanism revert.
+        uint256 maxIn = zeroForOne ? want * 8 + 1e18 : want / 2 + 1e18;
+        _mintTo(who, zeroForOne ? maxIn : 0, zeroForOne ? 0 : maxIn);
+
+        uint256[] memory before = _outgoingByRank(zeroForOne);
+        uint256 p0 = _bal(c0, address(poolManager));
+        uint256 p1 = _bal(c1, address(poolManager));
+        uint256 pf = poolManager.protocolFeesAccrued(zeroForOne ? c0 : c1);
+
+        vm.prank(who);
+        try swapRouter.swapTokensForExactTokens({
+            amountOut: want,
+            amountInMax: maxIn,
+            zeroForOne: zeroForOne,
+            poolKey: key,
+            hookData: "",
+            receiver: who,
+            deadline: block.timestamp
+        }) {
+            calls[tag]++;
+            _noteSolvency();
+            uint256 pfDelta = poolManager.protocolFeesAccrued(zeroForOne ? c0 : c1) - pf;
+            if (zeroForOne) {
+                gIn0 += _bal(c0, address(poolManager)) - p0 - pfDelta;
+                outAmt = p1 - _bal(c1, address(poolManager));
+                gOut1 += outAmt;
+            } else {
+                gIn1 += _bal(c1, address(poolManager)) - p1 - pfDelta;
+                outAmt = p0 - _bal(c0, address(poolManager));
+                gOut0 += outAmt;
+            }
+            _checkFrontFirst(zeroForOne, before);
+        } catch (bytes memory err) {
+            _bad(tag, err);
+        }
+    }
+
     /// @dev A plain ERC-6909 seat transfer between two actors. This is the SECOND trigger for the
     ///      evacuation drain (PITFALLS 5.56) and the path `transferFrom` forgot in Phase 3.
     function transferSeat(uint256 seatSeed, uint256 toSeed, bool viaTransferFrom) external {
@@ -617,13 +773,33 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
     /// @dev Record how far the queue's backing is from its face value, after every action that
     ///      could move either. Recorded rather than asserted — an assertion here would be swallowed
     ///      by `fail_on_revert = false`.
+    /// @dev **`premiums()` IS PART OF `owed` AND LEAVING IT OUT HERE MADE EVERY NUMBER THIS
+    ///      HANDLER REPORTS WRONG — the same omission `invariant_I2_solvency` names in its own
+    ///      docblock and fixes for ITSELF, left standing in the copy that feeds the measurements.**
+    ///
+    ///      `premiumOwed` is money the position is holding on the roster's behalf that no seat has
+    ///      settled yet. It is in the BACKING (`_positionValue` sees it) and it was missing from
+    ///      the OWED side, so:
+    ///
+    ///        * the position read OVER-BACKED by exactly the unsettled premium, and `worstOver0`
+    ///          reported that as a SURPLUS — 3.57e19 wei of pure instrument, against a docblock in
+    ///          `Invariant.t.sol` that recorded "worst SURPLUS 0 wei, both tokens, exactly";
+    ///        * and, the half that actually matters, `owed` was too SMALL, so every real shortfall
+    ///          was understated and some were booked as surpluses instead. `SHORTFALL_PPB` is
+    ///          DERIVED from these numbers, so the bound rested on an under-measurement.
+    ///
+    ///      This is the one-rule-two-places family (PITFALLS 5.37, 5.50, 5.52 twice, 5.73, 5.125,
+    ///      5.168) landing inside the INSTRUMENT rather than the mechanism, which is 5.75's shape:
+    ///      a broken measurement that looks like a broken mechanism, or here a broken measurement
+    ///      that looks like a clean one.
     function _noteSolvency() internal {
         (uint256 t0, uint256 t1) = hook.totals();
         (uint256 w0, uint256 w1) = hook.pendingTotals();
         (uint256 f0, uint256 f1) = hook.floats();
+        (uint256 q0, uint256 q1,,) = hook.premiums();
         (uint256 p0, uint256 p1) = _positionValue();
-        _note0(t0 + w0, p0 + f0);
-        _note1(t1 + w1, p1 + f1);
+        _note0(t0 + w0 + q0, p0 + f0);
+        _note1(t1 + w1 + q1, p1 + f1);
     }
 
     function _note0(uint256 owed, uint256 backing) internal {

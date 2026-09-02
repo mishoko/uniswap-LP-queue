@@ -1200,7 +1200,57 @@ abstract contract QueueFixture is BaseTest {
             (, uint256 a1) = hook.seat(hook.idAtRank(i));
             assertEq(a1, 0, string.concat(tag, ": INVARIANT C cursor1 leads"));
         }
+        // AFTER the two loops on purpose, not before. INVARIANT C is the money invariant and must
+        // be the reason a control goes red — `test_N4` asserts the exact string "INVARIANT C
+        // cursor1 leads" (LAW 2), and checking W first would change that reason and silently
+        // convert a passing control into one that fires for a different reason.
+        _checkInvariantW(tag);
         _checkOrder(tag);
+    }
+
+    /// @dev INVARIANT W — THE WALK ALWAYS STARTS AT THE FRONT: `min(cursor0, cursor1) == 0`.
+    ///
+    ///      **This is the structural precondition that makes INVARIANT C hold, and it is the
+    ///      property PITFALLS 5.164 asked to have written down.** 5.164 states the hazard
+    ///      correctly — `_syncSeat` credits a seat and touches NO cursor, so a seat could in
+    ///      principle be credited into a window no cursor can reach — but the safety argument it
+    ///      records is STALE. That argument was *"every seat below the old cursor holds zero of the
+    ///      outgoing token, so it is weighted zero in the accrual"*, which was true only while the
+    ///      premium was weighted by the seat's BALANCE. `_claims` now weights by `s.liquidity`
+    ///      (`QueueHook.sol:1356`), and liquidity is NOT zeroed by a fill — a fully drained seat
+    ///      still carries weight and still accrues. So the old reason no longer holds, and the
+    ///      conclusion survives for a DIFFERENT reason, which is this one.
+    ///
+    ///      The real argument, and it is an induction on two lines of `_allocate`:
+    ///
+    ///        * a fill raises the OUTGOING token's cursor to `next` and pulls the INCOMING token's
+    ///          cursor back to `start`, where `start` is the outgoing cursor's own OLD value;
+    ///        * both cursors begin at 0, and every other writer (`_fundSeat`, `_demoteToTail`) only
+    ///          ever LOWERS one.
+    ///
+    ///      So if one cursor is 0 before a fill it is still 0 after: either it is the one being
+    ///      pulled back to `start` (and `min(0, start) == 0`), or it IS `start`, in which case the
+    ///      other cursor is pulled back to 0. **At least one cursor is therefore always 0, which
+    ///      means every fill walks from rank 0 in one of the two directions.** Every seat below a
+    ///      NON-zero cursor is consequently swept and re-`_syncSeat`'d by the very fill that grows
+    ///      that token's accumulator, so no premium claim is ever left outside a reachable window.
+    ///
+    ///      **HONEST LIMIT, stated rather than discovered later (LAW 5).** Under the shipped
+    ///      one-ended walk W and C are maintained by the SAME line, so the only control available
+    ///      for W is the same mutation that C's control uses (`NO_CURSOR_PULLBACK`), and against
+    ///      that mutant C fires first. W is not an independent detector today and is not claimed to
+    ///      be one. Its value is as a TRIPWIRE: a two-ended book, a reversed walk, or any new
+    ///      writer that RAISES a cursor breaks W immediately and structurally, where C might still
+    ///      hold locally while the premium strands. That is exactly the change 5.164 warns about.
+    ///      `test_C1` drives the mutant and checks W in isolation so the assertion is known to be
+    ///      capable of firing at all.
+    function _checkInvariantW(string memory tag) internal view {
+        (uint256 k0, uint256 k1) = hook.cursors();
+        assertEq(
+            k0 < k1 ? k0 : k1,
+            0,
+            string.concat(tag, ": INVARIANT W both cursors lead -- the walk no longer starts at the front")
+        );
     }
 
     /// @dev The contract's packed order word against the witness's plain array, rank by rank.

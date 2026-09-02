@@ -70,6 +70,31 @@ contract InvariantTest is QueueFixture {
     ///          worst SHORTFALL    ~9.8e12 wei on token0 against ~1e23 wei of lifetime inflow
     ///                             ~260 wei on token1
     ///
+    ///      **AMENDED IN PHASE 11 — THOSE TWO LINES WERE MEASURED BY A BROKEN INSTRUMENT AND ONE
+    ///      OF THEM WAS TRUE BY ACCIDENT.** `QueueHandler._noteSolvency` omitted `hook.premiums()`
+    ///      from the OWED side — the identical omission this file's own `invariant_I2_solvency`
+    ///      names in its docblock and fixed for ITSELF, left standing in the copy that produces
+    ///      the reported numbers (the one-rule-two-places family, PITFALLS 5.37/5.50/5.52/5.73/
+    ///      5.125/5.168, landing in the instrument rather than the mechanism).
+    ///
+    ///      Consequences, both measured by fixing it and re-running the scripted campaign:
+    ///
+    ///        * the "worst SURPLUS 0 wei" line was NOT what the handler was reporting. It printed
+    ///          3.57e19 / 1.03e19 wei of surplus, all of it the unsettled premium being counted in
+    ///          the backing and not in the owed. With the omission repaired it is 0 / 0 exactly,
+    ///          which is what this docblock always claimed;
+    ///        * the SHORTFALL figures were UNDERSTATED, because a too-small `owed` shrinks every
+    ///          shortfall and books some as surpluses. Same script, before → after: 20 → 47 wei on
+    ///          token0, 31 → 62 wei on token1. `SHORTFALL_PPB` is DERIVED from these numbers, so
+    ///          the bound had been derived from an under-measurement.
+    ///
+    ///      **NO MECHANISM DEFECT IS IMPLIED AND NONE WAS FOUND.** `_solvent` REQUIRES exact
+    ///      equality on the over-backed branch and I2 has passed throughout, so the position was
+    ///      never actually over-backed; only the handler's record of it was wrong. The 9.8e12 /
+    ///      260 figures above come from a fuzz run under the broken instrument and are left in
+    ///      place, marked, rather than silently replaced with scripted-run numbers that measure a
+    ///      different campaign. The current bound clears both by orders of magnitude (ppb 0).
+    ///
     ///      The two directions are two different claims and get two different assertions. A SURPLUS
     ///      is not a residual — nothing credits the position without crediting the ledger, so a
     ///      surplus is precisely what a hook that UNDER-CREDITS a swap produces, and it is asserted
@@ -123,7 +148,7 @@ contract InvariantTest is QueueFixture {
 
         targetContract(address(handler));
 
-        bytes4[] memory sels = new bytes4[](12);
+        bytes4[] memory sels = new bytes4[](15);
         sels[0] = QueueHandler.addToSeat.selector;
         sels[1] = QueueHandler.withdraw.selector;
         sels[2] = QueueHandler.swap.selector;
@@ -136,6 +161,12 @@ contract InvariantTest is QueueFixture {
         sels[9] = QueueHandler.claimPending.selector;
         sels[10] = QueueHandler.sweepFloat.selector;
         sels[11] = QueueHandler.warp.selector;
+        // The three premium-aimed actions (PITFALLS 5.133). Until these existed the campaign
+        // reached the premium only through ordinary flow, and both of the premium's real defects
+        // live at boundaries a uniform `amountIn` draw hits with probability ~0.
+        sels[12] = QueueHandler.settlePremiumOnSeat.selector;
+        sels[13] = QueueHandler.swapToSeatBoundary.selector;
+        sels[14] = QueueHandler.swapSweepingTheWholeBook.selector;
         targetSelector(FuzzSelector({addr: address(handler), selectors: sels}));
 
         // `unauthorised` is deliberately OUTSIDE the fuzz selector set: it is driven by
@@ -421,6 +452,34 @@ contract InvariantTest is QueueFixture {
         assertGt(handler.floatCoveredEvacuations(), 0, "no evacuation was ever covered by the float: I9 is vacuous");
         assertEq(handler.orderPermuted(), 1, "no foreclosure ever demoted a seat");
         assertGt(handler.calls("warp"), 0, "time never advanced: every rent bill was zero");
+
+        // ---- the premium's own coverage floors (PITFALLS 5.133)
+        //
+        // **THESE ARE THE POINT OF THE THREE NEW ACTIONS, NOT DECORATION.** 5.133's complaint was
+        // that the campaign touched the premium incidentally and reported the pass rate as
+        // coverage. A call count alone would repeat that mistake — `settlePremiumOnSeat` landing
+        // 30 times says nothing if every one of them found a seat with nothing accrued. Each floor
+        // below therefore counts an OUTCOME, not a call: a claim actually cashed, a fill that
+        // actually stopped one past the seat it exhausted, a fill that actually emptied the book.
+        assertGt(
+            handler.premiumSettlements(), 0, "no seat ever CASHED a premium claim: the accumulator is untested here"
+        );
+        assertGt(
+            handler.boundaryFills(), 0, "no fill ever landed on the exact-exhaust boundary: 5.152's path is unreached"
+        );
+        assertGt(
+            handler.bookSweepingFills(), 0, "no fill ever swept the whole book: 5.170's sweptBook branch is unreached"
+        );
+        // ATTEMPTS alongside HITS. The aim is imperfect by construction — the wings can source
+        // part of an exact-output swap, so a fill sized to exhaust rank r does not always stop
+        // there — and printing both makes the hit RATE visible instead of only the floor. A run
+        // where attempts are healthy and hits collapse is a regression in the aim, not in the hook.
+        emit log_named_uint("boundary attempts / hits", handler.calls("swapToSeatBoundary"));
+        emit log_named_uint("sweep attempts / hits", handler.calls("swapSweepingTheWholeBook"));
+        emit log_named_uint("settle attempts / cashed", handler.calls("settlePremiumOnSeat"));
+        emit log_named_uint("premium claims cashed", handler.premiumSettlements());
+        emit log_named_uint("exact-exhaust boundary fills", handler.boundaryFills());
+        emit log_named_uint("whole-book sweeps", handler.bookSweepingFills());
         emit log_named_uint("worst shortfall token0, ppb", handler.worstShortPpb0());
         emit log_named_uint("worst shortfall token1, ppb", handler.worstShortPpb1());
         emit log_named_uint("worst surplus token0, wei", handler.worstOver0());
@@ -436,7 +495,12 @@ contract InvariantTest is QueueFixture {
         uint256 a = seed >> 8;
         uint256 b = seed >> 72;
         uint256 c = seed >> 136;
-        uint256 pick = seed % 100;
+        // **THE MODULUS IS 115 AND THE FIRST TWELVE BRANCHES ARE UNTOUCHED, DELIBERATELY.** The
+        // three premium-aimed actions were appended at 100-114 rather than carved out of the
+        // existing buckets so the dispatch TABLE is unchanged and a reader can see that the new
+        // coverage was added rather than traded for. The state trajectory does change — the new
+        // actions move the queue — so the coverage floors below were re-measured, not assumed.
+        uint256 pick = seed % 115;
 
         if (pick < 20) {
             handler.swap(a, (seed >> 200) & 1 == 1, b);
@@ -460,8 +524,14 @@ contract InvariantTest is QueueFixture {
             handler.transferSeat(a, b, (seed >> 204) & 1 == 1);
         } else if (pick < 96) {
             handler.claimPending(a, b, c);
-        } else {
+        } else if (pick < 100) {
             handler.sweepFloat(a);
+        } else if (pick < 105) {
+            handler.settlePremiumOnSeat(a);
+        } else if (pick < 110) {
+            handler.swapToSeatBoundary(a, b, (seed >> 205) & 1 == 1);
+        } else {
+            handler.swapSweepingTheWholeBook(a, (seed >> 206) & 1 == 1);
         }
     }
 
@@ -485,6 +555,25 @@ contract InvariantTest is QueueFixture {
         _checkInvariantL("I9");
     }
 
+    /// @notice I10 — INVARIANT W: at least one cursor is always parked at rank 0.
+    ///
+    /// @dev **THE STRUCTURAL PRECONDITION BEHIND I3, AND THE PROPERTY PITFALLS 5.164 ASKED TO HAVE
+    ///      WRITTEN DOWN.** `_syncSeat` credits a seat and updates no cursor, so nothing in the
+    ///      contract stops a premium credit landing outside every reachable window. What stops it
+    ///      is that a fill always walks from rank 0 in ONE of the two directions, so every seat
+    ///      below the OTHER (non-zero) cursor is re-synced by the very fill that grew that token's
+    ///      accumulator. `QueueFixture._checkInvariantW` carries the induction and the reason
+    ///      5.164's own recorded argument no longer holds.
+    ///
+    ///      Here rather than only in the directed tests because the campaign is the one instrument
+    ///      that interleaves deposits, withdrawals, transfers, foreclosures and swaps in orders
+    ///      nobody wrote down — and `_fundSeat` and `_demoteToTail` both move cursors. Those are
+    ///      exactly the writers the induction has to survive, and no directed test sequences them
+    ///      adversarially.
+    function invariant_I10_theWalkAlwaysStartsAtTheFront() public view {
+        _checkInvariantW("I10");
+    }
+
     function _assertEveryInvariant() internal view {
         invariant_I1_ledgerEqualsTheGhost();
         invariant_I2_solvency();
@@ -493,6 +582,7 @@ contract InvariantTest is QueueFixture {
         invariant_I5_seatSupplyIsOne();
         invariant_I6_orderIsAPermutation();
         invariant_I9_liquidityLedgerTiesOut();
+        invariant_I10_theWalkAlwaysStartsAtTheFront();
         invariant_I7_noUnexpectedReverts();
         invariant_I8a_settlementConservesRent();
         invariant_I8b_escrowTotalEqualsTheSeats();

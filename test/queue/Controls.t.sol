@@ -434,6 +434,73 @@ contract ControlsTest is QueueFixture {
         );
     }
 
+    /// @dev **N4b — THE SAME MUTANT, POINTED AT INVARIANT W, WHICH IS THE PROPERTY PITFALLS 5.164
+    ///      ASKED TO HAVE WRITTEN DOWN.**
+    ///
+    ///      5.164's hazard is real: `_syncSeat` credits a seat and updates NO cursor, so a credit
+    ///      could in principle land outside every reachable window. Its recorded *reason* for that
+    ///      being safe is stale — it argued the seat is "weighted zero in the accrual", which held
+    ///      only while the premium was weighted by BALANCE. `_claims` weights by `s.liquidity`
+    ///      today (`QueueHook.sol:1356`) and a drained seat still carries weight. The conclusion
+    ///      survives for a different reason: **at least one cursor is always 0**, so every fill
+    ///      walks from rank 0 in one direction and re-syncs everything below the other cursor.
+    ///      `QueueFixture._checkInvariantW` carries the induction.
+    ///
+    ///      **THIS TEST EXISTS BECAUSE AN INVARIANT NOBODY HAS SEEN FAIL IS NOT AN INVARIANT
+    ///      (LAW 5).** It asserts the NEGATION against the mutant — both cursors strictly positive
+    ///      — so it is a claim that can be wrong rather than a restatement of the code. If a future
+    ///      change makes the pull-back unnecessary this test goes red and that is the correct
+    ///      outcome: it means W is no longer maintained by the line C's control is aimed at, and
+    ///      the two need separate controls (5.167 — re-arm, never relax).
+    ///
+    ///      It is NOT claimed that W detects anything C does not. Against this mutant C fires
+    ///      first, at the same swap. W's job is to be the tripwire for a change C would survive —
+    ///      a two-ended book or a reversed walk, where both cursors are non-zero by design and a
+    ///      premium credit can strand while C still holds locally.
+    function test_N4b_missingPullbackAlsoBreaksInvariantW() public {
+        _deployMutant(NO_CURSOR_PULLBACK, 0x3005);
+        _open(_bps());
+
+        // Swaps 1 and 2 are both zeroForOne. They advance cursor1 only, and cursor0 has not yet had
+        // anything to be pulled back FROM, so the mutant is still indistinguishable here. Asserting
+        // it keeps this test honest about WHERE the divergence is.
+        _swap(true, expT0 / 500);
+        _checkInvariantW("N4b swap1");
+        _swap(true, (expT0 * 16) / 100);
+        _checkInvariantW("N4b swap2");
+
+        (uint256 before0, uint256 before1) = hook.cursors();
+        assertEq(before0, 0, "N4b: cursor0 should still be parked at the front before the reverse leg");
+        assertGt(before1, 0, "N4b: nothing happened -- cursor1 never advanced, so this test proves nothing");
+
+        // SWAP 3 — the reverse leg. Production pulls cursor1 back to `start` (which is cursor0 == 0)
+        // and the book stays front-anchored. The mutant leaves cursor1 parked, raises cursor0, and
+        // now BOTH cursors lead: there is no direction left that walks from rank 0.
+        _swap(false, expT1 / 5);
+        (uint256 k0, uint256 k1) = hook.cursors();
+        assertGt(k0, 0, "N4b: cursor0 did not advance -- the reverse leg filled nothing");
+        assertGt(k1, 0, "N4b: INVARIANT W did NOT break -- the pull-back is no longer what maintains it");
+    }
+
+    /// @dev The positive half of N4b. Same scenario, same swaps, production `_allocate`. Without
+    ///      this, N4b's `assertGt` pair would look like a property of the SCENARIO rather than of
+    ///      the mutated line.
+    function test_N4b_positive_productionKeepsAWalkAtTheFront() public {
+        _deployHook(0x3006, 3);
+        _open(_bps());
+
+        _swap(true, expT0 / 500);
+        _checkInvariantW("N4b+ swap1");
+        _swap(true, (expT0 * 16) / 100);
+        _checkInvariantW("N4b+ swap2");
+
+        _swap(false, expT1 / 5);
+        (uint256 k0, uint256 k1) = hook.cursors();
+        _checkInvariantW("N4b+ swap3");
+        assertGt(k0, 0, "N4b+: cursor0 did not advance -- this is not the same scenario N4b runs");
+        assertEq(k1, 0, "N4b+: production failed to pull cursor1 back to the front");
+    }
+
     /// @dev **N6 — THE HEAD'S FREE LANE, RESTORED, AND THE SUITE MUST NOTICE.**
     ///
     ///      This is the control for the mechanism change itself. The mutant credits every seat a
