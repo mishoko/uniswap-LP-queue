@@ -314,9 +314,21 @@ contract RankTest is QueueFixture {
         vm.prank(ALICE);
         hook.transfer(DAVE, 0, 1);
         _evacuateRef(0);
+        // **THE WITNESS MIRRORS THE DEMOTION.** A transfer that takes a seat's contributed depth
+        // out costs it its place in the queue, exactly as a withdrawal does — `_evacuateRef` only
+        // re-bases the balances, so the order model is stepped here.
+        _refDemote(0);
 
-        // Rank moved.
-        assertEq(hook.ownerOf(0), DAVE, "rank did not move");
+        // The SEAT moved.
+        assertEq(hook.ownerOf(0), DAVE, "the seat did not change hands");
+
+        // **THE RANK DID NOT MOVE WITH IT — IT WAS SPENT.** `_onSeatTransfer` empties the seat, so
+        // every wei of the outgoing holder's contributed depth leaves the pool; that is the same
+        // act `withdraw` is demoted for, and until PITFALLS 5.123(a) was closed it cost nothing at
+        // all. A holder with a second address had the whole evacuation attack without ever calling
+        // `withdraw`. What DAVE receives is a seat at the tail, which he must fund to be filled.
+        assertEq(hook.rankOfId(0), 2, "A FUNDED TRANSFER KEPT ITS RANK: the evacuation door is open");
+        assertEq(hook.idAtRank(0), 1, "seat 1 was not promoted into the vacated front");
 
         // Capital did not: DAVE's seat is empty and ALICE was made whole, to the wei less whatever
         // the position could not release on the spot — which is retained as a pending claim rather
@@ -356,8 +368,10 @@ contract RankTest is QueueFixture {
         hook.approve(address(this), 0, 1);
         hook.transferFrom(ALICE, DAVE, 0, 1);
         _evacuateRef(0);
+        _refDemote(0); // a funded transfer costs the rank, on THIS path too
 
-        assertEq(hook.ownerOf(0), DAVE, "allowance path: rank did not move");
+        assertEq(hook.ownerOf(0), DAVE, "allowance path: the seat did not change hands");
+        assertEq(hook.rankOfId(0), 2, "allowance path: A FUNDED TRANSFER KEPT ITS RANK");
         (uint256 n0, uint256 n1) = hook.seat(0);
         assertEq(n0 + n1, 0, "allowance path: capital travelled with the rank");
         (uint256 w0, uint256 w1) = hook.pendingOf(ALICE);
@@ -374,8 +388,13 @@ contract RankTest is QueueFixture {
         hook.setOperator(address(this), true);
         hook.transferFrom(BOB, DAVE, 1, 1);
         _evacuateRef(1);
+        // **MUTATE EVERY COPY OF A RULE SEPARATELY, PER ENTRY POINT** (AGENTS §3b). The order is
+        // [1,2,0] after the allowance path above, so demoting seat 1 leaves [2,0,1].
+        _refDemote(1);
 
-        assertEq(hook.ownerOf(1), DAVE, "operator path: rank did not move");
+        assertEq(hook.ownerOf(1), DAVE, "operator path: the seat did not change hands");
+        assertEq(hook.rankOfId(1), 2, "operator path: A FUNDED TRANSFER KEPT ITS RANK");
+        assertEq(hook.idAtRank(0), 2, "operator path: seat 2 was not promoted into the front");
         (n0, n1) = hook.seat(1);
         assertEq(n0 + n1, 0, "operator path: capital travelled with the rank");
         (uint256 v0, uint256 v1) = hook.pendingOf(BOB);
@@ -441,31 +460,55 @@ contract RankTest is QueueFixture {
     /// @dev The seat arrives empty, so the new holder must fund it before it can be filled — that
     ///      is what "rank moves, capital does not" MEANS. What must be immediate is that the fill
     ///      then lands at the transferred INDEX, on the very next swap, for the new holder.
+    /// @dev **THE OPERATIVE CLAIM IS THAT THE VALUE LANDS UNDER THE NEW HOLDER, AND IT SURVIVED
+    ///      THE PITFALLS 5.123(a) REMEDY UNCHANGED. WHERE IT LANDS DID NOT.** A funded transfer now
+    ///      takes the seat's contributed depth out of the pool and is demoted for it, so the seat
+    ///      DAVE receives sits at the tail and the head-only fill goes to the seat promoted into
+    ///      rank 0. Both halves are asserted, because "the new holder gets the fill" and "the new
+    ///      holder gets the FRONT" are two different claims and only the first one is true.
     function test_3_4_fillsFollowTheNewHolderImmediately() public {
         _three();
 
         vm.prank(ALICE);
         hook.transfer(DAVE, 0, 1);
         _evacuateRef(0);
-        assertEq(hook.ownerOf(0), DAVE, "rank did not move");
+        _refDemote(0);
+        assertEq(hook.ownerOf(0), DAVE, "the seat did not change hands");
+        assertEq(hook.rankOfId(0), 2, "the funded transfer kept its rank");
 
-        // DAVE funds the head. `addToSeat` pulls both cursors back to it (PITFALLS 5.50), so the
-        // next fill must start here rather than at the seat the last swap left off at.
+        // DAVE funds the seat where it now stands. `addToSeat` pulls both cursors back to its RANK
+        // (PITFALLS 5.50), so the next fill starts no later than there.
         _addTo(DAVE, 0, 40e18, 10e18);
 
+        // A small swap lands entirely inside whoever is at the FRONT, and that is no longer DAVE.
         uint256[] memory before = _snapshot(true);
-        _swap(true, 1e18); // small: must land entirely inside the head
+        _swap(true, 1e18);
         _check("fill after transfer");
-
-        (uint256 h0, uint256 h1) = hook.seat(0);
         assertEq(lastTouched, 1, "the fill was not head-only");
-        assertTrue(h1 != before[0], "the head seat was not the one filled");
-        assertGt(h0, 40e18, "the head was not credited the incoming token");
+        (, uint256 promoted1) = hook.seat(hook.idAtRank(0));
+        assertTrue(promoted1 != before[0], "the promoted seat was not the one filled");
+        (, uint256 daveHeld1) = hook.seat(0);
+        assertEq(daveHeld1, 10e18, "the tail seat was filled while a seat stood in front of it");
 
-        // And the value landed under DAVE's rank, not ALICE's — ALICE holds no seat at all now.
+        // ...and when the seats in front leave, DAVE's seat is promoted back to the front and the
+        // fill lands under DAVE. The seats ahead are emptied through the ORDINARY withdrawal path,
+        // which demotes each of them in turn — [1,2,0] -> [2,0,1] -> [0,1,2].
+        for (uint256 r; r < 2; r++) {
+            uint256 id = hook.idAtRank(0);
+            (uint256 f0, uint256 f1) = hook.seat(id);
+            _withdrawTracked(id, f0, f1);
+        }
+        assertEq(hook.idAtRank(0), 0, "the promotions did not bring the new holder's seat back");
+
+        _swap(true, 1e18);
+        _check("fill after the promotions");
+        (uint256 h0, uint256 h1) = hook.seat(0);
+        assertGt(h0, 40e18, "the new holder's seat was never credited the incoming token");
+        assertLt(h1, 10e18, "the new holder's seat gave up none of the outgoing token");
+
+        // And it landed under DAVE's seat, not ALICE's — ALICE holds no seat at all now.
         assertEq(hook.balanceOf(ALICE, 0), 0, "the old holder still holds the seat");
-        vm.prank(DAVE);
-        hook.withdraw(0, h0, h1); // the new holder can take it, which is the operative claim
+        _withdrawTracked(0, h0, h1); // the new holder can take it, which is the operative claim
     }
 
     // ============================================= 3.5 — a seat cannot be created by any runtime path
@@ -558,13 +601,19 @@ contract RankTest is QueueFixture {
         // which is exactly the state the test wants and is reached through production.
         vm.prank(BOB);
         hook.buySeat(0, 0, 0);
-        vm.prank(BOB);
-        hook.transfer(ALICE, 0, 1); // hand the now-empty head back, so ALICE holds pure rank
         _evacuateRef(0);
+        // Emptying it cost it its rank — that is the 5.123(a) remedy, not the property under test.
+        // The seat is now at the TAIL and holds nothing, which is the pure-rank state this test is
+        // about; where that rank sits is irrelevant to the claim, so the claim is stated as rank
+        // INVARIANCE across the transfer rather than as "rank 0".
+        _refDemote(0);
+        vm.prank(BOB);
+        hook.transfer(ALICE, 0, 1); // hand the now-empty seat on, so ALICE holds pure rank
 
         (uint256 z0, uint256 z1) = hook.seat(0);
         assertLe(z0 + z1, _bound(0), "the seat was not emptied");
-        assertEq(hook.rankOfId(0), 0, "the setup moved the rank: this test would prove nothing");
+        uint256 rankBefore = hook.rankOfId(0);
+        assertEq(hook.ownerOf(0), ALICE, "the empty seat did not transfer to ALICE");
 
         uint256 payBefore = _bal(c0, ALICE) + _bal(c1, ALICE);
         vm.prank(ALICE);
@@ -573,16 +622,23 @@ contract RankTest is QueueFixture {
         assertEq(hook.ownerOf(0), DAVE, "empty seat did not transfer");
         assertEq(_bal(c0, ALICE) + _bal(c1, ALICE), payBefore, "an empty transfer moved tokens");
         assertEq(hook.seatCount(), 3, "the roster changed size on a transfer");
-        assertEq(hook.rankOfId(0), 0, "THE TRANSFER MOVED THE RANK");
+        // **THE CLAIM.** A seat with no contributed depth takes none out when it changes hands, so
+        // it is not demoted. This is what keeps the Phase 4 rank market alive after 5.123(a): pure
+        // rank still trades freely, and only DEPTH leaving costs a place in the queue.
+        assertEq(hook.rankOfId(0), rankBefore, "THE TRANSFER OF AN EMPTY SEAT MOVED THE RANK");
 
-        // Rank is preserved: DAVE now holds the HEAD, and funding it puts him in front of everyone.
+        // ...and the rank it kept is a real place in line, not a number in a view: funded, it is
+        // still BEHIND the seats it was behind, so a head-only fill does not touch it.
         _addTo(DAVE, 0, 40e18, 10e18);
+        assertEq(hook.rankOfId(0), rankBefore, "funding the transferred seat moved its rank");
         uint256[] memory before = _snapshot(true);
         _swap(true, 1e18);
         _check("empty seat kept its rank");
-        assertEq(lastTouched, 1, "the fill was not head-only");
+        assertEq(lastTouched, 1, "the fill was not head-only: this arm proves nothing");
+        (, uint256 promoted1) = hook.seat(hook.idAtRank(0));
+        assertTrue(promoted1 != before[hook.idAtRank(0)], "nothing was filled at all: this arm proves nothing");
         (, uint256 h1) = hook.seat(0);
-        assertTrue(h1 != before[0], "the transferred rank did not fill first");
+        assertEq(h1, 10e18, "a seat at the tail was filled while seats stood in front of it");
     }
 
     // ============================================================ a seat cannot be burned or split

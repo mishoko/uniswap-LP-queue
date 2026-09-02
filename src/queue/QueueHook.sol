@@ -153,6 +153,23 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     uint256 internal cursor0;
     uint256 internal cursor1;
 
+    /// @notice **THE PROMOTION WITNESS.** Which rank a demotion vacated, and in which block.
+    ///
+    /// @dev A demotion at rank `r` slides ranks `r+1..n-1` up one place, so it PROMOTES every seat
+    ///      behind it — without their consent, inside somebody else's transaction, and carrying the
+    ///      price they set for the worse rank. `buyPrice` had no idea, and `_setPrice` is
+    ///      holder-only, so the promoted seat was takeable on the spot at a stale number:
+    ///      **executed at a 10x discount in `Evacuation.t.sol::test_8_7`** (PITFALLS 5.123b).
+    ///
+    ///      Two numbers instead of a per-seat flag, because marking the promoted seats would be an
+    ///      O(n) write on every foreclosure and every demoting withdrawal — up to 31 `SSTORE`s on a
+    ///      path that has to stay cheap. These are ONE slot, written once per demotion, and they
+    ///      say exactly what a promoted seat needs to know: `rank >= lastDemotionRank` is "this seat
+    ///      moved up in that demotion", and `block.number == lastDemotionBlock` is "it happened in
+    ///      the block being executed right now". See `_buySeat` for the rule they carry.
+    uint64 internal lastDemotionBlock;
+    uint8 internal lastDemotionRank;
+
     // ========================================================== THE PRIORITY PREMIUM (Phase 7, §B.13)
 
     /// @notice φ — the share of the LP fee a filled seat hands to the book, in basis points.
@@ -347,6 +364,16 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         uint256 escrow;
         uint64 firmUntil;
         uint64 lastSettled;
+        /// @dev **THE RANK THIS SEAT WAS PRICED AT.** Stamped wherever a self-price is written, and
+        ///      nowhere else — so it costs no extra `SSTORE` (it shares the slot `lastSettled` is
+        ///      already written in) and it cannot drift from the price it describes.
+        ///
+        ///      `rankOfId(id) < rankAtPrice` is the whole of "this holder is standing somewhere
+        ///      better than the place they priced, and did not ask to be". It reads ZERO for a seat
+        ///      that has never been priced, which is rank 0 — the best rank there is — so an
+        ///      unpriced seat is never stale and is takeable exactly as before. That is the
+        ///      bootstrap, not a hole (see `buyPrice`).
+        uint8 rankAtPrice;
     }
 
     mapping(uint256 seatId => Lease) internal lease;
@@ -379,6 +406,18 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      the evacuation is precisely the paired-path asymmetry that let anyone steal a seat in
     ///      Phase 3 (PITFALLS 5.52). One funnel, one transient word.
     uint256 internal transient paidForSeat;
+
+    /// @dev What the INCOMING holder is putting back into the seat, inside `buySeatAndFund`.
+    ///      TRANSIENT, for exactly the reason `paidForSeat` is: a plain `transfer` reads zero
+    ///      without anyone having to remember to clear it, so the one funnel serves both paths and
+    ///      neither has its own copy of the rule (PITFALLS 5.52).
+    ///
+    ///      **THIS IS THE BUYOUT'S HALF OF "RANK IS BACKED BY DEPTH".** A change of holder empties
+    ///      the seat, so it always REMOVES the outgoing holder's contributed depth; the rank
+    ///      survives only if the incoming holder puts at least as much back in the same call. See
+    ///      `_settleRankOnTransfer`.
+    uint256 internal transient fundOnTransfer0;
+    uint256 internal transient fundOnTransfer1;
 
     /// @dev What ONE tick of this pool can hold, from v4's own `tickSpacingToMaxLiquidityPerTick`
     ///      rather than a reimplementation of it. Inside the band the hook is the only LP
@@ -452,6 +491,12 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      actually for sale. `FIRM_WINDOW` is the structural half of the same defence.
     error PriceAboveMax(uint256 price, uint256 maxPrice);
     error CannotBuyOwnSeat(uint256 seatId);
+    /// @dev Rule A of PITFALLS 5.123(b): a seat whose rank improved in THIS block cannot be taken
+    ///      at the price its holder set for the worse rank. See `_buySeat`.
+    error SeatWasJustPromoted(uint256 seatId, uint256 rank, uint256 rankAtPrice);
+    /// @dev The buyer named the worst rank they would accept and the seat is behind it. See
+    ///      `buySeatAndFund`.
+    error RankBelowMinimum(uint256 seatId, uint256 rank, uint256 maxRank);
     /// @dev See `Rent.MAX_SELF_PRICE` — a price that overflows the rent product is a settlement
     ///      that reverts, which is a seat that can never be foreclosed.
     error SelfPriceTooLarge(uint256 price, uint256 max);
@@ -673,6 +718,15 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // because `order` never holds anything at or above byte `n`.
         uint256 shifted = (ord >> (8 * (r + 1))) << (8 * r);
         order = low | shifted | (seatId << (8 * (n - 1)));
+
+        // Publish the promotion. Ranks `r+1..n-1` just moved up one place each, and the seats now
+        // standing at `r..n-2` are exactly the ones that did — see `lastDemotionBlock`. One slot,
+        // one `SSTORE`, no walk. `r` fits a `uint8` because `MAX_SEATS` is 32 and `order` is one
+        // byte per rank; `block.number` fits a `uint64` for longer than any chain will run.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        lastDemotionBlock = uint64(block.number);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        lastDemotionRank = uint8(r);
 
         if (cursor0 > r) cursor0 -= 1;
         if (cursor1 > r) cursor1 -= 1;
@@ -1477,15 +1531,35 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      `S → W` every other seat is drained, so the boundary seat is the only one left
     ///      unexcluded and its share is 100%. Measured before this line existed: `standing1` fell
     ///      to 1 wei on seat 7 and it claimed the whole 2.667e17 pot having paid an eighth of it
-    ///      (`test_7_14`). Held pots fold forward, so an excluded claim is DEFERRED to the next
-    ///      accrual with an unexcluded seat, never destroyed. A bounded deferral beats a live
-    ///      extraction.
+    ///      (`test_7_14`).
+    ///
+    ///      **THIS COMMENT USED TO SAY THE EXCLUDED CLAIM WAS "DEFERRED TO THE NEXT ACCRUAL, NEVER
+    ///      DESTROYED", AND THAT SENTENCE DESCRIBED 0–2% OF THE MONEY WHILE BEING USED TO JUSTIFY
+    ///      THE OTHER 98–100%.** Deferral is real only on `_accruePremium`'s HOLD branch, the one
+    ///      that fires when the remaining weight is zero. In the ordinary case the accrual
+    ///      DISTRIBUTES the whole pot immediately to the seats that were not excluded, and the
+    ///      mark-advance below then moves the excluded seats past it — so what an excluded seat
+    ///      loses is not deferred back to it, it is **FORFEIT, and transferred to the seats still
+    ///      standing.** Measured share of all withheld wei still held at path end under the shipped
+    ///      rule: **BENIGN 0.00%, NORMAL 0.09%, TOXIC 1.96%.**
+    ///
+    ///      The exclusion is kept anyway, and the honest reason is the one above rather than the
+    ///      one that was written here: including a fully-drained seat is what lets the payer pay
+    ///      ITSELF, and `test_7_14` measured the concentration that produces — a seat holding one
+    ///      wei taking an entire pot it had paid an eighth of. A forfeit that is bounded by one
+    ///      fill's own premium beats an extraction that scales with the whole pot. That is a real
+    ///      trade-off with a real cost on one side, and it is stated rather than defined away
+    ///      (AGENTS §2: write down what you PROVED, not what the guard is for).
     ///
     ///      `next` is a cursor, so it equals the last paid rank when that seat was partially filled
     ///      and one PAST it when the seat was exactly exhausted. In the second case this excludes
-    ///      one seat the fill did not reach. That is conservative in the safe direction — the seat
-    ///      is deferred, never overpaid — and it is the price of not carrying a second local into a
-    ///      function that is already at the stack limit.
+    ///      one seat the fill did not reach — and, per the paragraph above, excluding it FORFEITS
+    ///      its claim on this pot rather than deferring it. **A separate defect is suspected on
+    ///      exactly that boundary** — a seat the walk never visited, and therefore never
+    ///      `_syncSeat`'d, having its mark jumped forward and losing its claim on every EARLIER
+    ///      accrual too. It is traced but not yet executed; it is deliberately NOT patched here
+    ///      ahead of the directed test, because a speculative fix to a premium boundary is how
+    ///      PITFALLS 5.124 and 5.127 were introduced in the first place.
     ///
     ///      There is exactly one other site that credits a seat from a swap: the degenerate fill in
     ///      `_afterSwap`. It needs no equivalent because it withholds no premium and never reaches
@@ -1909,14 +1983,39 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         }
 
         Seat storage s = q[seatId];
+        // **THE DEPTH THE OUTGOING HOLDER WAS STANDING WITH.** Read before anything is emptied,
+        // because it is the number the rank is measured against in `_settleRankOnTransfer`. It is
+        // read HERE rather than inside the evacuation block below because a seat can hold
+        // contributed depth while both its balances read zero — `_liquidityToCover` can burn less
+        // than the seat contributed — and the early return below would then skip the rule.
+        uint128 had = s.liquidity;
         // Settle before the evacuation reads the balances: the accrued premium belongs to the
         // DEPARTING holder, who was the one standing in line while it was earned. Reading the
         // unsettled balance would leave it behind for whoever the seat is handed to — and on the
         // buyout path that is a transfer from the seller to the buyer that nobody agreed to.
         (uint256 a0, uint256 a1) = _syncSeat(s);
-        // Pure rank and no prepaid rent: nothing to move, no external call, no liquidity touched.
+        // Pure rank and no prepaid rent: nothing to move, no external call, no position to touch.
         // This is the common case and the one the buyout leans on.
-        if (a0 == 0 && a1 == 0 && esc == 0) return;
+        if (a0 == 0 && a1 == 0 && esc == 0) {
+            // **THE SAME MIRROR AS THE ONE BELOW, IN THE SIBLING BRANCH — AND ASKING WHETHER A RULE
+            // HAS A SECOND HOME IS THE WHOLE OF THE §5 ASYMMETRY LENS.** A seat can hold contributed
+            // depth with BOTH balances at zero: `_payOut` only burns when the float cannot cover the
+            // request, so a withdrawal the float covered empties the ledger and leaves every unit of
+            // `s.liquidity` standing in the position (`test_8_15`). Reaching this branch in that
+            // state and returning would hand the departing holder's depth — and with it their share
+            // of the premium's denominator — to whoever the seat goes to, which is the exact thing
+            // the block below refuses to do. Nothing is burned here, so the WHOLE of it is orphaned.
+            //
+            // `had == 0` on the pure-rank path, so this costs that path nothing: no branch taken, no
+            // `SSTORE`, and the early return is still the cheap one it was put here to be.
+            if (had != 0) {
+                s.liquidity = 0;
+                standingL -= had;
+                liquidityUnattributed += had;
+            }
+            _settleRankOnTransfer(seatId, had);
+            return;
+        }
 
         (uint256 p0, uint256 p1, uint128 burnedOnExit) = _payOut(a0, a1);
         // The seat leaves EMPTY, so its whole recorded contribution leaves with it — the buyer
@@ -1924,7 +2023,6 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // holder's `liquidityContributed` on a seat that now holds nothing, and the new holder
         // would collect premium weighted by depth somebody else provided and took away.
         {
-            uint128 had = s.liquidity;
             if (had != 0) {
                 s.liquidity = 0;
                 standingL -= had;
@@ -1935,6 +2033,36 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
                 liquidityUnattributed -= fromPot;
                 if (rest != fromPot) liquidityShortfall += rest - fromPot;
             }
+            // **THE MIRROR, AND ITS ABSENCE BROKE INVARIANT L BY 20% OF THE POSITION ON AN ORDINARY
+            // BUYOUT, IN BAND.** The branch above handles `burnedOnExit > had` — the payout burned
+            // MORE depth than this seat contributed. The other direction is not symmetric bookkeeping
+            // for its own sake: when `_payOut` burns LESS than the seat contributed, because the
+            // FLOAT covered the payout, `had - burnedOnExit` of depth is still sitting in the v4
+            // position while the line above has already removed all of `had` from `standingL` and
+            // zeroed the seat. Without this, that depth is recorded by NOTHING —
+            // `liquidityShortfall` is fed only from `rest`, so the instrument built to measure this
+            // residue cannot see it.
+            //
+            // Reached by the most ordinary sequence there is: a `zeroForOne` swap drains the head of
+            // token1 (that is INVARIANT C working as designed), the holder prices the seat, and
+            // `buySeat` credits the price into `float0` BEFORE `_payOut` runs — so nothing burns at
+            // all. Measured: `positionLiquidity` unchanged at 2.0000e20 while `standingL` fell
+            // 2.0000e20 -> 1.6000e20. **At maturity it is not a corner case, it is the DEFAULT shape
+            // of every buyout**, because out of range a seat holds only one token.
+            //
+            // NO TOKEN IS LOST — INVARIANT F and R both hold throughout, which is exactly why
+            // conservation could not see it (5.92: conservation cannot see WHO got the money). What
+            // it corrupts is `standingL`, THE PREMIUM'S DENOMINATOR: drive it down this way and
+            // `_accruePremium`'s `w == 0` branch holds every pot forever, so the premium switches
+            // itself off while the fee flow it is a share of continues.
+            //
+            // **`withdraw`'s `_chargeBurn` — WRITER 2 OF THE SAME FIELD — already gets this right**
+            // (it debits only `min(burned, s.liquidity)`), so the two writers of
+            // `liquidityContributed` disagreed. That is the §5 asymmetry lens and the
+            // one-rule-two-places family for the seventh time (5.37, 5.50, 5.52 twice, 5.73, 5.125,
+            // 5.132). Proven in a subclass first — production `_onSeatTransfer` unchanged plus this
+            // single line, after which L, F and R all close and `unattributed == seatL` to the wei.
+            if (had > burnedOnExit) liquidityUnattributed += had - burnedOnExit;
         }
 
         // The seat leaves EMPTY whatever happened above. Anything the position could not release on
@@ -1958,10 +2086,59 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // money. INVARIANT C ("every seat below cursorX holds zero of X") survives trivially — the
         // seat now holds zero of both.
 
+        // BEFORE the outgoing transfer, so every ledger write and the rank are final ahead of the
+        // one external call this function makes to a party that is not `msg.sender` — the same
+        // ordering rule `withdraw` states for its own demotion.
+        _settleRankOnTransfer(seatId, had);
+
         // The escrow rides out on the same transfer. It is currency0 the hook already holds
         // OUTSIDE the position and outside `float0`, so unlike `p0` it needs nothing released and
         // is never clamped.
         _send(from, p0 + esc, p1);
+    }
+
+    /// @notice **RANK IS BACKED BY DEPTH — THE SECOND WRITER OF THE RULE `withdraw` ALREADY HAS.**
+    ///
+    /// @dev `withdraw` demotes when a payout reduces the seat's own contributed liquidity, because
+    ///      taking depth out is the holder LEAVING and leaving is what the evacuation attack is
+    ///      built from (PITFALLS 5.122). `_onSeatTransfer` takes ALL of a seat's depth out on every
+    ///      change of holder and, until this function existed, cost no rank at all — so a holder
+    ///      with a second address had the identical attack with `transfer` in place of `withdraw`,
+    ///      and it was FREE on the unpriced seats the founding roster starts in (PITFALLS 5.123a,
+    ///      `test_8_6`). One rule, two writers, enforced in one place at each of them.
+    ///
+    ///      **WHY THE EXEMPTION IS "PUT THE DEPTH BACK" AND NOT "YOU PAID FOR IT".** The obvious
+    ///      remedy is to keep the rank when the change of holder is a settled buyout at the posted
+    ///      price, on the theory that a gift is an evacuation and a purchase is a market. It does
+    ///      not survive contact: the price is SELF-SET and the buyout is open to anybody, so the
+    ///      holder buys their own seat with their own second address and the payment is a wash
+    ///      between two addresses one person controls. Executed in `test_8_11` — the full +267 bps
+    ///      edge, the rank kept, zero rent, and the only residue a firm quote at a number the
+    ///      attacker chose. So the test cannot be who paid; it has to be whether the depth the rank
+    ///      is priority OVER is still standing when the call ends.
+    ///
+    ///      The buyer therefore funds INSIDE the buyout (`buySeatAndFund`) or accepts the tail.
+    ///      That is also the honest shape of the trade: today a buyer pays for a rank that arrives
+    ///      EMPTY and must fund it in a second transaction, exposed in between.
+    ///
+    ///      **WHAT IT COSTS, STATED PLAINLY.** A buyer can be griefed: the incumbent front-runs
+    ///      with a real `addToSeat`, raising the depth the buyer must match, and the buyer pays the
+    ///      price and lands at the tail. It cannot be flash-loaned — repaying the loan needs a
+    ///      `withdraw`, which demotes and undoes the deposit — and it gains the incumbent NOTHING,
+    ///      because the buyout still lands and they lose the seat and the rank either way. There is
+    ///      deliberately no "revert if I do not keep the rank" flag: that would hand every incumbent
+    ///      a veto over their own buyout, which is the one thing `_onSeatTransfer` exists to refuse.
+    ///
+    ///      An EMPTY seat — pure rank, no contributed depth — is untouched by this rule and moves
+    ///      exactly as it did before. That is the market Phase 4 built, and it still works.
+    function _settleRankOnTransfer(uint256 seatId, uint128 had) private {
+        uint256 f0 = fundOnTransfer0;
+        uint256 f1 = fundOnTransfer1;
+        if (f0 != 0 || f1 != 0) _fundSeat(seatId, f0, f1);
+        // The comparison is against what the seat CONTRIBUTED, never against what it held: a seat
+        // whose balances were converted by fills still stood with its depth, and a seat that
+        // contributed nothing (a single-token in-range deposit mints zero) removed nothing.
+        if (had != 0 && q[seatId].liquidity < had) _demoteToTail(seatId);
     }
 
     /// @dev DUST POLICY F1, isolated behind a seam so the mandatory negative control can replace it
@@ -2102,6 +2279,21 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         Lease storage l = lease[seatId];
         uint256 old = l.selfPrice;
 
+        // **RULE B OF PITFALLS 5.123(b), AND RULE A IS WORTHLESS WITHOUT IT.** A holder whose rank
+        // IMPROVED since they last priced is repricing an asset the mechanism swapped under them:
+        // they posted a number for rank 1 and are now standing at rank 0, by somebody else's
+        // foreclosure, without being asked. The firm quote exists to stop a holder repricing out of
+        // a buyout THEY CAN SEE COMING AT THE PRICE THEY POSTED — it was never meant to hold a
+        // holder to a price for a position they did not choose. Arming it here would leave them
+        // takeable at the stale number for a whole `FIRM_WINDOW` however fast they reacted, so
+        // Rule A's one block of grace would buy them exactly nothing.
+        //
+        // **IT ONLY DECLINES TO ARM A NEW WINDOW; IT NEVER CLEARS ONE THAT IS OPEN.** The
+        // running-minimum branch below still binds, so "drop to zero, then raise" stays
+        // self-destructive and a promotion cannot be used to escape a window the holder brought on
+        // themselves. That is why the predicate is read on the `else if` and not before the branch.
+        bool promoted = rankOfId(seatId) < l.rankAtPrice;
+
         if (block.timestamp < l.firmUntil) {
             // Already inside a window: the quote is the RUNNING MINIMUM over it. This is the line
             // that makes "drop to zero, then raise" self-destructive rather than clever.
@@ -2110,7 +2302,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             // FIRM_WINDOW is bounded at 365 days by the constructor.
             // forge-lint: disable-next-line(unsafe-typecast)
             l.firmUntil = uint64(block.timestamp + FIRM_WINDOW);
-        } else if (old != 0) {
+        } else if (old != 0 && !promoted) {
             // A price was in effect and is now changing: it stays honoured for the window.
             l.firmPrice = old < newPrice ? old : newPrice;
             // casting to 'uint64' is safe: a uint64 holds unix seconds for ~5.8e11 years, and
@@ -2118,11 +2310,17 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             // forge-lint: disable-next-line(unsafe-typecast)
             l.firmUntil = uint64(block.timestamp + FIRM_WINDOW);
         }
-        // else: no window is open and there was no price to honour — the seat was free to take up
-        // to this instant, so there is nothing a firm quote could protect a buyer against.
+        // else: no window is open and either there was no price to honour — the seat was free to
+        // take up to this instant, so there is nothing a firm quote could protect a buyer against —
+        // or the holder is repricing a rank they did not choose, which is Rule B above.
 
         l.selfPrice = newPrice;
         l.lastSettled = uint64(block.timestamp);
+        // **THE STAMP, AND IT GOES HERE BECAUSE THIS IS THE ONE PLACE A SELF-PRICE IS WRITTEN.**
+        // It shares the slot `lastSettled` is already being written in, so it is free, and a price
+        // can never exist without the rank it was set at. `rankOfId` returns at most `MAX_SEATS-1`.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        l.rankAtPrice = uint8(rankOfId(seatId));
         emit SelfPriceSet(seatId, newPrice, l.firmPrice, l.firmUntil);
     }
 
@@ -2194,12 +2392,111 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     /// @param newSelfPrice the buyer's own assessment, applied in the same transaction so the seat
     ///        is never left unpriced — and therefore free — for even one block.
     function buySeat(uint256 seatId, uint256 maxPrice, uint256 newSelfPrice) external nonReentrant {
+        _buySeat(seatId, maxPrice, newSelfPrice, 0, 0, type(uint256).max);
+    }
+
+    /// @notice Take a seat AND put the depth back in the same call, which is what keeps its rank.
+    ///
+    /// @param amount0 / amount1 the buyer's own deposit, funded exactly as `addToSeat` funds one.
+    ///
+    /// @dev **THIS IS THE ONLY WAY TO BUY A RANK OFF A FUNDED SEAT.** A change of holder evacuates
+    ///      the seat (§B.8 — it must, or the allocator quotes depth the queue cannot source), so it
+    ///      always removes the outgoing holder's contributed liquidity. `_settleRankOnTransfer`
+    ///      demotes on that removal unless the incoming holder replaces it here, in the same call.
+    ///      Read that function for why the test is depth and not payment.
+    ///
+    ///      A buyer who wants only the rank of an EMPTY seat, or who is content with the tail,
+    ///      calls `buySeat` and passes nothing. `buySeat(id, max, price)` is exactly
+    ///      `buySeatAndFund(id, max, price, 0, 0)` — one body, so the two cannot drift apart.
+    ///
+    ///      **HOW MUCH IS ENOUGH IS THE POOL'S ARITHMETIC, NOT A NUMBER THIS CONTRACT INVENTS.**
+    ///      What must be matched is `seatLiquidity(seatId)`, and what a given `(amount0, amount1)`
+    ///      mints is `_liquidityForAmounts` at the live price — the min of the two legs. A buyer
+    ///      who supplies one token only mints ZERO and lands at the tail.
+    /// @param maxRank the worst rank the buyer will accept, checked AFTER every settlement this
+    ///        call performs. **`buySeat` names a SEAT ID and pays for a RANK, and it had no rank
+    ///        guard at all — only `maxPrice`.** Since a withdrawal that takes depth out demotes
+    ///        (PITFALLS 5.122), an incumbent who sees a buyout coming can front-run it with
+    ///        `withdraw(all)`: the seat lands at the tail, the buyer pays the rank-0 price for rank
+    ///        `n-1`, and the seller keeps both the price and their capital. Pass `type(uint256).max`
+    ///        to accept any rank, which is what the three-argument `buySeat` does.
+    ///
+    ///        **THIS IS A VETO, AND IT IS PRICED RATHER THAN FREE — SAY SO RATHER THAN DENYING
+    ///        IT.** An incumbent CAN make a rank-guarded buyout revert, by demoting themselves
+    ///        first. What that costs them is their entire place in the queue, permanently, and it
+    ///        cannot be repeated on the same seat: a seat already at the tail has nothing left to
+    ///        sacrifice, and it is still buyable by anyone passing `type(uint256).max`. So the
+    ///        property that survives is **you can always be bought out of your SEAT; you can only
+    ///        defend your RANK by giving it up.** That is a different animal from the veto §B.8
+    ///        forbids, which was free, unilateral and repeatable ("keep one wei in the seat").
+    ///        The same guard is deliberately NOT offered against the DEPTH a funded buyer must
+    ///        match, because there the incumbent keeps the seat funded and forfeits nothing — see
+    ///        `_settleRankOnTransfer`.
+    function buySeatAndFund(
+        uint256 seatId,
+        uint256 maxPrice,
+        uint256 newSelfPrice,
+        uint256 amount0,
+        uint256 amount1,
+        uint256 maxRank
+    ) external nonReentrant {
+        _buySeat(seatId, maxPrice, newSelfPrice, amount0, amount1, maxRank);
+    }
+
+    function _buySeat(
+        uint256 seatId,
+        uint256 maxPrice,
+        uint256 newSelfPrice,
+        uint256 amount0,
+        uint256 amount1,
+        uint256 maxRank
+    ) private {
         if (!bound) revert PoolNotBound();
         if (seatId >= q.length) revert NoSuchSeat(seatId);
 
         // Settle BEFORE reading the price: a holder who cannot pay is demoted first, and the buyer
         // then pays whatever the seat is actually worth after that, not before it.
         _settleSeat(seatId);
+
+        // **THE SAME RULE `addToSeat` CARRIES, AT THE SECOND ENTRY POINT CAPITAL HAS INTO A SEAT.**
+        // Rent is handed to the seats BEHIND a payer, pro-rata by the `currency0` balance read at
+        // settlement, so a deposit that lands before those payers are settled captures rent that
+        // accrued over a period the depositor was not there for — and the deposit can be borrowed.
+        // `addToSeat` settles everyone ahead first for exactly this reason; a funding buyout that
+        // did not would be that hole with a new front door. Only when there is a deposit: a plain
+        // buyout adds no balance and can capture nothing.
+        if (amount0 != 0 || amount1 != 0) _settleAhead(rankOfId(seatId));
+
+        // **RULE A OF PITFALLS 5.123(b): A SEAT PROMOTED IN THIS BLOCK IS NOT FOR SALE IN IT.**
+        //
+        // `_demoteToTail` writes `order` and the two cursors and NO lease. Nothing arms a firm
+        // quote on a PROMOTION, and `_setPrice` is holder-only — so a holder slid into rank 0 by
+        // somebody else's foreclosure could not reprice inside that somebody's transaction, and was
+        // takeable on the spot at the number they had posted for rank 1. Executed at a **10x
+        // discount** in `test_8_7`. Worse, they could not protect themselves in the NEXT block
+        // either: a raise leaves the seat firm at the OLD price for a whole `FIRM_WINDOW`, which is
+        // why Rule B in `_setPrice` is not optional decoration on top of this.
+        //
+        // **READ AFTER BOTH SETTLEMENTS, AND THAT IS LOAD-BEARING.** `_settleSeat` above and
+        // `_settleAhead` on the line above can each FORECLOSE a seat and promote this one — inside
+        // this very call. A guard read before them would be answered by the attacker simply passing
+        // a deposit, so that `_settleAhead` performs the promotion after the check had already run.
+        //
+        // **WHAT IT COSTS, NAMED RATHER THAN LEFT TO BE FOUND.** For one block after any demotion,
+        // the seats that demotion promoted are not for sale. A holder can manufacture that block:
+        // park a second seat AHEAD of your own, let its meter run dry, and foreclose it with the
+        // permissionless `settleRent` in the same transaction as a buyout you want to dodge. It is
+        // not free — it costs the sacrificial seat its rank, permanently, to dodge ONE buyout, and
+        // it needs a fresh sacrifice every time — but it is a real evasion and it is bounded rather
+        // than absent. It is accepted because the thing it replaces is a free, instant taking at a
+        // 10x discount.
+        uint256 rankNow = rankOfId(seatId);
+        uint256 pricedAt = lease[seatId].rankAtPrice;
+        if (block.number == lastDemotionBlock && rankNow >= lastDemotionRank && rankNow < pricedAt) {
+            revert SeatWasJustPromoted(seatId, rankNow, pricedAt);
+        }
+        // ...and the buyer's own guard on what they are paying for. See `buySeatAndFund`.
+        if (rankNow > maxRank) revert RankBelowMinimum(seatId, rankNow, maxRank);
 
         address holder = seatHolder[seatId];
         // Buying your own seat would evacuate your own capital and pay yourself your own price — a
@@ -2221,11 +2518,16 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             float0 += price;
         }
 
-        // Hand the price to `_onSeatTransfer` so the seat leaves FIRM at what was paid for it, then
-        // move it through the same single funnel every other change of holder uses.
+        // Hand the price and the buyer's deposit to `_onSeatTransfer` so the seat leaves FIRM at
+        // what was paid for it and lands with the depth its rank is priority over, then move it
+        // through the same single funnel every other change of holder uses.
         paidForSeat = price;
+        fundOnTransfer0 = amount0;
+        fundOnTransfer1 = amount1;
         _moveSeat(msg.sender, holder, msg.sender, seatId, 1);
         paidForSeat = 0;
+        fundOnTransfer0 = 0;
+        fundOnTransfer1 = 0;
 
         _setPrice(seatId, newSelfPrice);
         emit SeatBought(seatId, holder, msg.sender, price);

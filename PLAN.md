@@ -206,7 +206,7 @@ managed; they are the honest scope, and stating them is what makes the rest cred
 | "QUEUE recaptures value from searchers." | It does not. It creates no new payment and takes nothing from anyone. |
 | "QUEUE detects toxic flow." | It does not, **and it must not try** — proven impossible (§E.19). It sells LPs different slices of the flow and lets them bid. |
 | "The queue's face value is redeemable." | **Still not claimed, and Phase 6 measured why.** Both original blockers are closed — Phase 2 built the shared float and dust policy F1, which pays `min(face, available)` — but face value remains an **upper bound**, because v4 computes a swap's amounts and a position's redeemable value with two differently-rounded formulas. Measured over the Phase 6 campaign: worst SURPLUS **exactly 0 wei**, worst SHORTFALL **under 1 part per billion of everything ever deposited**, and it is borne by **the last holders to withdraw**. The "~0.26 wei per swap" figure holds at the seeded price and **does not generalise** (PITFALLS 5.80). Conservation ≠ solvency (§D.1 LAW 3, second corollary). |
-| "Sweeps are O(1)." | **They are O(entries touched)**, at **19,280 gas per seat** (2026-09-02; it was 8,070 before the marginal-pricing and premium work). The O(1) redesign is DECIDED NOT SHIPPED (§B.11). And the roster is bounded by `addToSeat`, which is **superlinear** at **2,667,379 gas** worst case — not by the sweep (PITFALLS 5.72). |
+| "Sweeps are O(1)." | **They are O(entries touched)**, at **19,280 gas per seat** (2026-09-02; it was 8,070 before the marginal-pricing and premium work). The O(1) redesign is DECIDED NOT SHIPPED (§B.11). And the roster is bounded by `addToSeat`, which is **superlinear** at **2,667,423 gas** worst case — not by the sweep (PITFALLS 5.72). |
 | "QUEUE is price–time priority." | **It is not, and saying so invites an objection we cannot answer.** The roster is closed, you cannot join by arriving, and rank goes to willingness to pay rent. What QUEUE reproduces is the **scarcity and value** of queue position, made explicit and payable to the LPs behind you. See §A.3. |
 | "A queue is obviously better than pro-rata." | **We do not know, and that is the point.** QUEUE produces the number — the self-assessed price of the head seat — and both answers are results. Claiming to know it in advance is the one thing that would make this uninteresting. |
 | "The overhead is negligible." | **It is +36% gas versus a bare pool** (117,989 vs 87,039, measured). The defensible claim is that it is a **constant a trader can price**, flat from 1 to 32 seats — not that it is small (PITFALLS 5.71). |
@@ -1135,10 +1135,10 @@ conservative.**
 | | measured | verdict |
 |---|---:|---|
 | head-only swap (most swaps) | 117,990, **flat in depth** | not a problem |
-| full sweep, **the roster we SHIP (5 seats)** | **668,013** | **2.2% of a 30M block — quote this one** |
-| full 32-seat sweep, complete tx | 1,188,528 | 4.0% of a 30M block (structural extreme; see below) |
+| full sweep, **the roster we SHIP (5 seats)** | **667,969** | **2.2% of a 30M block — quote this one** |
+| full 32-seat sweep, complete tx | 1,188,484 | 4.0% of a 30M block (structural extreme; see below) |
 | queue-attributable cost at `MAX_SEATS` | 641,163 | ⚠ the "stated 300k budget" was FICTION — deleted, PITFALLS 5.144 |
-| worst-case `addToSeat` at 32 seats | 2,667,379 | 8.9% — **this is the cost that actually binds**, not the sweep |
+| worst-case `addToSeat` at 32 seats | 2,667,423 | 8.9% — **this is the cost that actually binds**, not the sweep |
 | worst-case `addToSeat` | 2,610,805 | fits a 30M block 11× |
 
 Against that, §B.11's own objection stands unanswered: **the remainder line has no lazy analogue.**
@@ -1538,7 +1538,7 @@ parameter — and *only then* consider the O(1) redesign.
 |---|---|---|
 | 5.1 | ✅ A cold gas table for **our** hook exists and is in `PROGRESS.md` | `test_5_1`, §B.9 re-measured; 1/2/5/10/25/32 seats (50 is unreachable — Phase 3 bounded the roster at 32) |
 | 5.2 | ✅ Head-only cost is **flat in depth**, measured | 117,971 → 117,992 across 1 → 32 seats: a spread of **21 gas** |
-| 5.3 | ✅ The sweep is linear, decomposed, and both real costs are bounded **against a fraction of a real block** | ⚠ **THE "STATED BUDGET" WAS DELETED 2026-09-02 — IT DID NOT EXIST (PITFALLS 5.144).** The suite constant read `550_000` while every label said "300k", and the depth it "supported" (27) was arithmetic on a number back-formed to make 32 look comfortable. `test_5_3b` now pins the SLOPE directly (19,280 ± 150, tolerance derived from the 1-gas spread between the suite's two independent estimators against the ≥2,100 a single added cold slot costs); `test_5_3d` measures the roster we ship (**668,013**, 2.2%); `test_5_3c` the structural extreme (**1,188,528**, 4.0%); `test_5_6` the binding deposit cost (**2,667,379**, 8.9%) |
+| 5.3 | ✅ The sweep is linear, decomposed, and both real costs are bounded **against a fraction of a real block** | ⚠ **THE "STATED BUDGET" WAS DELETED 2026-09-02 — IT DID NOT EXIST (PITFALLS 5.144).** The suite constant read `550_000` while every label said "300k", and the depth it "supported" (27) was arithmetic on a number back-formed to make 32 look comfortable. `test_5_3b` now pins the SLOPE directly (19,280 ± 150, tolerance derived from the 1-gas spread between the suite's two independent estimators against the ≥2,100 a single added cold slot costs); `test_5_3d` measures the roster we ship (**667,969**, 2.2%); `test_5_3c` the structural extreme (**1,188,484**, 4.0%); `test_5_6` the binding deposit cost (**2,667,423**, 8.9%) |
 | 5.4 | ✅ Every optimisation backed by a differential showing **wei-identical** results | `testFuzz_5_4` / `5_4b`: >2,000 randomised swaps, both directions, 18/18 and 18/6 and 6/18, checked seat-by-seat against the **independent `uint256` reference** after every swap |
 | 5.5 | ✅ `uint128` packing **reverts** on overflow rather than wrapping | `test_5_5` (exact boundary), `test_5_5b` (forced through a real `addToSeat`), `test_5_5c` (a control that wraps and erases the seat) |
 | 5.6 | ✅ 5c not attempted, and `PROGRESS.md` says so | §B.11 — 5a/5b left no problem; the remainder line still has no lazy analogue |
@@ -2043,7 +2043,7 @@ forge test --gas-report --match-path "test/queue/*"
 | G1 | ✅ Every measurement preceded by `vm.cool()` — **on all six accounts the swap path crosses**, and with the state built in `setUp()`, without which the cool is only half a measurement (LAW 4 as amended) |
 | G2 | ✅ Head-only cost flat across 1..**32** seats (50 is unreachable since Phase 3): 117,971 → 117,992, a spread of **21 gas**, far inside ±5% |
 | G3 | ✅ Sweep linear in seats walked. **Slope 8,070, intercept 137,866, plus a 19,900 one-off for `cursor1`'s first non-zero write.** The model reproduces every row to within 3 gas. Recorded in `PROGRESS.md` and §B.9 |
-| G4 | ✅ Re-measured 2026-09-02. **Shipped 5-seat sweep = 668,013 (2.2% of a 30M block) — the number to quote.** Structural extreme at 32 seats = 1,188,528 (4.0%); worst-case `addToSeat` = 2,667,379 (8.9%), which is the cost that binds. ⚠ The "stated 300,000" was fiction and has been deleted (PITFALLS 5.144) |
+| G4 | ✅ Re-measured 2026-09-02. **Shipped 5-seat sweep = 667,969 (2.2% of a 30M block) — the number to quote.** Structural extreme at 32 seats = 1,188,484 (4.0%); worst-case `addToSeat` = 2,667,423 (8.9%), which is the cost that binds. ⚠ The "stated 300,000" was fiction and has been deleted (PITFALLS 5.144) |
 | G5 | ✅ `testFuzz_5_4` / `testFuzz_5_4b` — >2,000 randomised swaps, both directions, three decimal pairs, checked **seat by seat** against the independent `uint256` reference after every swap |
 | G6 | ✅ `test_5_5` (boundary), `test_5_5b` (forced through `addToSeat`), `test_5_5c` (control that wraps and erases the seat) |
 | G7 | ✅ Not attempted, therefore **not shipped**. §B.11 records the decision and the numbers behind it |

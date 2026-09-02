@@ -276,7 +276,12 @@ contract DeployTest is BaseTest, QueueDeployBase {
         // sum is what the seat held; splitting it between the two is the §E.4 dust policy.
         assertEq(d.token0.balanceOf(actor[0]) - sellerBal0 + pend0, t0, "seller was not made whole in currency0");
         assertEq(d.token1.balanceOf(actor[0]) - sellerBal1 + pend1, t1, "seller was not made whole in currency1");
-        assertEq(d.hook.rankOfId(4), 4, "a transfer moved the seat's RANK, which it must not");
+        // **A FUNDED TRANSFER NOW COSTS THE RANK** (PITFALLS 5.123a), and seat 4 is the TAIL, so
+        // the demotion is a no-op here and this assertion cannot see it either way — stated rather
+        // than left to read as evidence that the rank survived. `test_8_8c` is what proves
+        // demoting the tail is a no-op; `Rank.t.sol::test_3_2` is what proves a funded transfer
+        // off the tail is demoted.
+        assertEq(d.hook.rankOfId(4), SEATS - 1, "the transferred seat did not end at the tail");
 
         // ---- BEAT 5: AN UNDER-PRICED SEAT IS TAKEN AT ITS OWN NUMBER.
         uint256 ask = 100e18;
@@ -284,11 +289,17 @@ contract DeployTest is BaseTest, QueueDeployBase {
         assertEq(d.hook.buyPrice(0), ask, "the posted price is not the ask");
 
         uint256 rankBefore = d.hook.rankOfId(0);
+        uint128 depthBefore = d.hook.seatLiquidity(0);
+        assertGt(depthBefore, 0, "the head contributed no depth: the funded-buyout beat proves nothing");
         (uint256 was0,) = d.hook.pendingOf(actor[0]);
-        _buySeat(d, 1, 0, ask, 250e18);
+        // The buyer pays the ask AND replaces the depth, in one call. Without the funding the
+        // buyout would deliver an EMPTY seat at the TAIL, because a change of holder evacuates the
+        // seat and rank is backed by depth (PITFALLS 5.123a, `Harberger.t.sol::test_4_4`).
+        _buySeatAndFund(d, 1, 0, ask, 250e18, 1_000e18, 4_000e6, 0);
 
         assertEq(d.hook.ownerOf(0), actor[1], "the buyout did not move the seat");
-        assertEq(d.hook.rankOfId(0), rankBefore, "the buyout moved the seat's rank");
+        assertGe(d.hook.seatLiquidity(0), depthBefore, "the buyer did not replace the depth: the beat is vacuous");
+        assertEq(d.hook.rankOfId(0), rankBefore, "the FUNDED buyout lost the rank it paid for");
         (uint256 now0,) = d.hook.pendingOf(actor[0]);
         assertGe(now0 - was0, ask, "the seller was not credited the price they posted");
 

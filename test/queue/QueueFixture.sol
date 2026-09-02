@@ -15,6 +15,32 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
+import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
+import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
+
+/// @notice The witness's INDEPENDENT source of "how much liquidity does this deposit mint".
+///
+/// @dev **IT IS A SEPARATE CONTRACT FOR ONE REASON: SO THE FIXTURE CAN `try` IT.** `QueueHook`
+///      deliberately does NOT call `LiquidityAmounts.getLiquidityForAmounts` — that helper narrows
+///      EACH leg to `uint128` before taking the minimum, so near a tick boundary the leg nobody
+///      asked about reverts the call and every depositor is locked out at once (PITFALLS 5.76).
+///      The hook reimplements the arithmetic in 256 bits instead.
+///
+///      That divergence is exactly what makes this helper a witness rather than a copy: it is
+///      v4-periphery's own audited code, structured differently, and if the hook's reimplementation
+///      picked the wrong branch, the wrong tick, or the wrong leg, the two disagree. Where the
+///      helper cannot answer at all — the boundary case it is known to revert on — the witness
+///      DISARMS and says so, rather than falling back to reading the hook's own number, which
+///      would witness nothing while reading as coverage.
+contract RefLiquidityOracle {
+    function forAmounts(uint160 sqrtP, uint160 lo, uint160 hi, uint256 amount0, uint256 amount1)
+        external
+        pure
+        returns (uint128)
+    {
+        return LiquidityAmounts.getLiquidityForAmounts(sqrtP, lo, hi, amount0, amount1);
+    }
+}
 
 /// @notice Shared fixture for the Phase 1 allocator suite.
 ///
@@ -91,13 +117,20 @@ abstract contract QueueFixture is BaseTest {
 
     /// @dev One place the constructor argument list is written. Every suite deploys through it, so
     ///      adding a parameter cannot leave one call site silently on an old shape.
-    function _ctorArgs(address[] memory roster) internal view returns (bytes memory) {
+    /// @dev **NOT `view`, AND THAT IS THE POINT.** These four overloads are the single place the
+    ///      constructor argument list is written, so they are also the single place the witness can
+    ///      learn φ and the fee tier the hook was actually built with — WITHOUT reading them back
+    ///      off the deployed contract, which would make a constructor that stored the wrong number
+    ///      invisible to the witness meant to catch it.
+    function _ctorArgs(address[] memory roster) internal returns (bytes memory) {
         return _ctorArgs(roster, FEE);
     }
 
     /// @dev The fee-tier overload: a hook fixes its pool at construction, so a suite that needs a
     ///      pool on a different tier needs a hook built for that tier.
-    function _ctorArgs(address[] memory roster, uint24 fee) internal view returns (bytes memory) {
+    function _ctorArgs(address[] memory roster, uint24 fee) internal returns (bytes memory) {
+        refPhi = _premiumBps();
+        refFee = fee;
         return abi.encode(
             poolManager,
             c0,
@@ -118,7 +151,9 @@ abstract contract QueueFixture is BaseTest {
     ///      difference against the same pool without it. A per-contract `_premiumBps()` cannot
     ///      express that, and building the argument list by hand at the call site is the exact
     ///      duplication that broke `Controls.t.sol` and `QueueDeployBase.sol`.
-    function _ctorArgsPremium(address[] memory roster, uint256 premiumBps) internal view returns (bytes memory) {
+    function _ctorArgsPremium(address[] memory roster, uint256 premiumBps) internal returns (bytes memory) {
+        refPhi = premiumBps;
+        refFee = FEE;
         return abi.encode(
             poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW, premiumBps
         );
@@ -128,9 +163,10 @@ abstract contract QueueFixture is BaseTest {
     ///      defended as a discovered constant, so the suite has to be able to vary it.
     function _ctorArgs(address[] memory roster, uint256 bps, uint256 period, uint256 window)
         internal
-        view
         returns (bytes memory)
     {
+        refPhi = _premiumBps();
+        refFee = FEE;
         return
             abi.encode(poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, bps, period, window, _premiumBps());
     }
@@ -158,6 +194,54 @@ abstract contract QueueFixture is BaseTest {
     uint256 refC0;
     uint256 refC1;
 
+    // ---- THE PREMIUM HALF OF THE WITNESS (Phase 8). See `_refAccrue` for the whole argument.
+    //
+    // `refL` is the witness's own copy of `liquidityContributed`, DERIVED from deposit history and
+    // never read from the hook — it is the premium's denominator, so a witness that read it would
+    // be witnessing nothing at the step that matters most.
+    uint256[] refL;
+    uint256 refStandingL;
+    uint256 refUnattributedL;
+    uint256 refShortfallL;
+    // The witness's PENDING premium per seat: what the seat has earned and not yet been credited.
+    uint256[] refPend0;
+    uint256[] refPend1;
+    // `k` — accruals in each direction since this seat's mark was last advanced. It is the whole
+    // of the bound in `_assertPremiumClaim`, so it is tracked rather than estimated.
+    uint256[] refK0;
+    uint256[] refK1;
+    uint256 refHeld0;
+    uint256 refHeld1;
+    // The denominator of the most recent accrual, kept only so a failure can PRINT it.
+    uint256 refWLast0;
+    uint256 refWLast1;
+    /// @dev φ and the fee tier AS THE TEST PASSED THEM TO THE CONSTRUCTOR. Deliberately not
+    ///      `hook.PREMIUM_BPS()`: reading the immutable back would make a constructor that stored
+    ///      the wrong number invisible to the witness that is supposed to catch it.
+    uint256 refPhi;
+    uint24 refFee;
+    /// @dev False once the witness has hit a deposit whose minted liquidity it could not derive
+    ///      independently. Every suite that leans on the premium split asserts this is still true —
+    ///      a witness that silently fell back to the hook's own number reads as coverage and is not.
+    bool refPremiumArmed = true;
+    /// @dev Premium a seat had earned and had ERASED by `_settlePremium` advancing its mark without
+    ///      settling it first. Asserted zero. See `_refAccrue`.
+    uint256 refErased0;
+    uint256 refErased1;
+    /// @dev **THE ACCUMULATED ALLOWANCE, AND IT IS DERIVED PER SETTLEMENT RATHER THAN PICKED.**
+    ///      The `[-1, k]` bound in `_assertPremiumClaim` is the residual of ONE interval. A seat
+    ///      that is settled five times between two comparisons has closed five intervals, and the
+    ///      wei each of them rounded away is already inside the witness's ledger. So `_refSettle`
+    ///      folds the interval it closes into these, and `_refResyncPremium` — which re-bases the
+    ///      ledger onto the contract's — is the only thing that clears them. Growth is at most ONE
+    ///      wei per settlement per seat, which is why a suite that checks after every swap keeps
+    ///      essentially the raw `k` bound.
+    uint256[] refDriftLo0;
+    uint256[] refDriftHi0;
+    uint256[] refDriftLo1;
+    uint256[] refDriftHi1;
+    RefLiquidityOracle refOracle;
+
     // ---- conservation ground truth, measured on PoolManager, net of protocol fees
     uint256 expT0;
     uint256 expT1;
@@ -170,6 +254,8 @@ abstract contract QueueFixture is BaseTest {
     ///      the fixture's own measurement, and comparing it to another fixture-side number is
     ///      tautological. (Caught by executing the old mechanism against an earlier draft.)
     uint256 lastHookCreditedIn;
+    /// @dev Non-zero for the duration of one `_swapExactOut`, and zero everywhere else. See there.
+    uint256 refExactOut;
 
     function _deployTokens() internal {
         MockERC20 t0 = new MockERC20("Token A", "A", dec0);
@@ -236,28 +322,86 @@ abstract contract QueueFixture is BaseTest {
         _seedAt(bps, tl, tu);
     }
 
+    /// @dev Clear every witness array at once. They are parallel and indexed by SEAT ID, so a
+    ///      reset that missed one would leave the premium half describing a previous pool.
+    function _refReset() internal {
+        delete ref0;
+        delete ref1;
+        delete refOrder;
+        delete refL;
+        delete refPend0;
+        delete refPend1;
+        delete refK0;
+        delete refK1;
+        delete refDriftLo0;
+        delete refDriftHi0;
+        delete refDriftLo1;
+        delete refDriftHi1;
+        refC0 = 0;
+        refC1 = 0;
+        refStandingL = 0;
+        refUnattributedL = 0;
+        refShortfallL = 0;
+        refHeld0 = 0;
+        refHeld1 = 0;
+        refWLast0 = 0;
+        refWLast1 = 0;
+        refErased0 = 0;
+        refErased1 = 0;
+        refPremiumArmed = true;
+    }
+
+    function _refPushSeat() internal {
+        refL.push(0);
+        refPend0.push(0);
+        refPend1.push(0);
+        refK0.push(0);
+        refK1.push(0);
+        refDriftLo0.push(0);
+        refDriftHi0.push(0);
+        refDriftLo1.push(0);
+        refDriftHi1.push(0);
+    }
+
     function _seedAt(uint256[] memory bps, int24 tl, int24 tu) private {
         (uint256 s0, uint256 s1) = hook.seed(k, tl, tu, LIQ, bps);
         require(s0 != s1, "LAW 1: fixture is unit-priced");
 
-        delete ref0;
-        delete ref1;
-        delete refOrder;
-        refC0 = 0;
-        refC1 = 0;
-        uint256 sum0;
-        uint256 sum1;
+        _refAdoptSeed(bps, LIQ);
+        expT0 = s0;
+        expT1 = s1;
+        (uint256 t0, uint256 t1) = hook.totals();
+        require(t0 == s0 && t1 == s1, "seed split lost a wei");
+    }
+
+    /// @notice Rebuild the whole witness from a freshly seeded roster.
+    ///
+    /// @dev **ONE PLACE, BECAUSE THERE USED TO BE TWO.** `_seedAt` built this inline and
+    ///      `ProtocolFee.t.sol::test_5_3` — which seeds its own zero-lpFee pool — hand-rolled a
+    ///      copy of the same loop. The witness has more parallel arrays than that copy knew about,
+    ///      so the copy silently left them empty and the first swap indexed past the end of one.
+    ///      That is PITFALLS 5.37/5.50/5.52's shape exactly: a rule kept in two places, right in
+    ///      only one of them.
+    ///
+    ///      **THE WITNESS APPORTIONS THE SEEDED DEPTH ITSELF.** `seed()` is test-only, so this is
+    ///      the witness's own reading of the same rule — the roster's share of one `_mintPosition`,
+    ///      split by the same bps, with a remainder line closing it to the wei. Without it every
+    ///      seeded seat weighs zero, `w == 0` on every accrual, and the premium is silently
+    ///      switched off in every suite built on `seed()`.
+    function _refAdoptSeed(uint256[] memory bps, uint128 liq) internal {
+        _refReset();
+        uint256 accL;
         for (uint256 i; i < bps.length; i++) {
             (uint256 a0, uint256 a1) = hook.seat(i);
             ref0.push(a0);
             ref1.push(a1);
             refOrder.push(i); // the founding order is the identity permutation
-            sum0 += a0;
-            sum1 += a1;
+            _refPushSeat();
+            uint256 li = i == bps.length - 1 ? uint256(liq) - accL : FullMath.mulDiv(liq, bps[i], 10_000);
+            accL += li;
+            refL[i] = li;
         }
-        require(sum0 == s0 && sum1 == s1, "seed split lost a wei");
-        expT0 = s0;
-        expT1 = s1;
+        refStandingL = liq;
     }
 
     /// @dev Aggregate flows measured on POOLMANAGER'S OWN ERC20 BALANCES, net of the protocol fee
@@ -337,6 +481,12 @@ abstract contract QueueFixture is BaseTest {
             if (amtIn != 0 && refOrder.length != 0) {
                 uint256 rank = begin < refOrder.length ? begin : 0;
                 uint256 at = refOrder[rank];
+                // SETTLE, for the same reason the hook does: this is one of the six sites that
+                // write a seat balance, so the seat's premium claim is cashed at the weight it held
+                // before the credit lands. No pot is withheld here and no accrual happens — the
+                // whole input is credited, which is what front-first means when there is one
+                // claimant — so there is nothing for a payer-exclusion rule to do (test_7_15).
+                _refSettle(at);
                 if (outIsOne) {
                     ref0[at] += amtIn;
                     if (rank < refC0) refC0 = rank;
@@ -348,6 +498,14 @@ abstract contract QueueFixture is BaseTest {
             return;
         }
 
+        // THE PREMIUM COMES OFF THE TOP, exactly as `_allocate` takes it off before
+        // `Allocation.init`. The witness computes it from φ and the fee tier THE TEST PASSED to the
+        // constructor and from `amtIn` as measured on PoolManager — never from the hook's own
+        // numbers, and never as `amtIn - lastHookCreditedIn`, which would make "the pot is φ of the
+        // fee" an identity instead of a claim.
+        uint256 pot = _refPremiumOn(amtIn);
+        amtIn -= pot; // the parameter is REUSED: this function is at the stack limit without via_ir
+
         uint256 owed = amtOut;
         uint256 handed;
         uint256 lastIdx;
@@ -358,6 +516,12 @@ abstract contract QueueFixture is BaseTest {
         for (uint256 i = begin; i < refOrder.length; i++) {
             if (owed == 0) break;
             uint256 id = refOrder[i];
+            // **SETTLE BEFORE THE EMPTY TEST, NOT AFTER IT**, and settle every rank the walk
+            // reaches including the ones it steps over. A settlement credits the token OPPOSITE the
+            // weight, so a seat sitting at zero of the outgoing token is not necessarily empty — it
+            // may merely be unsettled, and skipping it would be the theft of rank INVARIANT C
+            // exists to prevent (test_7_4). The hook enters `_syncBal` before its own `continue`.
+            _refSettle(id);
             uint256 have = outIsOne ? ref1[id] : ref0[id];
             if (have == 0) continue;
 
@@ -381,9 +545,13 @@ abstract contract QueueFixture is BaseTest {
         }
         require(owed == 0, "reference underflow");
 
+        // `adv` is the hook's `next`: the last rank the fill reached, or ONE PAST it when that seat
+        // was exactly exhausted. It is the cursor AND the far end of the payer set, and the two
+        // meanings coming apart is what §7 of the spec is about — see `_refAccrue`.
+        uint256 adv = begin;
         if (touchedAny) {
             uint256 lastId = refOrder[lastIdx];
-            uint256 adv = (outIsOne ? ref1[lastId] : ref0[lastId]) == 0 ? lastIdx + 1 : lastIdx;
+            adv = (outIsOne ? ref1[lastId] : ref0[lastId]) == 0 ? lastIdx + 1 : lastIdx;
             if (outIsOne) {
                 refC1 = adv;
                 if (begin < refC0) refC0 = begin;
@@ -392,6 +560,7 @@ abstract contract QueueFixture is BaseTest {
                 if (begin < refC1) refC1 = begin;
             }
         }
+        _refAccrue(outIsOne, pot, begin, adv);
     }
 
     /// @dev What one seat is credited. Split out of `_refAllocate` only because that function is at
@@ -457,19 +626,510 @@ abstract contract QueueFixture is BaseTest {
             : SqrtPriceMath.getAmount1Delta(from, to, liq, false);
     }
 
+    // --------------------------------------------------- THE PREMIUM HALF OF THE WITNESS (Phase 8)
+    //
+    // **WHAT THIS IS, AND THE ONE THING IT DELIBERATELY DOES NOT DO.**
+    //
+    // Until this existed, `_refAllocate` had never modelled the priority premium, so at φ > 0 the
+    // per-seat SPLIT rested entirely on `Premium.t.sol`'s own controls — and this project has been
+    // wrong about that mechanism twice (the X64 accumulator that made the premium inert on the
+    // shipped 18/6 pool, PITFALLS 5.124/5.126; and the inventory weight that let a one-wei holder
+    // take an entire pot, test_7_14).
+    //
+    // **THE WITNESS DOES NOT REIMPLEMENT THE ACCUMULATOR, AND THAT IS THE WHOLE DESIGN.** The hook
+    // takes TWO floors: an inner one in `_accruePremium` (`inc = floor(total·2^128 / w)`) and an
+    // outer one in `_claims` (`owed = floor(L_i·Σinc / 2^128)`). A witness that copied `inc` and
+    // merely took k floors where the hook takes one would be measuring the accumulator against
+    // itself at exactly the step Phase 8 changed — LAW 5's second corollary, an instrument that
+    // agrees with its artifact by construction. So the witness computes the TRUE RATIONAL share,
+    // per accrual, with no fixed point anywhere:
+    //
+    //     x_j = total_j · L_i / w_j        W = Σ_j floor(x_j)
+    //
+    // and the residual between that and the hook's `C` is BOUNDED IN CLOSED FORM — see
+    // `_assertPremiumClaim`, which is where the derivation lives. Nothing here is a tolerance.
+
+    /// @notice φ of the LP fee — what this swap hands to the seats it jumped.
+    ///
+    /// @dev Computed from φ and the fee tier **the test passed to the constructor** and from
+    ///      `amtIn` as measured on PoolManager. Deliberately NOT `amtIn - lastHookCreditedIn`,
+    ///      which would derive the pot from the hook's own bookkeeping and turn "the pot is φ of
+    ///      the fee" (test_7_4) into an identity that cannot fail.
+    function _refPremiumOn(uint256 amtIn) internal view returns (uint256) {
+        if (refPhi == 0) return 0;
+        return FullMath.mulDiv(amtIn, uint256(refFee) * refPhi, 1e6 * 10_000);
+    }
+
+    /// @notice The witness's copy of `_syncSeat`: cash the pending claim, close the interval.
+    ///
+    /// @dev The interval is closed UNCONDITIONALLY, including when the claim was zero. `_syncSeat`
+    ///      writes both marks whatever the claim was, and a witness that left one open would let
+    ///      the same growth be claimed twice later against a larger weight — the defect mutant M83
+    ///      introduced and `test_7_8` catches.
+    function _refSettle(uint256 id) internal {
+        if (refPend0[id] != 0) {
+            ref0[id] += refPend0[id];
+            refPend0[id] = 0;
+        }
+        if (refPend1[id] != 0) {
+            ref1[id] += refPend1[id];
+            refPend1[id] = 0;
+        }
+        _refCloseInterval(id);
+    }
+
+    /// @dev Close both intervals and BANK what they were allowed to round away. Every place that
+    ///      resets `k` goes through here, because the wei an interval rounded is now inside the
+    ///      witness's ledger and the next comparison has to still allow for it.
+    function _refCloseInterval(uint256 id) internal {
+        if (refK0[id] != 0) {
+            refDriftHi0[id] += refK0[id];
+            refDriftLo0[id] += 1 + FullMath.mulDiv(refK0[id], refL[id], 1 << 128);
+            refK0[id] = 0;
+        }
+        if (refK1[id] != 0) {
+            refDriftHi1[id] += refK1[id];
+            refDriftLo1[id] += 1 + FullMath.mulDiv(refK1[id], refL[id], 1 << 128);
+            refK1[id] = 0;
+        }
+    }
+
+    /// @dev The two-sided allowance for one seat and one token: the intervals already banked, plus
+    ///      the one currently open. Derivation in `_assertPremiumClaim`.
+    function _refBound(uint256 id, bool tok0) internal view returns (uint256 lo, uint256 hi) {
+        uint256 kAcc = tok0 ? refK0[id] : refK1[id];
+        lo = tok0 ? refDriftLo0[id] : refDriftLo1[id];
+        hi = (tok0 ? refDriftHi0[id] : refDriftHi1[id]) + kAcc;
+        if (kAcc != 0) lo += 1 + FullMath.mulDiv(kAcc, refL[id], 1 << 128);
+    }
+
+    /// @notice The witness's copy of `_settlePremium` + `_accruePremium`, written from the rule.
+    ///
+    /// @dev `adv` is the hook's `next`. The payer set is ranks **[begin, last] INCLUSIVE**, with
+    ///      `last = min(adv, n-1)` — the seats this fill just paid do not pay themselves.
+    ///
+    ///      **THE SECOND LOOP IS NOT AN AFTERTHOUGHT.** `_settlePremium` advances the payers' marks
+    ///      whether or not anything accrued, because it runs after `_accruePremium` returns and does
+    ///      not look at what that call decided. And when the last seat the fill reached was EXACTLY
+    ///      exhausted, `adv` is one PAST the walk — so the seat at that rank has its mark advanced
+    ///      having never been settled. Anything it had already earned is not deferred anywhere: it
+    ///      is not in `premiumHeld`, it is not claimable by anyone else, and it stays in
+    ///      `premiumOwed` forever. The witness models that faithfully — it must, or the split
+    ///      comparison would be measuring the wrong contract — and COUNTS it in `refErased0/1` so
+    ///      the quantity has a name instead of hiding inside a residual.
+    function _refAccrue(bool outIsOne, uint256 pot, uint256 begin, uint256 adv) internal {
+        uint256 n = refOrder.length;
+        if (n == 0) return;
+        uint256 last = adv < n ? adv : n - 1;
+
+        bool[] memory payer = new bool[](refL.length);
+        uint256 excluded;
+        for (uint256 r = begin; r <= last; r++) {
+            uint256 id = refOrder[r];
+            payer[id] = true;
+            excluded += refL[id];
+        }
+
+        uint256 total = pot + (outIsOne ? refHeld0 : refHeld1);
+        uint256 w = refStandingL - excluded;
+        if (outIsOne) {
+            refWLast0 = w;
+        } else {
+            refWLast1 = w;
+        }
+
+        if (total != 0) {
+            if (w == 0) {
+                // Nobody standing behind this fill. The wei has left the allocation, so it is HELD
+                // and folded into the next accrual that has a recipient — never destroyed
+                // (test_7_12 / test_7_13, and control N8 for what dropping it looks like).
+                if (outIsOne) {
+                    refHeld0 = total;
+                } else {
+                    refHeld1 = total;
+                }
+            } else {
+                // KNOWN ANSWER, CHECKED RATHER THAN ASSUMED. Production also holds when the
+                // accumulator increment floors to zero, which at X128 needs `w > total·2^128` and is
+                // unreachable for `uint128`-bounded balances. If that branch ever becomes live the
+                // witness stops being a model of this contract, so it says so out loud instead of
+                // drifting silently.
+                if (total < (1 << 128)) {
+                    require(
+                        FullMath.mulDiv(total, 1 << 128, w) != 0,
+                        "witness: the hook HELD a pot with a live weight -- the inc==0 branch is live"
+                    );
+                }
+                if (outIsOne) {
+                    refHeld0 = 0;
+                } else {
+                    refHeld1 = 0;
+                }
+                for (uint256 id; id < refL.length; id++) {
+                    if (payer[id] || refL[id] == 0) continue;
+                    uint256 share = FullMath.mulDiv(total, refL[id], w);
+                    if (outIsOne) {
+                        refPend0[id] += share;
+                        refK0[id] += 1;
+                    } else {
+                        refPend1[id] += share;
+                        refK1[id] += 1;
+                    }
+                }
+            }
+        }
+
+        for (uint256 r = begin; r <= last; r++) {
+            uint256 id = refOrder[r];
+            if (outIsOne) {
+                refErased0 += refPend0[id];
+                refPend0[id] = 0;
+                if (refK0[id] != 0) {
+                    refDriftHi0[id] += refK0[id];
+                    refDriftLo0[id] += 1 + FullMath.mulDiv(refK0[id], refL[id], 1 << 128);
+                    refK0[id] = 0;
+                }
+            } else {
+                refErased1 += refPend1[id];
+                refPend1[id] = 0;
+                if (refK1[id] != 0) {
+                    refDriftHi1[id] += refK1[id];
+                    refDriftLo1[id] += 1 + FullMath.mulDiv(refK1[id], refL[id], 1 << 128);
+                    refK1[id] = 0;
+                }
+            }
+        }
+    }
+
+    /// @notice The witness's OWN `liquidityContributed` for a deposit, derived not read.
+    ///
+    /// @dev `liquidityContributed` is the premium's denominator, so a witness that read
+    ///      `seatLiquidity()` would be witnessing nothing at the step that decides who gets paid.
+    ///      It is derived through `RefLiquidityOracle` — v4-periphery's own helper, which is NOT
+    ///      what the hook calls (see that contract's docblock).
+    ///
+    ///      Returns `ok == false` in the two states where the helper cannot answer and the witness
+    ///      would have to guess: the near-boundary leg overflow that made the helper unusable for
+    ///      production in the first place (PITFALLS 5.76), and the `MAX_LIQUIDITY_PER_TICK` clamp.
+    ///      The caller DISARMS on either. It never falls back to the hook's own number: a silent
+    ///      fallback reads as coverage and proves nothing.
+    function _refMintL(uint256 amount0, uint256 amount1) internal returns (uint128 dl, bool ok) {
+        if (address(refOracle) == address(0)) refOracle = new RefLiquidityOracle();
+        (uint160 sqrtP,,,) = poolManager.getSlot0(k.toId());
+        (,, int24 lower, int24 upper) = hook.pool();
+        uint160 lo = TickMath.getSqrtPriceAtTick(lower);
+        uint160 hi = TickMath.getSqrtPriceAtTick(upper);
+        try refOracle.forAmounts(sqrtP, lo, hi, amount0, amount1) returns (uint128 l) {
+            uint128 room = Pool.tickSpacingToMaxLiquidityPerTick(SPACING) - hook.positionLiquidity();
+            if (l > room) return (0, false);
+            return (l, true);
+        } catch {
+            return (0, false);
+        }
+    }
+
+    /// @notice The witness's copy of `_chargeBurn`, on a burn it measured at the POSITION.
+    ///
+    /// @dev `burned` is `Δ positionLiquidity` — a position-level quantity, not a seat-level one, and
+    ///      cross-checked by INVARIANT L. `_payOut`'s float sizing is not reproducible in a fixture
+    ///      (see `_withdrawTracked`), so that one number is read; the ATTRIBUTION — which seat is
+    ///      charged, and the cap at what it actually contributed — is the witness's own rule, and it
+    ///      is the half a mutation would change.
+    function _refBurn(uint256 id, uint256 burned) internal {
+        if (burned == 0) return;
+        uint256 fromSeat = burned > refL[id] ? refL[id] : burned;
+        refL[id] -= fromSeat;
+        refStandingL -= fromSeat;
+        uint256 rest = burned - fromSeat;
+        uint256 fromPot = rest > refUnattributedL ? refUnattributedL : rest;
+        refUnattributedL -= fromPot;
+        refShortfallL += rest - fromPot;
+    }
+
+    /// @notice Push idle float into the position and keep the witness's depth ledger in step.
+    /// @dev The minted depth is credited to NOBODY (`liquidityUnattributed`), so it must not land on
+    ///      any seat's premium weight. A suite that calls `sweepFloatIntoPosition()` directly instead
+    ///      of this leaves the witness's `refStandingL` intact and its `refUnattributedL` short.
+    function _sweepTracked() internal returns (uint128 added) {
+        added = hook.sweepFloatIntoPosition();
+        refUnattributedL += added;
+    }
+
+    /// @notice **THE ASSERTION. THE BOUND IS DERIVED IN FULL BELOW AND MAY NOT BE WIDENED.**
+    ///
+    /// @dev Fix a seat and a token. Over the `k` accruals since its mark was last advanced, with
+    ///      `L_i` constant (every site that moves a seat's liquidity settles it first, so it is),
+    ///      write the exact rational entitlement of accrual `j` as `x_j = total_j·L_i/w_j` and
+    ///      `S = Σ x_j`.
+    ///
+    ///      **Witness:**  `W = Σ_j floor(x_j) = S − f`,  `f = Σ_j frac(x_j) ∈ [0, k)`.
+    ///
+    ///      **Contract:**  `inc_j = floor(total_j·Q/w_j) = total_j·Q/w_j − ε_j`, `ε_j ∈ [0,1)`, so
+    ///      `C = floor(L_i·Σinc_j/Q) = floor(S − δ)` with `δ = (L_i/Q)·Σε_j ∈ [0, k·L_i/Q)`.
+    ///
+    ///      Hence `C − W = f − δ − frac(S−δ)` and
+    ///
+    ///        * UPPER: `f < k`, `δ ≥ 0`, `frac ≥ 0`  ⇒  `C − W ≤ k − 1`. The contract takes ONE
+    ///          floor over the interval where the witness takes `k`.
+    ///        * LOWER: `f ≥ 0`, `frac < 1`  ⇒  `C − W ≥ −1 − floor(k·L_i/Q)`. That second term is
+    ///          the ACCUMULATOR'S OWN quantisation, worth `L_i/Q` wei per accrual, and it is zero
+    ///          for every `L` this pool can hold (`L ≤ MAX_LIQUIDITY_PER_TICK ≈ 1.1e34` against
+    ///          `Q = 2^128 ≈ 3.4e38`). It is written out rather than assumed so that a future change
+    ///          of `Q` fails loudly instead of silently.
+    ///
+    ///      **THE `−1` IS STRUCTURAL, NOT A KNIFE EDGE, AND THE HANDOFF'S `0 ≤ C − W` IS WRONG.**
+    ///      It needs `f = 0` with `δ > 0`, and `f = 0` happens BY CONSTRUCTION whenever the seat is
+    ///      the sole unexcluded payee: then `w = L_i`, every `x_j` is an integer, and the contract
+    ///      lands exactly one wei low. A two-seat roster taking head-only swaps hits it on every
+    ///      accrual. A witness asserting `C ≥ W` would go red on the most ordinary configuration in
+    ///      the suite, and the next person would "fix" it by widening — which is why the term is
+    ///      derived here instead.
+    ///
+    ///      **The `+1` on the upper side** is the price of `_refResyncPremium`: re-basing mid-
+    ///      interval introduces one more floor (`floor(A+B) − floor(A) ∈ (B−1, B+1)`), so the honest
+    ///      upper bound between two comparisons is `k` rather than `k−1`. At `k == 0` both bounds
+    ///      collapse to zero and the comparison is EXACT, which is what makes a second `_check` with
+    ///      no swap in between a real assertion rather than a formality.
+    function _assertPremiumClaim(string memory tag, uint256 id, bool tok0, uint256 got, uint256 want) internal view {
+        (uint256 lo, uint256 hi) = _refBound(id, tok0);
+        string memory d = string.concat(
+            tag,
+            ": PREMIUM seat ",
+            vm.toString(id),
+            tok0 ? " token0" : " token1",
+            " | contract=",
+            vm.toString(got),
+            " witness=",
+            vm.toString(want),
+            " | k=",
+            vm.toString(tok0 ? refK0[id] : refK1[id])
+        );
+        d = string.concat(
+            d,
+            " L_i=",
+            vm.toString(refL[id]),
+            " w_last=",
+            vm.toString(tok0 ? refWLast0 : refWLast1),
+            " Q=2^128 bound=[-",
+            vm.toString(lo),
+            ",+",
+            vm.toString(hi),
+            "]"
+        );
+        assertLe(got, want + hi, string.concat(d, " -- contract paid ABOVE the independent pro-rata"));
+        assertGe(got + lo, want, string.concat(d, " -- contract paid BELOW the derived floor"));
+    }
+
+    /// @notice The WHOLE witness, saved and restored in one move.
+    ///
+    /// @dev **IT IS ONE STRUCT BECAUSE A SUITE THAT HOLDS TWO POOLS OPEN CANNOT BE TRUSTED TO
+    ///      REMEMBER A LIST.** `Premium.t.sol` already carries `expT0`/`expT1` between two hooks by
+    ///      hand, and the docblock there records what forgetting one field looked like: "a premium
+    ///      leak of 1.9e19 wei", which was the harness. The witness now has fourteen parallel
+    ///      arrays and eight scalars, so a hand-carried list is a defect waiting for its turn.
+    ///      Save and load the lot, keyed by hook address.
+    struct Witness {
+        bool present;
+        uint256[] r0;
+        uint256[] r1;
+        uint256[] ord;
+        uint256[] l;
+        uint256[] p0;
+        uint256[] p1;
+        uint256[] k0;
+        uint256[] k1;
+        uint256[] dlo0;
+        uint256[] dhi0;
+        uint256[] dlo1;
+        uint256[] dhi1;
+        uint256 c0;
+        uint256 c1;
+        uint256 standL;
+        uint256 unattL;
+        uint256 shortL;
+        uint256 held0;
+        uint256 held1;
+        uint256 wl0;
+        uint256 wl1;
+        uint256 er0;
+        uint256 er1;
+        uint256 t0;
+        uint256 t1;
+        bool armed;
+        uint256 phi;
+        uint24 fee;
+    }
+
+    mapping(address => Witness) internal refSaved;
+
+    function _saveWitness(address forHook) internal {
+        Witness storage w = refSaved[forHook];
+        w.present = true;
+        w.r0 = ref0;
+        w.r1 = ref1;
+        w.ord = refOrder;
+        w.l = refL;
+        w.p0 = refPend0;
+        w.p1 = refPend1;
+        w.k0 = refK0;
+        w.k1 = refK1;
+        w.dlo0 = refDriftLo0;
+        w.dhi0 = refDriftHi0;
+        w.dlo1 = refDriftLo1;
+        w.dhi1 = refDriftHi1;
+        w.c0 = refC0;
+        w.c1 = refC1;
+        w.standL = refStandingL;
+        w.unattL = refUnattributedL;
+        w.shortL = refShortfallL;
+        w.held0 = refHeld0;
+        w.held1 = refHeld1;
+        w.wl0 = refWLast0;
+        w.wl1 = refWLast1;
+        w.er0 = refErased0;
+        w.er1 = refErased1;
+        w.t0 = expT0;
+        w.t1 = expT1;
+        w.armed = refPremiumArmed;
+        // φ AND THE FEE TIER TRAVEL WITH THE POOL. `Premium.t.sol` holds a φ = 8500 pool and a
+        // φ = 0 pool open at once; without these two lines the witness would price one pool's fills
+        // with the other pool's premium, which is the same class of harness bug the `expT`
+        // save/restore exists for.
+        w.phi = refPhi;
+        w.fee = refFee;
+    }
+
+    function _loadWitness(address forHook) internal {
+        Witness storage w = refSaved[forHook];
+        require(w.present, "witness: no saved state for that hook");
+        ref0 = w.r0;
+        ref1 = w.r1;
+        refOrder = w.ord;
+        refL = w.l;
+        refPend0 = w.p0;
+        refPend1 = w.p1;
+        refK0 = w.k0;
+        refK1 = w.k1;
+        refDriftLo0 = w.dlo0;
+        refDriftHi0 = w.dhi0;
+        refDriftLo1 = w.dlo1;
+        refDriftHi1 = w.dhi1;
+        refC0 = w.c0;
+        refC1 = w.c1;
+        refStandingL = w.standL;
+        refUnattributedL = w.unattL;
+        refShortfallL = w.shortL;
+        refHeld0 = w.held0;
+        refHeld1 = w.held1;
+        refWLast0 = w.wl0;
+        refWLast1 = w.wl1;
+        refErased0 = w.er0;
+        refErased1 = w.er1;
+        expT0 = w.t0;
+        expT1 = w.t1;
+        refPremiumArmed = w.armed;
+        refPhi = w.phi;
+        refFee = w.fee;
+    }
+
+    /// @notice The same comparison `_check` asserts, RETURNED instead of asserted.
+    ///
+    /// @dev It exists for exactly one purpose: the mandatory negative controls have to be able to
+    ///      say "the witness went red", and a witness nobody has ever seen fail is not a witness
+    ///      (LAW 2, LAW 5). Returns the largest number of wei by which any seat's claim falls
+    ///      OUTSIDE the derived bound — zero when every seat is inside it. Nothing in the assertion
+    ///      path reads this; it is the same arithmetic, reported rather than enforced.
+    function _premiumWitnessExcess() internal view returns (uint256 worst) {
+        for (uint256 i; i < ref0.length; i++) {
+            (uint256 a0, uint256 a1) = hook.seat(i);
+            uint256 e = _excess(i, true, a0, ref0[i] + refPend0[i]);
+            if (e > worst) worst = e;
+            e = _excess(i, false, a1, ref1[i] + refPend1[i]);
+            if (e > worst) worst = e;
+        }
+    }
+
+    function _excess(uint256 id, bool tok0, uint256 got, uint256 want) private view returns (uint256) {
+        (uint256 lo, uint256 hi) = _refBound(id, tok0);
+        if (got > want + hi) return got - want - hi;
+        if (got + lo < want) return want - got - lo;
+        return 0;
+    }
+
+    /// @notice Re-base the witness's premium sub-ledger onto the contract's, AFTER asserting it.
+    ///
+    /// @dev **ASSERT-THEN-RESYNC, NEVER THE REVERSE, AND THE ORDER IS THE WHOLE OF ITS HONESTY.**
+    ///      `_check` asserts the derived bound first; only then does this run.
+    ///
+    ///      It exists because the residual PROPAGATES. Once the witness's ledger differs from the
+    ///      contract's by a wei, the next fill differs too — `have` feeds `t`, `t` feeds `g` — so
+    ///      without a re-base the interval would have to widen every swap until it hid a real bug.
+    ///      Re-basing concedes independence over HISTORY and keeps it over each swap's INCREMENT,
+    ///      which is the quantity every premium mutation moves. It is the same division of labour
+    ///      `_withdrawTracked` already makes and says so.
+    ///
+    ///      At φ = 0 it is not called at all, so the 205 pre-Phase-7 assertions keep their full
+    ///      one-wei resolution and the exact `assertEq`s they have always had.
+    function _refResyncPremium() internal {
+        for (uint256 i; i < ref0.length; i++) {
+            (uint256 r0, uint256 r1) = hook.rawSeat(i);
+            (uint256 s0, uint256 s1) = hook.seat(i);
+            ref0[i] = r0;
+            ref1[i] = r1;
+            refPend0[i] = s0 - r0;
+            refPend1[i] = s1 - r1;
+            refK0[i] = 0;
+            refK1[i] = 0;
+            // The ledger IS the contract's now, so every wei those intervals were allowed to round
+            // away has been absorbed. This is the only thing that clears the allowance.
+            refDriftLo0[i] = 0;
+            refDriftHi0[i] = 0;
+            refDriftLo1[i] = 0;
+            refDriftHi1[i] = 0;
+        }
+    }
+
     // ------------------------------------------------------------------------------- assertions
 
     /// @dev The two claims are DIFFERENT and need different assertions (LAW 3, second corollary):
     ///      (1) the LEDGER conserves, (2) each seat's COMPOSITION matches the independent witness.
-    function _check(string memory tag) internal view {
+    /// @dev **NOT `view` SINCE PHASE 8** — it re-bases the premium sub-ledger after asserting it.
+    ///      See `_refResyncPremium`. At φ = 0 nothing is re-based and the assertions below are the
+    ///      exact equalities they have always been.
+    function _check(string memory tag) internal {
         (uint256 t0, uint256 t1) = hook.totals();
-        assertEq(t0, expT0, string.concat(tag, ": token0 conservation"));
-        assertEq(t1, expT1, string.concat(tag, ": token1 conservation"));
+        // `totals()` is the RAW ledger; a withheld premium sits in `premiumOwed` until some seat is
+        // next touched, so conservation is the ledger PLUS what is owed against PoolManager's own
+        // measured flows. At φ = 0 both `q` terms are zero and this is the identity it always was.
+        (uint256 q0, uint256 q1,,) = hook.premiums();
+        assertEq(t0 + q0, expT0, string.concat(tag, ": token0 conservation"));
+        assertEq(t1 + q1, expT1, string.concat(tag, ": token1 conservation"));
 
         for (uint256 i; i < ref0.length; i++) {
             (uint256 a0, uint256 a1) = hook.seat(i);
-            assertEq(a0, ref0[i], string.concat(tag, ": seat a0"));
-            assertEq(a1, ref1[i], string.concat(tag, ": seat a1"));
+            if (refPhi == 0) {
+                assertEq(a0, ref0[i], string.concat(tag, ": seat a0"));
+                assertEq(a1, ref1[i], string.concat(tag, ": seat a1"));
+            } else {
+                // `seat()` is raw ledger PLUS the live claim, so the witness's comparison is its own
+                // ledger plus its own pending. The bound is derived in `_assertPremiumClaim`.
+                _assertPremiumClaim(tag, i, true, a0, ref0[i] + refPend0[i]);
+                _assertPremiumClaim(tag, i, false, a1, ref1[i] + refPend1[i]);
+                // THE PREMIUM'S WEIGHT, and this one carries no slack at all. It is asserted only at
+                // φ > 0 because that is where it decides anything, and because a φ = 0 suite that
+                // moves depth through a path the witness does not track (a direct
+                // `sweepFloatIntoPosition`, say) would otherwise go red for a reason that is not a
+                // bug in the thing it is testing.
+                assertEq(
+                    uint256(hook.seatLiquidity(i)),
+                    refL[i],
+                    string.concat(tag, ": the witness disagrees about the PREMIUM'S WEIGHT on seat ", vm.toString(i))
+                );
+            }
+        }
+        if (refPhi != 0) {
+            assertTrue(refPremiumArmed, string.concat(tag, ": the premium witness DISARMED -- this proves nothing"));
+            _refResyncPremium();
         }
         _checkInvariantC(tag);
     }
@@ -616,20 +1276,17 @@ abstract contract QueueFixture is BaseTest {
     function _initPool() internal {
         k = PoolKey({currency0: c0, currency1: c1, fee: FEE, tickSpacing: SPACING, hooks: IHooks(address(hook))});
         poolManager.initialize(k, startPrice);
-        delete ref0;
-        delete ref1;
         // Every seat exists from deployment, empty. The witness must have the same shape as the
         // queue from the first block, or a seat that is skipped for being empty in one and absent
         // in the other would agree by accident.
-        delete refOrder;
+        _refReset();
         uint256 n = hook.seatCount();
         for (uint256 i; i < n; i++) {
             ref0.push(0);
             ref1.push(0);
             refOrder.push(i);
+            _refPushSeat();
         }
-        refC0 = 0;
-        refC1 = 0;
         expT0 = 0;
         expT1 = 0;
     }
@@ -648,8 +1305,21 @@ abstract contract QueueFixture is BaseTest {
     ///      output — which is exactly the property that made the head dust-griefable.
     function _addTo(address who, uint256 seatId, uint256 a0, uint256 a1) internal {
         _fund(who, a0, a1);
+        // Derived BEFORE the call: `_liquidityForAmounts` reads the price and the position's own
+        // liquidity as they stand when the deposit lands, and the second of those moves.
+        (uint128 dl, bool ok) = _refMintL(a0, a1);
         vm.prank(who);
         hook.addToSeat(seatId, a0, a1);
+        // SETTLE FIRST. `_fundSeat` cashes the seat's claim BEFORE `dl` is added, so the seat is
+        // paid at the depth it actually provided rather than at the depth it is about to provide —
+        // which is also what stops a flash-loaned deposit weighing on premium it was not there for.
+        _refSettle(seatId);
+        if (ok) {
+            refL[seatId] += dl;
+            refStandingL += dl;
+        } else {
+            refPremiumArmed = false;
+        }
         // The seat is credited the FULL amount: what the position consumed plus what became float.
         ref0[seatId] += a0;
         ref1[seatId] += a1;
@@ -679,12 +1349,18 @@ abstract contract QueueFixture is BaseTest {
     ///      by `Evacuation.t.sol` (`test_8_8`, `test_8_8b`, `test_8_9`).
     function _withdrawTracked(uint256 seatId, uint256 w0, uint256 w1) internal returns (uint256 p0, uint256 p1) {
         uint128 lBefore = hook.seatLiquidity(seatId);
+        uint128 posBefore = hook.positionLiquidity();
         vm.prank(hook.ownerOf(seatId));
         (p0, p1) = hook.withdraw(seatId, w0, w1);
+        // SETTLE FIRST: `withdraw` settles before it reads the entitlement, so the premium is part
+        // of what the holder may take out.
+        _refSettle(seatId);
         ref0[seatId] -= p0;
         ref1[seatId] -= p1;
         expT0 -= p0;
         expT1 -= p1;
+        // The BURN is measured at the position, and attributed by the witness's own rule.
+        _refBurn(seatId, uint256(posBefore) - uint256(hook.positionLiquidity()));
         if (lBefore != hook.seatLiquidity(seatId)) _refDemote(seatId);
     }
 
@@ -693,10 +1369,52 @@ abstract contract QueueFixture is BaseTest {
     ///      adjustment is exact and does not need to read the contract's arithmetic back. Cursors
     ///      are deliberately left alone, because evacuation does not move them.
     function _evacuateRef(uint256 seatId) internal {
+        // SETTLE FIRST: the accrued premium belongs to the DEPARTING holder, who was the one
+        // standing in line while it was earned, so it leaves with them rather than with the rank.
+        _refSettle(seatId);
         expT0 -= ref0[seatId];
         expT1 -= ref1[seatId];
         ref0[seatId] = 0;
         ref1[seatId] = 0;
+        // The seat leaves EMPTY, so its whole recorded contribution leaves with it: the buyer
+        // receives rank, never depth. Leaving it behind would pay the new holder a premium weighted
+        // by depth somebody else provided and took away.
+        refStandingL -= refL[seatId];
+        refL[seatId] = 0;
+
+        // **AND THE WITNESS DISARMS HERE, DELIBERATELY, RATHER THAN GUESSING.**
+        //
+        // `_onSeatTransfer` splits the departing seat's depth THREE ways and the split depends on
+        // `burnedOnExit`, which is decided inside `_payOut` during a call this helper did not make:
+        // what the payout burned beyond the seat's contribution comes off `liquidityUnattributed`,
+        // and — since the INVARIANT L fix — what the FLOAT covered instead of burning goes ONTO it
+        // (`liquidityUnattributed += had - burnedOnExit`). A witness cannot see that number from
+        // outside the call, and inventing it would make `refUnattributedL` a number that agrees
+        // with the contract by construction.
+        //
+        // So the premium half stops claiming to know the answer. At φ > 0 `_check` asserts
+        // `refPremiumArmed`, so an evacuation suite that also wants the premium split has to route
+        // the transfer through a helper that measures `positionLiquidity()` either side and calls
+        // `_refEvacuateBurn`. At φ = 0 nothing here is load-bearing and nothing changes.
+        refPremiumArmed = false;
+    }
+
+    /// @dev The evacuation's depth split, for a caller that CAN measure the burn — it must read
+    ///      `positionLiquidity()` immediately either side of the transfer. Re-arms the witness.
+    ///      `had` is the witness's own record of what the seat contributed, so the attribution rule
+    ///      stays the witness's; only the burn magnitude is observed.
+    function _refEvacuateBurn(uint256 had, uint256 burned) internal {
+        if (burned > had) {
+            uint256 rest = burned - had;
+            uint256 fromPot = rest > refUnattributedL ? refUnattributedL : rest;
+            refUnattributedL -= fromPot;
+            refShortfallL += rest - fromPot;
+        } else {
+            // The float covered the payout, so depth the seat contributed is still in the position
+            // and now belongs to nobody. Missing this line broke INVARIANT L by 20% of the position.
+            refUnattributedL += had - burned;
+        }
+        refPremiumArmed = true;
     }
 
     /// @dev INVARIANT F: sum(q[i].aX) == what the position would release in X, PLUS floatX.
@@ -771,6 +1489,19 @@ abstract contract QueueFixture is BaseTest {
     /// @dev Split out of `_swapFrom` for one reason: with the router's named-argument struct inline,
     ///      that function runs out of stack.
     function _routeSwap(address who, bool zeroForOne, uint256 amountIn) private {
+        if (refExactOut != 0) {
+            vm.prank(who);
+            swapRouter.swapTokensForExactTokens({
+                amountOut: refExactOut,
+                amountInMax: amountIn,
+                zeroForOne: zeroForOne,
+                poolKey: k,
+                hookData: "",
+                receiver: who,
+                deadline: block.timestamp
+            });
+            return;
+        }
         vm.prank(who);
         swapRouter.swapExactTokensForTokens({
             amountIn: amountIn,
@@ -781,6 +1512,25 @@ abstract contract QueueFixture is BaseTest {
             receiver: who,
             deadline: block.timestamp
         });
+    }
+
+    /// @notice An EXACT-OUTPUT swap, measured and witnessed exactly like every other swap.
+    ///
+    /// @dev **IT EXISTS FOR ONE TEST AND THAT TEST CANNOT BE WRITTEN WITHOUT IT.** `_allocate` sets
+    ///      `next = take == bal ? i + 1 : i`, so the boundary where `next` runs one PAST the seats
+    ///      the walk actually touched is reached only by a fill that EXACTLY exhausts a seat.
+    ///      Inverting the price curve to hit that from an exact-INPUT swap is not something a test
+    ///      can do reliably, and a fuzzer will essentially never land on it. Asking the pool for a
+    ///      precise output does it in one line — and it is not a synthetic capability, because the
+    ///      swap size is the SWAPPER'S choice: any router exposes exact-output, so landing on a seat
+    ///      boundary is an attacker's decision rather than a coincidence.
+    function _swapExactOut(bool zeroForOne, uint256 amountOut, uint256 amountInMax)
+        internal
+        returns (uint256 inAmt, uint256 outAmt)
+    {
+        refExactOut = amountOut;
+        (inAmt, outAmt) = _swapFrom(address(this), zeroForOne, amountInMax);
+        refExactOut = 0;
     }
 
     /// @dev External so a negative control can capture the revert and assert its SPECIFIC reason.

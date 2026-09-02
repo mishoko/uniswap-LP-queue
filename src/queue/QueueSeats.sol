@@ -36,21 +36,40 @@ import {IERC6909Claims} from "@uniswap/v4-core/src/interfaces/external/IERC6909C
 abstract contract QueueSeats is IERC6909Claims {
     /// @notice The roster is BOUNDED, on purpose (PLAN §B.9).
     ///
-    /// @dev **THE BOUND IS SET BY `addToSeat`, NOT BY THE SWEEP, AND THE NUMBER THAT USED TO BE
-    ///      WRITTEN HERE WAS MEASURED ON A DIFFERENT CONTRACT.** This comment said "~6,753 gas per
-    ///      seat, so a 300k budget buys ~44" — a figure from the Phase-0 spike, which had no
-    ///      cursors, no owners, no seat tokens and no lease. Re-measured honestly against the
-    ///      shipping hook the sweep costs **8,070 gas per seat**, and `test_5_3b` DERIVES the
-    ///      supportable depth from that measurement so the constant and the document cannot drift
-    ///      apart again (PITFALLS 5.68).
+    /// @dev **32 IS STRUCTURAL: IT IS THE 32 BYTES OF THE PACKED `order` WORD, ONE BYTE PER RANK.
+    ///      IT IS NOT, AND NEVER HONESTLY WAS, A GAS CHOICE.** `test_4_41` asserts that coupling —
+    ///      that the bound fits the word, uses all of it, and that a FULL roster round-trips
+    ///      through it. Until 2026-09-02 that test was a bare `assertEq(MAX_SEATS, 32)` which could
+    ///      only fail if somebody edited the constant, and this comment cited it anyway.
     ///
-    ///      The sweep is linear and comfortable: 32 seats is 278,110 gas of queue work, inside the
-    ///      300k budget with 7% to spare. What actually binds is `addToSeat`, which is
-    ///      O(priced-ahead x roster) and costs **2,610,805 gas** at 32 seats — 8.7% of a 30M block.
+    ///      **THE "300k BUDGET" THIS COMMENT USED TO QUOTE DID NOT EXIST.** It said "~6,753 gas per
+    ///      seat, so a 300k budget buys ~44" — a Phase-0 spike figure, from a contract with no
+    ///      cursors, no owners, no seat tokens and no lease. It was then corrected to 8,070/seat
+    ///      and "278,110, inside the 300k budget with 7% to spare", which by Phase 8 was wrong by
+    ///      2.4x. The budget itself was fiction: the constant in the suite read **550,000** while
+    ///      every label called it 300k, and 300,000 was originally back-formed to make 32 look
+    ///      comfortable before 32 was "derived" from it. It has been DELETED rather than corrected
+    ///      (PITFALLS 5.144); the slope is now pinned directly and the real costs are asserted as a
+    ///      fraction of a real block.
+    ///
+    ///      **Measured, 2026-09-02, LAW 4 throughout — and quote the FIRST row, not the last:**
+    ///
+    ///          full sweep, roster we SHIP (5 seats)      667,969   2.2% of a 30M block
+    ///          full sweep, structural extreme (32)     1,188,484   4.0%
+    ///          per seat walked                            19,280   linear, exactly
+    ///          worst-case `addToSeat` at 32 seats       2,667,423   8.9%   <-- THE BINDING COST
+    ///
+    ///      **What actually binds is `addToSeat`, not the sweep**: it is O(priced-ahead x roster),
+    ///      superlinear (~n^1.9 measured: 607,703 at n=8, 2,667,423 at n=32), and 2.24x the sweep.
     ///      Any proposal to raise `MAX_SEATS` must be argued against THAT number (PITFALLS 5.72).
     ///
-    ///      32 is also exactly the 32 bytes of the packed `order` word, and `test_4_41` asserts the
-    ///      coupling rather than leaving it as a coincidence.
+    ///      **And nobody should deploy near 32 anyway, for a reason that is not gas.** The
+    ///      seat-economics frontier gives the mechanism's value ceiling as `SLACK = c1 x (LP - B1)`
+    ///      with `c1` the HEAD's share of the book's capital; roster depth `N` cancels out. A
+    ///      32-seat roster split evenly puts `c1` at 0.031 and leaves essentially nothing to divide
+    ///      (0.018 pp of book, against 0.19 pp for the shipped 5-seat schedule). Depth was never
+    ///      the economic variable. Capping `N` does not cap `c1`, which is why lowering this
+    ///      constant would buy neither better economics nor a meaningful amount of gas.
     ///
     ///      Scarcity is not an unfortunate consequence of the gas table — it is the mechanism. An
     ///      unbounded roster makes rank free, and a seat that is free to occupy has no price.

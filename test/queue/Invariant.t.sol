@@ -414,6 +414,11 @@ contract InvariantTest is QueueFixture {
         assertGt(handler.calls("transferSeat"), 0, "no seat was ever transferred");
         assertGt(handler.buyouts(), 0, "no seat was ever BOUGHT: the lease is untested here");
         assertGt(handler.evacuationsWithCapital(), 0, "no evacuation ever moved capital");
+        // **I9's COVERAGE FLOOR.** I9 is green on any run where every evacuation burned at least
+        // the seat's own contribution — the branch it was written for is the one where the FLOAT
+        // covered the payout and NOTHING was burned. Without this line "I9 passed" and "I9 was
+        // never asked the question" are the same observation (PITFALLS 5.54).
+        assertGt(handler.floatCoveredEvacuations(), 0, "no evacuation was ever covered by the float: I9 is vacuous");
         assertEq(handler.orderPermuted(), 1, "no foreclosure ever demoted a seat");
         assertGt(handler.calls("warp"), 0, "time never advanced: every rent bill was zero");
         emit log_named_uint("worst shortfall token0, ppb", handler.worstShortPpb0());
@@ -462,6 +467,24 @@ contract InvariantTest is QueueFixture {
 
     /// @dev Every invariant in this file, in one call. Named separately so the scripted campaign
     ///      and the fuzz campaign assert exactly the same set and cannot drift apart.
+    /// @notice I9 — INVARIANT L: Σ seatLiquidity + liquidityUnattributed == positionLiquidity + shortfall.
+    ///
+    /// @dev **ABSENT UNTIL NOW, WHILE THE HANDLER HAS BEEN CALLING BOTH `transferSeat` AND
+    ///      `buySeat` ALL ALONG.** That gap let `_onSeatTransfer` orphan a seat's contributed depth
+    ///      for six phases: it zeroes `s.liquidity` and takes ALL of it out of `standingL`, but
+    ///      booked only the EXCESS burn (`burnedOnExit > had`) into `liquidityUnattributed`. When
+    ///      the float covered the payout and less was burned than the seat contributed, the
+    ///      difference left the ledger entirely — reproduced IN BAND at 4e19 of 2e20, a fifth of
+    ///      the position, by `Maturity.t.sol::test_M12`.
+    ///
+    ///      No token was ever lost, which is exactly why conservation could not see it (5.92:
+    ///      conservation cannot see WHO got the money). What it corrupts is `standingL`, the
+    ///      PREMIUM'S DENOMINATOR. The fixture's own docstring calls this identity "EXACT, not a
+    ///      bound"; nothing in the campaign asserted it until this line.
+    function invariant_I9_liquidityLedgerTiesOut() public view {
+        _checkInvariantL("I9");
+    }
+
     function _assertEveryInvariant() internal view {
         invariant_I1_ledgerEqualsTheGhost();
         invariant_I2_solvency();
@@ -469,6 +492,7 @@ contract InvariantTest is QueueFixture {
         invariant_I4_frontFirst();
         invariant_I5_seatSupplyIsOne();
         invariant_I6_orderIsAPermutation();
+        invariant_I9_liquidityLedgerTiesOut();
         invariant_I7_noUnexpectedReverts();
         invariant_I8a_settlementConservesRent();
         invariant_I8b_escrowTotalEqualsTheSeats();

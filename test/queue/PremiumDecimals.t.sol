@@ -68,7 +68,7 @@ abstract contract PremiumDecimalsBase is QueueFixture {
         for (uint256 i; i < N; i++) {
             _addTo(roster[i], i, _whole0(100), _whole1(400));
         }
-        hook.sweepFloatIntoPosition();
+        _sweepTracked();
     }
 
     /// @dev Eight swaps, alternating direction, one whole token0 / four whole token1 each — the
@@ -88,6 +88,12 @@ abstract contract PremiumDecimalsBase is QueueFixture {
             bool zeroForOne = i % 2 == 0;
             (uint256 g0b, uint256 g1b) = hook.growths();
             _swap(zeroForOne, zeroForOne ? _whole0(1) : _whole1(4));
+            // **THE INDEPENDENT WITNESS, WHICH THIS SUITE COULD NOT CALL UNTIL PHASE 8.** Until
+            // `_refAllocate` modelled the premium, `_check`'s seat-by-seat composition assertion was
+            // unavailable at φ > 0 and the per-seat SPLIT rested on this file's own aggregates. It
+            // now runs on the 18/6 pool the deploy script ships, which is the pair the premium was
+            // once completely inert on.
+            _check(string.concat(tag, " swap ", vm.toString(i)));
             (uint256 g0a, uint256 g1a) = hook.growths();
             if (g0a > g0b) movedG0++;
             if (g1a > g1b) movedG1++;

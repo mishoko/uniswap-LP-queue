@@ -151,6 +151,16 @@ contract QueueHarness is QueueHook {
         return (premGrowth0, premGrowth1);
     }
 
+    /// @dev The RAW seat slot, with no claim added. `seat()` deliberately reports raw + accrued
+    ///      (PITFALLS 5.117) and that is the right answer for a holder, but the premium witness
+    ///      needs the two halves SEPARATELY: the raw ledger is what the fill produced, the claim is
+    ///      what the accumulator produced, and a witness that could only see their sum could not
+    ///      say which of the two moved. `totals()` is the raw sum and there was no per-seat form of
+    ///      it. Adds an entry point, overrides nothing.
+    function rawSeat(uint256 i) external view returns (uint256, uint256) {
+        return (q[i].a0, q[i].a1);
+    }
+
     /// @dev The Phase 1 solvency oracle. LAW 3 as amended: a raw PoolManager-balance conservation
     ///      test is BLIND to accrued protocol fees, which sit inside PoolManager's ERC20 balance
     ///      until collected. Redeeming for real is the assertion that cannot be fooled.

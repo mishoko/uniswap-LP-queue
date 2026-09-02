@@ -213,13 +213,11 @@ contract ProtocolFeeTest is QueueFixture {
         poolManager.initialize(k, startPrice);
         (uint256 s0, uint256 s1) =
             hook.seed(k, TickMath.minUsableTick(SPACING), TickMath.maxUsableTick(SPACING), LIQ, _bps());
-        delete refOrder;
-        for (uint256 i; i < 3; i++) {
-            (uint256 a0, uint256 a1) = hook.seat(i);
-            ref0.push(a0);
-            ref1.push(a1);
-            refOrder.push(i);
-        }
+        // THROUGH THE FIXTURE, not a hand-rolled copy of it. This loop used to be written out
+        // here, and the witness has grown parallel arrays (the premium's weight, its pending claim,
+        // its interval count) that the copy did not know about — so the copy left them empty and
+        // the first swap indexed past the end of one. One place, `_refAdoptSeed`.
+        _refAdoptSeed(_bps(), LIQ);
         expT0 = s0;
         expT1 = s1;
 

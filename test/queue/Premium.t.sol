@@ -32,13 +32,20 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 /// it, and why the premium is a share of FEE FLOW.
 ///
 /// ─────────────────────────────────────────────────────────────────────────────────────────────
-/// **WHAT THIS SUITE DOES NOT DO, SAID HERE RATHER THAN DISCOVERED LATER.** `QueueFixture`'s
-/// independent reference allocator does NOT model the premium, so `_check`'s seat-by-seat
-/// composition assertion is unavailable at φ > 0 and no test below calls it. Everything here is
-/// asserted against quantities that do not depend on that witness: PoolManager's own balances,
-/// INVARIANT F, the contract's two independently-maintained totals, and a live φ = 0 control pool.
-/// Teaching the witness the premium is the top item in `NEXT_SESSION_PROMPT.md`; until it is done,
-/// the per-seat SPLIT at φ > 0 rests on the controls in this file rather than on the witness.
+/// **THAT GAP IS CLOSED AS OF PHASE 8, AND THE OLD WARNING IS KEPT HERE BECAUSE IT SAYS WHAT THIS
+/// SUITE USED TO REST ON.** It read: "`QueueFixture`'s independent reference allocator does NOT
+/// model the premium, so `_check`'s seat-by-seat composition assertion is unavailable at φ > 0 and
+/// no test below calls it ... the per-seat SPLIT at φ > 0 rests on the controls in this file rather
+/// than on the witness."
+///
+/// `_refAllocate` now models it. The witness computes each seat's share as the TRUE RATIONAL
+/// pro-rata `floor(total_j·L_i/w_j)` — no accumulator, no fixed point, so it cannot agree with
+/// `_accruePremium` by construction — and `_assertPremiumClaim` bounds the residual against the
+/// hook's two floors in closed form. `test_7_1` drives it here; `PremiumDecimals.t.sol` drives it on
+/// the 18/6 pool the deploy script actually ships; `PremiumWitness.t.sol` is the evidence that it
+/// can go RED, with four one-line mutants each producing a gap of 1e20 wei against an allowance of
+/// single wei. Everything below still holds independently: PoolManager's own balances, INVARIANT F,
+/// the contract's two internally-maintained totals, and a live φ = 0 control pool.
 /// ─────────────────────────────────────────────────────────────────────────────────────────────
 contract PremiumTest is QueueFixture {
     uint256 constant PHI = 8_500; // the shipping φ — see QueueDeployBase.PREMIUM_BPS
@@ -54,8 +61,11 @@ contract PremiumTest is QueueFixture {
     ///      carry each pool's own expectation with it — without that, the second pool is measured
     ///      against the first one's totals and conservation "breaks" by the whole difference. The
     ///      failure looked like a premium leak of 1.9e19 wei and was the harness.
-    mapping(address => uint256) poolT0;
-    mapping(address => uint256) poolT1;
+    /// @dev **SINCE PHASE 8 THIS IS THE WHOLE WITNESS, NOT TWO NUMBERS.** `_refAllocate` now models
+    ///      the premium, so a pool switch has to carry the seat ledger, the depth ledger, the
+    ///      pending claims, the interval counts, the held pots AND φ itself — fourteen arrays and
+    ///      ten scalars. `_saveWitness`/`_loadWitness` move the lot in one call precisely so that
+    ///      this list cannot go stale the next time the witness grows a field.
 
     function setUp() public {
         deployArtifactsAndLabel();
@@ -84,21 +94,16 @@ contract PremiumTest is QueueFixture {
             bps[i] = 1_250;
         }
         _openBand(bps);
-        poolT0[address(hook)] = expT0;
-        poolT1[address(hook)] = expT1;
+        _saveWitness(address(hook));
         return (hook, k);
     }
 
     /// @dev Save the live pool's conservation state before pointing the fixture at another one.
     function _use(QueueHarness h, PoolKey memory key_) internal {
-        if (address(hook) != address(0)) {
-            poolT0[address(hook)] = expT0;
-            poolT1[address(hook)] = expT1;
-        }
+        if (address(hook) != address(0)) _saveWitness(address(hook));
         hook = h;
         k = key_;
-        expT0 = poolT0[address(h)];
-        expT1 = poolT1[address(h)];
+        _loadWitness(address(h));
     }
 
     // ───────────────────────────────────────────────────────────────────── 7.1 the two totals agree
@@ -111,6 +116,10 @@ contract PremiumTest is QueueFixture {
             (uint256 st0, uint256 st1) = hook.standings();
             assertEq(st0, t0, "standing0 has drifted from the ledger");
             assertEq(st1, t1, "standing1 has drifted from the ledger");
+            // **THE INDEPENDENT WITNESS, WHICH THIS SUITE COULD NOT CALL BEFORE PHASE 8.** The two
+            // assertions above are the contract's two internal writers agreeing with each other;
+            // this one is a model that was never told how the contract works.
+            _check(string.concat("7.1 swap ", vm.toString(i)));
         }
     }
 

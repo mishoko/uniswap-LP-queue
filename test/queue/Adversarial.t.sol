@@ -242,6 +242,11 @@ contract AdversarialTest is QueueFixture {
         vm.prank(ALICE);
         hook.transfer(MALLORY, 0, 1);
         _evacuateRef(0);
+        // A funded transfer takes the seat's contributed depth out of the pool, so it costs the
+        // rank (PITFALLS 5.123a). Every other seat is empty here, so the fill still reaches
+        // MALLORY — this makes the attack no harder, which is the point: the wash trade is
+        // unprofitable on its own arithmetic, not because the queue got in its way.
+        _refDemote(0);
         _addTo(MALLORY, 0, 400e18, 100e18);
 
         _fund(MALLORY, 40e18, 0);
@@ -400,7 +405,7 @@ contract AdversarialTest is QueueFixture {
     ///      a brand-new external function ships without its guard under test.
     function test_6_12_everyExternalStateChangingPathIsNonReentrant() public view {
         string memory src = vm.readFile("src/queue/QueueHook.sol");
-        string[10] memory guarded = [
+        string[11] memory guarded = [
             "function addToSeat(uint256 seatId, uint256 amount0, uint256 amount1) external nonReentrant",
             "function withdraw(uint256 seatId, uint256 w0, uint256 w1) external nonReentrant",
             "function claimPending(uint256 w0, uint256 w1) external nonReentrant",
@@ -410,6 +415,11 @@ contract AdversarialTest is QueueFixture {
             "function withdrawRent(uint256 seatId, uint256 amount) external nonReentrant",
             "function settleRent(uint256 seatId) external nonReentrant",
             "function buySeat(uint256 seatId, uint256 maxPrice, uint256 newSelfPrice) external nonReentrant",
+            // The funded buyout — a NEW external entry point, and PITFALLS 5.62 is the record of
+            // what happens when one of those ships without its guard under test. `forge fmt` puts
+            // the modifiers on their own lines here because the parameter list fills the first one,
+            // so the assertion carries the wrapped form deliberately.
+            "uint256 maxRank\n    ) external nonReentrant {",
             // `unlockCallback` is the one exception and it is guarded differently, by the only
             // caller that may reach it. Asserted here so the exception is deliberate, not a gap.
             "if (msg.sender != address(poolManager)) revert NotSoleLiquidityProvider();"
@@ -417,6 +427,14 @@ contract AdversarialTest is QueueFixture {
         for (uint256 i; i < guarded.length; i++) {
             assertTrue(_contains(src, guarded[i]), string.concat("unguarded or renamed: ", guarded[i]));
         }
+        // **THE INSTRUMENT'S OWN NEGATIVE CONTROL.** Every assertion above is a POSITIVE match, so
+        // a `_contains` that always returned true would pass all eleven and prove nothing (LAW 5,
+        // and the tautology family in PITFALLS 5.111). This is the assertion that can only pass if
+        // the search actually searches.
+        assertFalse(
+            _contains(src, "function thisFunctionIsNotInTheSource(uint256) external nonReentrant"),
+            "the source-scan instrument matches text that is not there: test_6_12 proves nothing"
+        );
         // ...and the seat token's two entry points, which live in the other file.
         string memory seats = vm.readFile("src/queue/QueueSeats.sol");
         assertTrue(
@@ -484,24 +502,44 @@ contract AdversarialTest is QueueFixture {
         assertEq(lastTouched, 1, "a single-seat fill touched more than one seat");
     }
 
-    /// @notice BOUNDARY — **`QueueUnderflow` IS STRUCTURALLY UNREACHABLE THROUGH THE POOL, AND
-    ///         §C.6's BOUNDARY TEST RESTED ON A FALSE PREMISE.**
+    /// @notice BOUNDARY — **`QueueUnderflow` IS UNREACHABLE WHILE THE ROSTER IS FUNDED, AND
+    ///         REACHABLE ONCE IT IS NOT. §C.6's BOUNDARY TEST RESTED ON A FALSE PREMISE — AND SO,
+    ///         FROM PHASE 7 ONWARD, DID THE FIRST VERSION OF THIS DOCSTRING.**
     ///
     /// @dev §C.6 asks for two tests: a swap that exactly exhausts the queue fills, and "a swap one
-    ///      wei larger than the queue" underflows. **There is no such swap.** A swap can only take
-    ///      out what the POSITION holds, and INVARIANT F — asserted at zero surplus by the Phase 6
-    ///      campaign — says the position never exceeds the ledger. So `amtOut <= Σa` always, and
-    ///      INVARIANT C says every seat below the cursor is empty, so `amtOut <= Σ_{rank >= cursor} a`
-    ///      too. The allocator cannot be asked for more than it has.
+    ///      wei larger than the queue" underflows. **Through a FUNDED roster there is no such
+    ///      swap**, and that half stands: INVARIANT C says every seat below the cursor is empty, so
+    ///      the allocator is never asked for more than the seats above the cursor hold. The body
+    ///      below executes it — a swap of 100,000e18, over fifty times the queue's whole token0
+    ///      side, FILLS, taking the queue's token1 down to dust and the price to the lower tick,
+    ///      and the ledger conserves to the wei.
     ///
-    ///      That makes `QueueUnderflow` exactly what it should be: not a boundary a trader can
-    ///      reach, but the LOUD failure that fires when the ledger and the position have come
-    ///      apart. `Rank.t.sol`'s ledger-only-evacuation control drains one without the other and
-    ///      it fires there.
+    ///      **WHAT THIS DOCSTRING USED TO CLAIM, AND WHY IT WAS WRONG.** It said `QueueUnderflow` is
+    ///      STRUCTURALLY UNREACHABLE THROUGH THE POOL, reasoning that "INVARIANT F ... says the
+    ///      position never exceeds the ledger, so `amtOut <= Σa` always". That was true when it was
+    ///      written, and **Phase 7 falsified it by adding a term to the very identity it rests on.**
+    ///      INVARIANT F is now
     ///
-    ///      Executed here rather than argued: a swap of 100,000e18, over fifty times the queue's
-    ///      whole token0 side, FILLS — taking the queue's token1 down to dust and the price to the
-    ///      lower tick — and the ledger conserves to the wei.
+    ///          Σa + pendingTotal + premiumOwed == position + float
+    ///
+    ///      so the position exceeds the SEAT ledger by the unsettled premium — and `_allocate`
+    ///      sources only from seat balances. Nothing re-examined the claim when `premiumOwed`
+    ///      landed. **Prose is not an interlock** (PITFALLS 5.86), and a docstring that states a
+    ///      structural impossibility is exactly the kind of prose that stops being re-derived.
+    ///
+    ///      **THE COUNTEREXAMPLE IS EXECUTED, in `test/queue/Maturity.t.sol`.** After a terminal
+    ///      fill and a full roster exit the position still holds 4.9567e16 wei of token0 while
+    ///      quoting `positionLiquidity` of 2.573e17 — depth it cannot trade — and EVERY one-for-zero
+    ///      swap reverts `QueueUnderflow`, at 1e20 and at 1e12 alike (`test_M7f`, `test_M13`). The
+    ///      shortfall is `min(amtOut, premiumHeld)` and equals the pot exactly at the binding size
+    ///      (`test_M13b`); at φ = 0 it does not happen at all (`test_M13c`), which is what pins the
+    ///      cause on the premium rather than on maturity. So §C.6's "a swap one wei larger than the
+    ///      queue" IS a test that can be written now, and PLAN.md is stale where it says otherwise.
+    ///
+    ///      `QueueUnderflow` therefore remains the LOUD failure that fires when the ledger and the
+    ///      position have come apart — `Rank.t.sol`'s ledger-only-evacuation control drains one
+    ///      without the other and it fires there — but it is no longer ONLY that. It also fires when
+    ///      they come apart BY DESIGN, over premium no seat ever claimed.
     function test_6_15_theQueueCannotBeAskedForMoreThanItHolds() public {
         (, uint256 t1Before) = hook.totals();
         assertGt(t1Before, 0, "nothing happened: the queue holds no token1");
@@ -729,19 +767,35 @@ contract AdversarialTest is QueueFixture {
         });
     }
 
+    /// @dev Substring search over the shipping source. **REWRITTEN BECAUSE THE BYTE-BY-BYTE
+    ///      VERSION COST ~100M GAS PER NEEDLE AND THE ELEVENTH ONE HIT THE 2^30 BLOCK LIMIT** —
+    ///      the failure mode was `OutOfGas`, which reads exactly like a broken assertion and is
+    ///      not one. Hashing each window is O(len) in gas metering rather than O(len) in
+    ///      bounds-checked byte loads, and is ~12x cheaper here.
+    ///
+    ///      **AN INSTRUMENT THAT ALWAYS RETURNS TRUE WOULD PASS EVERY ASSERTION IN `test_6_12`**,
+    ///      which is precisely the tautology LAW 5 is about, so the caller asserts a needle that
+    ///      MUST NOT be found. Without that, this rewrite would be unfalsifiable.
     function _contains(string memory haystack, string memory needle) internal pure returns (bool) {
         bytes memory h = bytes(haystack);
         bytes memory n = bytes(needle);
-        if (n.length == 0 || n.length > h.length) return false;
-        for (uint256 i; i + n.length <= h.length; i++) {
-            bool hit = true;
-            for (uint256 j; j < n.length; j++) {
-                if (h[i + j] != n[j]) {
-                    hit = false;
-                    break;
+        uint256 nl = n.length;
+        uint256 hl = h.length;
+        if (nl == 0 || nl > hl) return false;
+        bytes32 want;
+        uint256 hptr;
+        assembly ("memory-safe") {
+            want := keccak256(add(n, 0x20), nl)
+            hptr := add(h, 0x20)
+        }
+        unchecked {
+            for (uint256 i; i + nl <= hl; ++i) {
+                bytes32 got;
+                assembly ("memory-safe") {
+                    got := keccak256(add(hptr, i), nl)
                 }
+                if (got == want) return true;
             }
-            if (hit) return true;
         }
         return false;
     }

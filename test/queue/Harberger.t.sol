@@ -269,6 +269,7 @@ contract HarbergerTest is QueueFixture {
     address constant CARL = address(0xCAF1); // seat 2
     address constant DAVE = address(0xDA4E); // seat 3
     address constant EVE = address(0xE5E); // the buyer
+    address constant FRANK = address(0xF4A3); // a second buyer, for the boundary arms
 
     /// @dev The §E.4 residual bound, same derivation as the other suites: linear in swaps, never
     ///      compounding, with margin. Not a tolerance widened until the tests went green.
@@ -493,15 +494,24 @@ contract HarbergerTest is QueueFixture {
         vm.prank(EVE);
         hook.buySeat(0, 50e18, 80e18);
 
-        // Rank moved.
-        assertEq(hook.ownerOf(0), EVE, "rank did not move");
-        assertEq(hook.idAtRank(0), 0, "a buyout reordered the queue");
+        // The SEAT moved.
+        assertEq(hook.ownerOf(0), EVE, "the seat did not change hands");
 
-        // Capital did not: the seat arrives EMPTY and the seller was paid.
+        // **THE RANK DID NOT — A PLAIN BUYOUT BUYS AN EMPTY SEAT AT THE TAIL.** The buyout empties
+        // the seat, so ALICE's contributed depth leaves the pool, and rank is backed by depth
+        // (PITFALLS 5.123a). A buyer who wants the RANK has to replace the depth in the same call:
+        // `test_4_4b`. This is not a tax on buyers — it is the only rule that survives a SYBIL
+        // buyout, where the "payment" is a wash between two addresses one person controls
+        // (`Evacuation.t.sol::test_8_11`).
+        assertEq(hook.rankOfId(0), 3, "A PLAIN BUYOUT OF A FUNDED SEAT KEPT ITS RANK");
+        assertEq(hook.idAtRank(0), 1, "seat 1 was not promoted into the vacated front");
+
+        // Capital did not travel either: the seat arrives EMPTY and the seller was paid.
         (uint256 n0, uint256 n1) = hook.seat(0);
         assertEq(n0, 0, "capital travelled with the rank (token0)");
         assertEq(n1, 0, "capital travelled with the rank (token1)");
         _evacuateRef(0);
+        _refDemote(0);
 
         uint256 gotC0 = _bal(c0, ALICE) - aliceC0;
         uint256 gotC1 = _bal(c1, ALICE) - aliceC1;
@@ -526,21 +536,139 @@ contract HarbergerTest is QueueFixture {
 
     // ================================ 4.5 — under-pricing is punished, over-pricing is paid for
 
+    /// @notice **A BUYOUT THAT REPLACES THE DEPTH KEEPS THE RANK.** This is the exemption that
+    ///         keeps Phase 4 alive after PITFALLS 5.123(a), and it is stated directly rather than
+    ///         left to be inferred from `test_4_4`'s negative.
+    ///
+    /// @dev Without an exemption of some kind the rank market dies: the only reason to post a
+    ///      self-price above zero is to avoid being bought out, so if every buyout delivered the
+    ///      tail then nobody would buy, nobody would price, no rent would accrue, and the lease
+    ///      would be decoration. The exemption CANNOT be "you paid for it" — the price is self-set
+    ///      and the buyout is open to anybody, so a holder buys their own seat with their own
+    ///      second address and the payment is a wash (`Evacuation.t.sol::test_8_11`, the full
+    ///      +267 bps edge with the rank kept). It has to be the thing rank is priority OVER: the
+    ///      depth. The buyer replaces it, in the same call, or takes the tail.
+    function test_4_4b_aBuyoutThatReplacesTheDepthKEEPSTheRank() public {
+        _four();
+        _setPrice(ALICE, 0, 50e18);
+        _swap(false, 5e18); // partial fill, so the seat is not a trivial equal-legs case
+        _check("pre-buyout");
+
+        uint128 sellerDepth = hook.seatLiquidity(0);
+        assertGt(sellerDepth, 0, "the seller contributed no depth: this test proves nothing");
+
+        // **THE BUYER MUST OVERSHOOT, AND THAT IS A REAL COST OF THIS DESIGN, NOT A TEST DETAIL.**
+        // What has to be matched is `seatLiquidity(0)`, and what a deposit MINTS is
+        // `_liquidityForAmounts` at the LIVE price — so the seller's original amounts do not buy
+        // back the seller's depth once the price has moved. Depositing exactly ALICE's 40e18/10e18
+        // here lands at the tail. There is no view that hands a buyer the exact number; they size
+        // it from the pool's own arithmetic and round up.
+        _fund(EVE, 130e18, 30e18);
+        _buyAndFundTracked(EVE, 0, 50e18, 80e18, 80e18, 20e18);
+
+        assertEq(hook.ownerOf(0), EVE, "the seat did not change hands");
+        assertEq(hook.rankOfId(0), 0, "THE FUNDED BUYOUT LOST THE RANK IT PAID FOR");
+        assertEq(hook.idAtRank(0), 0, "the funded buyout reordered the queue");
+        assertGe(hook.seatLiquidity(0), sellerDepth, "the buyer did not match the depth: arm is vacuous");
+
+        // ...and the rank is real: the very next fill starts at EVE's seat.
+        (uint256 before1,) = hook.seat(1);
+        _swap(true, 5e18);
+        (uint256 after1,) = hook.seat(1);
+        assertEq(after1, before1, "the fill did not start at the seat EVE just bought and funded");
+
+        _check("post-funded-buyout");
+        _checkInvariantF("4.4b", _tol(2));
+        _checkInvariantR("4.4b");
+        _checkInvariantL("4.4b");
+    }
+
+    /// @notice **AND THE BOUNDARY: SHORT OF THE DEPTH IS THE TAIL.** A buyer who puts back LESS
+    ///         than the seller took out is demoted exactly as an unfunded buyer is.
+    ///
+    /// @dev The threshold is not a constant somebody chose — it is the seller's own contributed
+    ///      liquidity, so it is linear in what left, as PITFALLS 5.123 requires. Second arm: a
+    ///      single-token deposit in range mints ZERO liquidity (`_liquidityForAmounts` takes the
+    ///      min of the two legs), so it contributes no depth and buys no rank however large it is.
+    ///      That is the same rule that closed the premium's free ride in PITFALLS 5.128, reused
+    ///      rather than restated.
+    function test_4_4c_aBuyoutThatUnderfundsTakesTheTail() public {
+        _four();
+        uint128 sellerDepth = hook.seatLiquidity(0);
+        assertGt(sellerDepth, 0, "the seller contributed no depth: this test proves nothing");
+
+        // ---- ARM 1: a real deposit, but smaller than what left.
+        _fund(EVE, 4e18, 1e18);
+        _buyAndFundTracked(EVE, 0, 0, 0, 4e18, 1e18);
+        assertGt(hook.seatLiquidity(0), 0, "the underfunded buyout minted nothing: arm 1 is vacuous");
+        assertLt(hook.seatLiquidity(0), sellerDepth, "the buyer matched the depth: arm 1 is vacuous");
+        assertEq(hook.rankOfId(0), 3, "AN UNDERFUNDED BUYOUT KEPT THE RANK");
+        _check("post-underfunded-buyout");
+
+        // ---- ARM 2: a large SINGLE-TOKEN deposit, which mints no depth at all.
+        uint256 id = hook.idAtRank(0);
+        uint128 depth2 = hook.seatLiquidity(id);
+        assertGt(depth2, 0, "the next seat contributed no depth: arm 2 is vacuous");
+        _fund(FRANK, 500e18, 0);
+        _buyAndFundTracked(FRANK, id, 0, 0, 500e18, 0);
+        assertEq(hook.seatLiquidity(id), 0, "a single-token in-range deposit minted depth");
+        assertEq(hook.rankOfId(id), 3, "A DEPOSIT THAT MINTED NO DEPTH BOUGHT A RANK");
+        _check("post-single-token-buyout");
+        _checkInvariantF("4.4c", _tol(2));
+        _checkInvariantL("4.4c");
+    }
+
+    /// @dev `buySeatAndFund`, with the witness kept in step. Mirrors `_withdrawTracked`'s division
+    ///      of labour: this keeps the ORDER model honest so `_checkOrder` and the cursor
+    ///      assertions stay meaningful, while WHEN a demotion should happen is asserted directly
+    ///      by the tests above and by `Evacuation.t.sol`.
+    function _buyAndFundTracked(
+        address buyer,
+        uint256 seatId,
+        uint256 maxPrice,
+        uint256 newPrice,
+        uint256 a0,
+        uint256 a1
+    ) internal {
+        uint128 lBefore = hook.seatLiquidity(seatId);
+        vm.prank(buyer);
+        hook.buySeatAndFund(seatId, maxPrice, newPrice, a0, a1, type(uint256).max);
+
+        // The seat was emptied and then credited the buyer's FULL deposit — what the position
+        // consumed plus what became float — so the witness is re-based rather than adjusted.
+        expT0 = expT0 - ref0[seatId] + a0;
+        expT1 = expT1 - ref1[seatId] + a1;
+        ref0[seatId] = a0;
+        ref1[seatId] = a1;
+
+        // Order matters and it is the contract's order: `_fundSeat` pulls the cursors back to the
+        // seat's rank FIRST, and only then can the demotion move it.
+        uint256 rank;
+        for (uint256 i; i < refOrder.length; i++) {
+            if (refOrder[i] == seatId) rank = i;
+        }
+        if (rank < refC0) refC0 = rank;
+        if (rank < refC1) refC1 = rank;
+        if (hook.seatLiquidity(seatId) < lBefore) _refDemote(seatId);
+    }
+
     function test_4_5a_underpricedSeatIsBoughtOut() public {
         _four();
         // ALICE values the head at one token. Somebody else values it at more than that.
         _setPrice(ALICE, 0, 1e18);
         _prepay(ALICE, 0, 1e18);
 
-        _fund(EVE, 1e18, 0);
-        vm.prank(EVE);
-        hook.buySeat(0, 1e18, 500e18);
+        // EVE takes it AND puts the depth back in the same call, which is what keeps the rank she
+        // is paying for. Buying without funding would hand her an empty seat at the tail — see
+        // `test_4_4` for that arm, and `_settleRankOnTransfer` for why the rule is depth and not
+        // payment.
+        _fund(EVE, 201e18, 50e18);
+        _buyAndFundTracked(EVE, 0, 1e18, 500e18, 200e18, 50e18);
 
         assertEq(hook.ownerOf(0), EVE, "the under-priced seat was not taken");
-        _evacuateRef(0);
+        assertEq(hook.rankOfId(0), 0, "the funded buyout did not keep the rank it paid for");
 
         // And the head is worth having: the very next fill starts there and nowhere else.
-        _addTo(EVE, 0, 200e18, 50e18);
         (uint256 before1,) = hook.seat(1);
         _swap(true, 50e18);
         (uint256 after1,) = hook.seat(1);
@@ -1002,18 +1130,26 @@ contract HarbergerTest is QueueFixture {
         // withdrawing would leave it at rank 3 before the settle even ran, and "it kept its rank"
         // would then be a statement about a seat that had already lost it.)
         vm.prank(BOB);
-        hook.buySeat(0, 0, 0); // never-priced seat: free, evacuates ALICE, rank untouched
+        hook.buySeat(0, 0, 0); // never-priced seat: free, evacuates ALICE — and costs the rank
         vm.prank(BOB);
-        hook.transfer(ALICE, 0, 1); // hand the empty rank back to ALICE
+        hook.transfer(ALICE, 0, 1); // hand the empty rank back to ALICE: EMPTY, so no demotion
+        // Emptying the seat cost it its place (PITFALLS 5.123a), leaving it at the TAIL — where
+        // "it kept its rank" is vacuous, because demoting the tail is a no-op (`test_8_8c`). So a
+        // seat in FRONT of it is taken out through the ordinary withdrawal path, which promotes
+        // this one off the tail and makes the assertion below mean something again.
+        (uint256 w0, uint256 w1) = hook.seat(1);
+        vm.prank(BOB);
+        hook.withdraw(1, w0, w1);
         (uint256 e0, uint256 e1) = hook.seat(0);
         assertTrue(e0 == 0 && e1 == 0, "the seat is not empty: this test proves nothing");
-        assertEq(hook.rankOfId(0), 0, "the setup moved the rank: this test would prove nothing");
+        assertEq(hook.rankOfId(0), 2, "the setup did not leave the empty seat off the tail");
+        assertLt(hook.rankOfId(0), 3, "the empty seat is at the tail: the assertion below is vacuous");
 
         _setPrice(ALICE, 0, 100e18);
         _prepay(ALICE, 0, 20e18);
         vm.warp(block.timestamp + 30 days);
         hook.settleRent(0);
-        assertEq(hook.rankOfId(0), 0, "production could not hold pure rank at a price");
+        assertEq(hook.rankOfId(0), 2, "production could not hold pure rank at a price");
         assertEq(_price(0), 100e18, "production foreclosed a paid-up empty seat");
 
         // The variant's rig is a FRESH, unfunded pool, so seat 0 is already empty and at rank 0 —
@@ -1054,6 +1190,40 @@ contract HarbergerTest is QueueFixture {
         // the accrual: recipients 1/2/3 hold 60/137/763, and BOB is not the one absorbing the
         // remainder, so his share is the plain floored fraction.
         assertEq(honest, _expectedHonestShare(), "production did not pay the honest share");
+    }
+
+    /// @notice **AND THE SAME RULE AT THE SECOND ENTRY POINT CAPITAL HAS INTO A SEAT.**
+    ///         `buySeatAndFund` is a deposit path, so it settles the seats ahead of it exactly as
+    ///         `addToSeat` does — or it is `test_4_14`'s hole with a new front door.
+    ///
+    /// @dev **THIS IS THE ONE-RULE-TWO-PLACES FAMILY** (PITFALLS 5.37, 5.50, 5.52 twice, 5.73,
+    ///      5.125, 5.132), asserted at the new place the same day the new place was written rather
+    ///      than found by a campaign six weeks later. Removing `_settleAhead` from `_buySeat` turns
+    ///      the buyer's deposit — which can be borrowed — into a claim on a pot that accrued while
+    ///      they were not standing there.
+    function test_4_14b_aFundedBuyoutCannotCaptureRentItWasNotThereFor() public {
+        _four();
+        _setPrice(ALICE, 0, 100e18);
+        _prepay(ALICE, 0, 20e18);
+        vm.warp(block.timestamp + 30 days);
+
+        uint256 meterBefore = _escrow(0);
+        assertGt(hook.rentDue(0), 0, "no rent accrued: this test proves nothing");
+
+        // EVE takes the SMALL tail-ward seat with a borrowed-scale deposit. A seat that already
+        // dominates the weights has nothing to gain, so the small one is what makes this bite.
+        _fund(EVE, 100_000e18, 0);
+        _buyAndFundTracked(EVE, 1, 0, 0, 100_000e18, 0);
+
+        // The buyout drained the payer's meter BEFORE the deposit could weigh on it.
+        assertLt(_escrow(0), meterBefore, "the funded buyout did not settle the seats ahead of it");
+
+        uint256 before = _escrow(1);
+        hook.settleRent(0);
+        uint256 gained = _escrow(1) - before;
+        emit log_named_uint("rent captured by the funded buyout", gained);
+        emit log_named_uint("the honest share for that seat    ", _expectedHonestShare());
+        assertLt(gained, _expectedHonestShare(), "THE FUNDED BUYOUT CAPTURED RENT IT WAS NOT THERE FOR");
     }
 
     /// @dev Runs the identical sequence on whichever hook is mounted. `settleAhead` picks the
@@ -1706,8 +1876,48 @@ contract HarbergerTest is QueueFixture {
     /// @dev `order` packs one seat id per BYTE, so the roster bound and the word are the same fact.
     ///      Raising `MAX_SEATS` past 32 would silently truncate the queue's order rather than fail,
     ///      which is why the coupling is asserted here rather than left in a comment.
-    function test_4_41_theRosterBoundAndTheOrderWordAreTheSameFact() public view {
-        assertEq(hook.MAX_SEATS(), 32, "MAX_SEATS no longer matches the 32 bytes of the order word");
+    ///
+    /// @dev **THIS TEST WAS A TAUTOLOGY UNTIL 2026-09-02, AND IT WAS CITED IN THREE PLACES AS THE
+    ///      EVIDENCE FOR A STRUCTURAL CLAIM IT DID NOT TEST.** It read, in its entirety,
+    ///      `assertEq(hook.MAX_SEATS(), 32)`. Ask LAW 5's question — what would have to be true for
+    ///      it to read FAIL? Only "somebody edited the constant". It asserted nothing whatsoever
+    ///      about the `order` word, yet `Gas.t.sol` and `QueueSeats` both leaned on it for the
+    ///      proposition that 32 is structural rather than a gas choice. A pin wearing a proof's
+    ///      costume, and it is exactly why the `MAX_SEATS` argument recurred twice
+    ///      (PITFALLS 5.108, 5.129, 5.144).
+    ///
+    ///      It now asserts the coupling itself, DERIVED from the word's width rather than restated
+    ///      as a literal, in three parts:
+    ///
+    ///        * the bound FITS the word — `MAX_SEATS x 8 <= 256`;
+    ///        * the bound USES ALL of it — one more rank would not fit. Together these two make 32
+    ///          a consequence of `uint256 order` rather than a number somebody chose, and they
+    ///          re-derive if the word is ever widened;
+    ///        * a FULL roster actually round-trips through it — every rank readable, every byte
+    ///          the id it should be. Truncation is the failure mode being guarded against, and
+    ///          only executing it can catch that.
+    ///
+    ///      **What makes this FAIL now:** lowering `MAX_SEATS` (the second assertion), raising it
+    ///      (the first), or any change that makes the order word mis-address a full roster (the
+    ///      third). That last one is the one no arithmetic assertion can reach.
+    function test_4_41_theRosterBoundAndTheOrderWordAreTheSameFact() public {
+        uint256 max = hook.MAX_SEATS();
+
+        // One byte per rank, and `order` is one 256-bit word.
+        assertLe(max * 8, 256, "MAX_SEATS no longer fits the 32 bytes of the order word");
+        assertGt((max + 1) * 8, 256, "the order word has a whole byte the roster bound does not use");
+
+        // And the full roster really does address through it. `_syntheticRoster` mints `max` seats
+        // in the identity permutation, which is what `_mintRoster` writes.
+        _deployHookUnfunded(0x9441, _syntheticRoster(max));
+        _initPool();
+        assertEq(hook.seatCount(), max, "the bound and the roster the constructor accepted disagree");
+
+        uint256 w = hook.orderWord();
+        for (uint256 i; i < max; i++) {
+            assertEq(hook.rankOfId(i), i, "a seat in a FULL roster is not at the rank it was minted to");
+            assertEq((w >> (8 * i)) & 0xff, i, "the order word's byte for this rank is not the seat it holds");
+        }
     }
 
     /// @dev A roster of one. The only seat has nobody behind it, so its rent can never be paid to

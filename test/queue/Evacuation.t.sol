@@ -715,30 +715,42 @@ contract EvacuationTest is QueueFixture {
     // 8.6 — THE SECOND DOOR. Relevant to any remedy that only guards `withdraw`.
     // ══════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice `_onSeatTransfer` evacuates a seat's ENTIRE capital on any change of holder and
-    ///         **leaves the rank where it is** — "Rank moves; capital does not". So a holder with a
-    ///         second address has an evacuation that never touches `withdraw` at all.
+    /// @notice **THE DOOR IS SHUT, AND THIS IS THE TEST THAT SAYS SO.** `_onSeatTransfer` still
+    ///         evacuates a seat's ENTIRE capital on any change of holder — it must, or the
+    ///         allocator quotes depth the queue cannot source (§B.8) — but taking that depth out
+    ///         now costs the holder their place in the queue, exactly as `withdraw` does.
     ///
-    /// @dev This matters for exactly one reason: a remedy that demotes on `withdraw` does not
-    ///      demote here. What DOES cost the holder something is the firm quote — on a PRICED seat
-    ///      the transfer arms `firmPrice = paid = 0` for `FIRM_WINDOW`, so the seat is free for
-    ///      anyone to take for an hour, and repricing cannot lift it (the window's running minimum
-    ///      only ever falls, and `_setPrice` EXTENDS `firmUntil`). On an UNPRICED seat — the state
-    ///      every founding seat starts in — `live` is false, nothing is armed, and the door is free.
-    function test_8_6_transferToASecondAddressEvacuatesAndKEEPSTheRank() public {
+    /// @dev **WHAT THIS TEST USED TO ASSERT.** It asserted `rankOfId(0) == 0` after the transfer,
+    ///      under the message "THE RANK MOVED: a withdraw-only remedy would still bind here". That
+    ///      was the finding: a holder with a second address had the whole `test_8_1` evacuation
+    ///      without ever calling `withdraw`, and on the UNPRICED seats the founding roster starts
+    ///      in it was completely free. PITFALLS 5.123(a). The assertions below are the same
+    ///      sequence with the expected rank flipped.
+    ///
+    ///      Both arms are kept, because the two states are genuinely different: an unpriced seat
+    ///      arms nothing on transfer (`live` is false) and a priced one leaves a firm quote at what
+    ///      was paid, which for a plain transfer is ZERO. The firm quote was the ONLY cost of this
+    ///      door before, it was conditional on the seat being priced, and it is still not the
+    ///      mechanism that closes it — the demotion is.
+    function test_8_6_transferToASecondAddressCostsTheRank() public {
         _use(atkHook, atkKey);
         address head = atkRoster[0];
         address alt = address(0xA17E);
 
-        // ---- ARM 1: the founding, UNPRICED seat. The door is completely free.
+        // ---- ARM 1: the founding, UNPRICED seat. Free before; it costs the front now.
         (uint256 a0, uint256 a1) = atkHook.seat(0);
         assertGt(a0 + a1, 0, "nothing happened: the head is empty, this test proves nothing");
+        assertGt(atkHook.seatLiquidity(0), 0, "the head contributed no depth: this test proves nothing");
+        assertEq(atkHook.rankOfId(0), 0, "setup: seat 0 is not at the front");
+
         vm.prank(head);
         atkHook.transfer(alt, 0, 1);
 
         (uint256 b0, uint256 b1) = atkHook.seat(0);
         assertEq(b0 + b1, 0, "the transfer did not evacuate the seat");
-        assertEq(atkHook.rankOfId(0), 0, "THE RANK MOVED: a withdraw-only remedy would still bind here");
+        assertEq(atkHook.seatLiquidity(0), 0, "the transfer left the departing holder's depth behind");
+        assertEq(atkHook.rankOfId(0), N - 1, "THE TRANSFER KEPT ITS RANK: the second evacuation door is open");
+        assertEq(atkHook.idAtRank(0), 1, "seat 1 was not promoted into the vacated front");
         assertEq(atkHook.ownerOf(0), alt, "the seat did not change hands");
         (uint256 got0, uint256 got1) =
             (MockERC20(Currency.unwrap(c0)).balanceOf(head), MockERC20(Currency.unwrap(c1)).balanceOf(head));
@@ -751,38 +763,43 @@ contract EvacuationTest is QueueFixture {
         (,, uint256 fp, uint64 fu,) = atkHook.leaseOf(0);
         assertEq(fu, 0, "an unpriced seat armed a firm quote it had no price to protect");
         assertEq(fp, 0, "an unpriced seat armed a firm PRICE it had no price to protect");
-        assertEq(atkHook.buyPrice(0), 0, "the evacuated unpriced seat is not free to take");
 
-        // ---- ARM 2: a PRICED seat. The same door, and here it does cost something.
-        MockERC20(Currency.unwrap(c0)).mint(alt, a0);
-        MockERC20(Currency.unwrap(c1)).mint(alt, a1);
-        vm.startPrank(alt);
-        MockERC20(Currency.unwrap(c0)).approve(address(atkHook), type(uint256).max);
-        MockERC20(Currency.unwrap(c1)).approve(address(atkHook), type(uint256).max);
-        atkHook.addToSeat(0, a0, a1);
-        atkHook.setSelfPrice(0, 100e18);
+        // ---- ARM 2: a PRICED seat, and one that is NOT at the tail, or the demotion would be a
+        // no-op and this arm would prove nothing (`test_8_8c`). Seat 1 was promoted into rank 0
+        // above, so it is the one to use.
+        uint256 id = atkHook.idAtRank(0);
+        address holder = atkHook.ownerOf(id);
+        address alt2 = address(0xA17E3);
+        assertGt(atkHook.seatLiquidity(id), 0, "the promoted seat contributed no depth: arm 2 is vacuous");
+
+        vm.startPrank(holder);
+        atkHook.setSelfPrice(id, 100e18);
         vm.stopPrank();
-        // FUND THE METER. Without this the seat forecloses on the warp below and is demoted to the
-        // tail — which is the rent mechanism working, not the transfer door, and it would make this
-        // arm pass for the wrong reason. (It failed exactly that way on the first run.)
-        MockERC20(Currency.unwrap(c0)).mint(alt, 20e18);
-        vm.prank(alt);
-        atkHook.fundRent(0, 20e18);
+        // FUND THE METER. Without this the seat forecloses on the warp below and is demoted by the
+        // RENT mechanism, which would make this arm pass for the wrong reason. (It failed exactly
+        // that way on the first run of the version of this test that preceded the remedy.)
+        MockERC20(Currency.unwrap(c0)).mint(holder, 20e18);
+        vm.prank(holder);
+        atkHook.fundRent(id, 20e18);
         vm.warp(block.timestamp + FIRM_WINDOW + 1); // let the repricing window lapse
-        assertEq(atkHook.rankOfId(0), 0, "the seat foreclosed before the transfer: this arm proves nothing");
-        assertEq(atkHook.buyPrice(0), 100e18, "the seat is not actually priced: this arm proves nothing");
+        assertEq(atkHook.rankOfId(id), 0, "the seat foreclosed before the transfer: this arm proves nothing");
+        assertEq(atkHook.buyPrice(id), 100e18, "the seat is not actually priced: this arm proves nothing");
 
-        vm.prank(alt);
-        atkHook.transfer(head, 0, 1);
-        assertEq(atkHook.rankOfId(0), 0, "THE RANK MOVED on the priced arm");
-        assertEq(atkHook.buyPrice(0), 0, "the transfer did not leave the seat firm at zero");
+        vm.prank(holder);
+        atkHook.transfer(alt2, id, 1);
+        assertEq(atkHook.rankOfId(id), N - 1, "THE PRICED ARM KEPT ITS RANK");
+        assertEq(atkHook.buyPrice(id), 0, "the transfer did not leave the seat firm at zero");
 
-        // ...and repricing cannot lift it. The window's quote is a RUNNING MINIMUM and `_setPrice`
-        // extends the deadline, so the attempt makes the exposure longer, not shorter.
-        vm.prank(head);
-        atkHook.setSelfPrice(0, 500e18);
-        assertEq(atkHook.buyPrice(0), 0, "repricing lifted the firm-at-zero quote");
-        emit log_string("priced arm: the evacuation door costs a FIRM_WINDOW free option on the rank");
+        // ...and repricing still cannot lift the firm quote. The window's quote is a RUNNING
+        // MINIMUM and `_setPrice` extends the deadline, so the attempt makes the exposure longer,
+        // not shorter. That was the only cost this door ever carried; it is no longer the only one.
+        vm.prank(alt2);
+        atkHook.setSelfPrice(id, 500e18);
+        assertEq(atkHook.buyPrice(id), 0, "repricing lifted the firm-at-zero quote");
+
+        _checkInvariantF("after two transfer evacuations", 64);
+        _checkInvariantR("after two transfer evacuations");
+        _checkInvariantL("after two transfer evacuations");
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════════
@@ -804,12 +821,14 @@ contract EvacuationTest is QueueFixture {
     ///      foreclosure calls the same `_demoteToTail`. The fact under test is a property of the
     ///      promotion, and the promotion is identical either way.
     ///
-    ///      **WHAT THIS DOES AND DOES NOT PROVE.** It proves the mechanical precondition: the
-    ///      promoted seat's quote is stale and immediately hittable. It does NOT prove the strike
-    ///      is profitable after the remedy — that depends on how holders price rank, which is
-    ///      behaviour, not code. The gap between a rank-1 and a rank-0 price is the attacker's
-    ///      discount, and nothing in the contract makes it small.
-    function test_8_7_aPromotedSeatIsTakeableAtItsSTALEPrice() public {
+    ///      **WHAT THIS USED TO PROVE, AND WHAT IT PROVES NOW.** It proved the mechanical
+    ///      precondition — the promoted seat's quote is stale and immediately hittable — and
+    ///      mallory took rank 0 for the rank-1 price, a 10x discount. Both halves of the remedy are
+    ///      asserted below on the same fixture: Rule A refuses the take inside the promoting block,
+    ///      and Rule B lets the holder actually do something with that block. The gap between a
+    ///      rank-1 and a rank-0 price is still whatever holders make it; what the contract now
+    ///      guarantees is that nobody collects it inside the transaction that created it.
+    function test_8_7_aPromotedSeatIsNoLongerTakeableAtItsStalePrice() public {
         _use(ctlHook, ctlKey);
         address r0 = ctlRoster[0];
         address r1 = ctlRoster[1];
@@ -849,18 +868,568 @@ contract EvacuationTest is QueueFixture {
         firmPrice;
         assertEq(ctlHook.buyPrice(1), SECOND_PRICE, "the promoted seat repriced itself: the bypass would be closed");
 
-        // ...and it is hittable on the spot, by anybody, for the rank-1 price.
-        MockERC20(Currency.unwrap(c0)).mint(mallory, SECOND_PRICE);
+        // ---- RULE A: AND IT IS NO LONGER HITTABLE IN THE BLOCK THAT PROMOTED IT. ----
+        //
+        // The demotion above published `lastDemotionBlock`/`lastDemotionRank`, and seat 1's price
+        // was stamped at rank 1, so the take is refused BY NAME. LAW 2: the exact reason, with its
+        // arguments, not merely "it reverted". `buySeat` is a direct call into the hook and not a
+        // v4 callback, so the error is NOT wrapped in `CustomRevert.WrappedError` (PITFALLS 5.83).
+        uint128 depthBefore = ctlHook.seatLiquidity(1);
+        assertGt(depthBefore, 0, "the promoted seat contributed no depth: this test proves nothing");
+        MockERC20(Currency.unwrap(c0)).mint(mallory, SECOND_PRICE + 1_500e18);
+        MockERC20(Currency.unwrap(c1)).mint(mallory, 400e18);
         vm.startPrank(mallory);
         MockERC20(Currency.unwrap(c0)).approve(address(ctlHook), type(uint256).max);
-        ctlHook.buySeat(1, SECOND_PRICE, SECOND_PRICE);
+        MockERC20(Currency.unwrap(c1)).approve(address(ctlHook), type(uint256).max);
+        vm.expectRevert(
+            abi.encodeWithSelector(QueueHook.SeatWasJustPromoted.selector, uint256(1), uint256(0), uint8(1))
+        );
+        ctlHook.buySeatAndFund(1, SECOND_PRICE, SECOND_PRICE, 1_000e18, 250e18, 0);
         vm.stopPrank();
 
-        assertEq(ctlHook.ownerOf(1), mallory, "the front seat was not takeable at the stale price");
+        emit log_named_uint("what the stale quote WOULD have bought rank 0 for", SECOND_PRICE);
+        emit log_named_uint("the outgoing front seat's own quote              ", FRONT_PRICE);
+        emit log_named_uint("discount refused, x                              ", FRONT_PRICE / SECOND_PRICE);
+
+        // ---- RULE B: and the grace is worth something, because the holder can actually act. ----
+        //
+        // Without this half, Rule A buys the holder nothing: an ordinary raise leaves the seat firm
+        // at the OLD number for a whole `FIRM_WINDOW`, so a promoted holder is defenceless however
+        // fast they react. Because their rank IMPROVED since they priced, the raise binds at once.
+        vm.prank(r1);
+        ctlHook.setSelfPrice(1, FRONT_PRICE);
+        assertEq(
+            ctlHook.buyPrice(1), FRONT_PRICE, "RULE B DID NOT BIND: the promoted seat is still firm at the stale price"
+        );
+
+        // ...and the seat is for sale again immediately, at the number its holder now stands behind.
+        // Rule A is a one-block grace, not a veto: no warp, no new block, only a fresh price.
+        MockERC20(Currency.unwrap(c0)).mint(mallory, FRONT_PRICE);
+        vm.startPrank(mallory);
+        ctlHook.buySeatAndFund(1, FRONT_PRICE, FRONT_PRICE, 1_000e18, 250e18, 0);
+        vm.stopPrank();
+        assertEq(ctlHook.ownerOf(1), mallory, "the repriced seat was not takeable at its NEW price");
+        assertEq(ctlHook.rankOfId(1), 0, "the funded buyer did not end up at the front");
+        assertGe(ctlHook.seatLiquidity(1), depthBefore, "the buyer did not replace the depth");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // 8.17 — RULE A IS A GRACE, NOT A VETO. The seat is takeable in the very next block.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice **THE OTHER HALF OF RULE A, AND THE ONE THAT KEEPS IT FROM BEING A PERMANENT VETO.**
+    ///         A promoted seat whose holder never reprices is refused for the block the promotion
+    ///         happened in, and is takeable at the stale price in the next one.
+    ///
+    /// @dev A rule that refused the buyout until the holder acted would be exactly the incumbent
+    ///      veto §B.8 exists to forbid: post a price at rank 7, wait to be promoted, and never
+    ///      touch the seat again. The block boundary is what bounds it. What the holder gets is one
+    ///      block in which to use Rule B; what they do NOT get is the ability to sit on a stale
+    ///      quote for ever.
+    ///
+    ///      The negative control is the same call in the same state one block later, so the ONLY
+    ///      difference between the refusal and the sale is `block.number` (PITFALLS 5.53: assert
+    ///      the identity, not the direction).
+    function test_8_17_ruleAIsAGraceNotAVeto() public {
+        _use(ctlHook, ctlKey);
+        address mallory = address(0x4A111);
+        (uint256 stale,) = _promoteSeatOneByForeclosingSeatZero();
+
+        MockERC20(Currency.unwrap(c0)).mint(mallory, stale * 4 + 2_000e18);
+        MockERC20(Currency.unwrap(c1)).mint(mallory, 500e18);
+        vm.startPrank(mallory);
+        MockERC20(Currency.unwrap(c0)).approve(address(ctlHook), type(uint256).max);
+        MockERC20(Currency.unwrap(c1)).approve(address(ctlHook), type(uint256).max);
+        vm.expectRevert(
+            abi.encodeWithSelector(QueueHook.SeatWasJustPromoted.selector, uint256(1), uint256(0), uint8(1))
+        );
+        ctlHook.buySeatAndFund(1, stale, stale, 1_000e18, 250e18, 0);
+
+        // ONE BLOCK LATER, nothing else changed, the holder did not act: the sale goes through at
+        // the stale number. That is the cost of Rule A being bounded, stated as an assertion.
+        vm.roll(block.number + 1);
+        ctlHook.buySeatAndFund(1, stale, stale, 1_000e18, 250e18, 0);
+        vm.stopPrank();
+        assertEq(ctlHook.ownerOf(1), mallory, "the seat was not takeable in the block after the promotion");
         assertEq(ctlHook.rankOfId(1), 0, "the buyer did not end up at the front");
-        emit log_named_uint("paid for RANK 0                    ", SECOND_PRICE);
-        emit log_named_uint("the outgoing front seat's own quote ", FRONT_PRICE);
-        emit log_named_uint("discount, x                        ", FRONT_PRICE / SECOND_PRICE);
+    }
+
+    /// @dev Foreclose the head so the seat behind it is promoted into rank 0, and hand back the
+    ///      price the promoted seat had posted for its OLD rank. Shared by `test_8_7` and
+    ///      `test_8_17` so the two cannot drift apart about what "promoted" means.
+    function _promoteSeatOneByForeclosingSeatZero() internal returns (uint256 stale, uint256 front) {
+        address r0 = ctlRoster[0];
+        address r1 = ctlRoster[1];
+        (front, stale) = (100e18, 10e18);
+
+        vm.prank(r0);
+        ctlHook.setSelfPrice(0, front);
+        vm.prank(r1);
+        ctlHook.setSelfPrice(1, stale);
+        MockERC20(Currency.unwrap(c0)).mint(r0, 1e15);
+        vm.prank(r0);
+        ctlHook.fundRent(0, 1e15);
+        MockERC20(Currency.unwrap(c0)).mint(r1, 1e18);
+        vm.prank(r1);
+        ctlHook.fundRent(1, 1e18);
+
+        vm.warp(block.timestamp + 30 days);
+        ctlHook.settleRent(0);
+        assertEq(ctlHook.rankOfId(0), N - 1, "nothing happened: seat 0 was not demoted");
+        assertEq(ctlHook.idAtRank(0), 1, "seat 1 was not promoted into rank 0");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // 8.18 — RULE B MUST NOT BE REACHABLE BY A HOLDER WHOSE RANK DID NOT IMPROVE.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice **THE GUARD ON RULE B, ASSERTED FROM BOTH SIDES.** A holder who was promoted
+    ///         reprices with immediate effect; a holder who was NOT still leaves the old number
+    ///         firm for a whole `FIRM_WINDOW`. If the second half did not hold, Rule B would be a
+    ///         general escape from the firm quote and Harberger would deliver nothing but a tax.
+    ///
+    /// @dev The two arms run on the SAME hook, the same holder, and the same shape of raise —
+    ///      100e18 to 500e18, window lapsed in both — so the only thing that differs is whether the
+    ///      seat's rank improved since it was priced. That is what makes this a control rather than
+    ///      two unrelated observations.
+    function test_8_18_immediateRepricingIsOnlyForAHolderWhoWasPromoted() public {
+        _use(ctlHook, ctlKey);
+
+        // ---- ARM 1: rank UNCHANGED. The raise must not bind for FIRM_WINDOW.
+        address r2 = ctlRoster[2];
+        vm.prank(r2);
+        ctlHook.setSelfPrice(2, 100e18);
+        MockERC20(Currency.unwrap(c0)).mint(r2, 50e18);
+        vm.prank(r2);
+        ctlHook.fundRent(2, 50e18);
+        vm.warp(block.timestamp + FIRM_WINDOW + 1);
+        assertEq(ctlHook.rankOfId(2), 2, "the seat moved: arm 1 is not the unchanged-rank case");
+        vm.prank(r2);
+        ctlHook.setSelfPrice(2, 500e18);
+        assertEq(ctlHook.buyPrice(2), 100e18, "A HOLDER WHO WAS NOT PROMOTED ESCAPED THE FIRM QUOTE");
+
+        // ---- ARM 2: the same holder, the same raise, after a PROMOTION they did not choose.
+        // Foreclose the two seats in front, which slides seat 2 to the front.
+        vm.warp(block.timestamp + 30 days);
+        ctlHook.settleRent(2); // fund the meter first so this one does not foreclose itself
+        assertEq(ctlHook.rankOfId(2), 2, "seat 2 foreclosed: arm 2 would prove nothing");
+        (uint256 s0a, uint256 s0b) = ctlHook.seat(0);
+        vm.prank(ctlHook.ownerOf(0));
+        ctlHook.withdraw(0, s0a, s0b);
+        (uint256 s1a, uint256 s1b) = ctlHook.seat(1);
+        vm.prank(ctlHook.ownerOf(1));
+        ctlHook.withdraw(1, s1a, s1b);
+        assertEq(ctlHook.rankOfId(2), 0, "seat 2 was not promoted to the front: arm 2 proves nothing");
+
+        vm.warp(block.timestamp + FIRM_WINDOW + 1); // let arm 1's window lapse, so only rank differs
+        uint256 quoteBefore = ctlHook.buyPrice(2);
+        vm.prank(r2);
+        ctlHook.setSelfPrice(2, 900e18);
+        assertEq(ctlHook.buyPrice(2), 900e18, "RULE B DID NOT BIND for a holder who WAS promoted");
+        assertTrue(quoteBefore != 900e18, "the quote was already the new number: arm 2 proves nothing");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // 8.12 — THE DODGE AND THE RANK ARE MUTUALLY EXCLUSIVE. The exemption, attacked directly.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice **THE ONE WAY TO KEEP THE FRONT IS TO BE STANDING IN IT.** A sybil who uses
+    ///         `buySeatAndFund` keeps rank 0 — and the capital they had to put back is in the pool
+    ///         while the adverse swap runs, so it eats exactly the fill they were trying to dodge.
+    ///
+    /// @dev This is the assertion the exemption in `_settleRankOnTransfer` lives or dies on. If
+    ///      there were any way to satisfy the depth test with capital that is not exposed, the
+    ///      remedy would be theatre: `test_8_11`'s attacker would simply pay the extra call. The
+    ///      claim is stated as the two facts that cannot both be true — the seat is at rank 0, AND
+    ///      the seat gave up inventory to the adverse fill — measured against `test_8_11`, where
+    ///      the same attacker on the same fixture gave up NOTHING and stood at rank 7.
+    ///
+    ///      It is deliberately NOT stated as "the edge is zero". The attacker's total exposure to
+    ///      the move is what they chose to deposit, and they must deposit at least the seller's
+    ///      depth to keep the rank; a P&L comparison would therefore be a statement about how much
+    ///      they overfunded, not about the mechanism. The fill is the mechanism.
+    function test_8_12_aSybilWhoKeepsTheFrontEatsTheFill() public {
+        _use(atkHook, atkKey);
+        address head = atkRoster[0];
+        address alt = address(0xA17E4);
+        uint256 PRICE = 100e18;
+
+        uint128 depthBefore = atkHook.seatLiquidity(0);
+        assertGt(depthBefore, 0, "the head contributed no depth: this test proves nothing");
+
+        vm.prank(head);
+        atkHook.setSelfPrice(0, PRICE);
+
+        MockERC20(Currency.unwrap(c0)).mint(alt, PRICE + 600e18);
+        MockERC20(Currency.unwrap(c1)).mint(alt, 150e18);
+        vm.startPrank(alt);
+        MockERC20(Currency.unwrap(c0)).approve(address(atkHook), type(uint256).max);
+        MockERC20(Currency.unwrap(c1)).approve(address(atkHook), type(uint256).max);
+        atkHook.buySeatAndFund(0, PRICE, PRICE, 600e18, 150e18, type(uint256).max);
+        vm.stopPrank();
+
+        assertEq(atkHook.ownerOf(0), alt, "the seat did not change hands");
+        assertEq(atkHook.rankOfId(0), 0, "the funded sybil buyout LOST the front");
+        assertGe(atkHook.seatLiquidity(0), depthBefore, "the depth was not replaced: this test is vacuous");
+
+        (, uint256 held1) = atkHook.seat(0);
+        assertGt(held1, 0, "the refunded seat holds no outgoing inventory: this test proves nothing");
+
+        _advSwap(address(this), true, _inputToReach(_target()));
+
+        (, uint256 after1) = atkHook.seat(0);
+        assertEq(atkHook.rankOfId(0), 0, "the attacker did not hold the front across the swap");
+        assertLt(after1, held1, "THE FRONT SEAT DODGED THE FILL WHILE KEEPING RANK 0");
+        emit log_named_uint("token1 the funded sybil GAVE UP at rank 0", held1 - after1);
+        emit log_string("...against 0 for the unfunded sybil in test_8_11, which stood at rank 7");
+
+        _checkInvariantF("funded sybil buyout", 64);
+        _checkInvariantR("funded sybil buyout");
+        _checkInvariantL("funded sybil buyout");
+    }
+
+    /// @notice **THE BOUNDARY: EXACTLY THE DEPTH IS ENOUGH.** The rule is `after < before`, not
+    ///         `after <= before`, and the difference is a whole seat's rank.
+    ///
+    /// @dev **THIS TEST EXISTS BECAUSE THE MUTATION SURVIVED.** Turning `<` into `<=` — so that a
+    ///      buyer who replaces the depth EXACTLY is demoted anyway — passed the entire suite,
+    ///      because every other keep-rank test overfunds. A boundary that only ever gets
+    ///      approached from one side is not a boundary anybody has asserted (AGENTS §3b).
+    ///
+    ///      The equality is constructible rather than lucky: `_liquidityForAmounts` is a
+    ///      deterministic function of the amounts and the live price, and NOTHING here has moved
+    ///      the price since the roster was funded — adding and removing liquidity do not. So
+    ///      depositing exactly what the seller deposited mints exactly what the seller minted.
+    ///      `assertEq` on the depth is what makes that a claim rather than a hope.
+    function test_8_12b_replacingExactlyTheDepthKeepsTheRank() public {
+        _use(atkHook, atkKey);
+        address head = atkRoster[0];
+        address alt = address(0xA17E7);
+
+        uint128 depthBefore = atkHook.seatLiquidity(0);
+        assertGt(depthBefore, 0, "the head contributed no depth: this test proves nothing");
+
+        MockERC20(Currency.unwrap(c0)).mint(alt, SEAT0);
+        MockERC20(Currency.unwrap(c1)).mint(alt, SEAT1);
+        vm.startPrank(alt);
+        MockERC20(Currency.unwrap(c0)).approve(address(atkHook), type(uint256).max);
+        MockERC20(Currency.unwrap(c1)).approve(address(atkHook), type(uint256).max);
+        // Never priced, so the seat is free to take: the PRICE is not what this test is about.
+        atkHook.buySeatAndFund(0, 0, 0, SEAT0, SEAT1, type(uint256).max);
+        vm.stopPrank();
+
+        assertEq(atkHook.seatLiquidity(0), depthBefore, "the deposit did not mint EXACTLY the seller's depth");
+        assertEq(atkHook.rankOfId(0), 0, "REPLACING EXACTLY THE DEPTH LOST THE RANK");
+        assertEq(atkHook.ownerOf(0), alt, "the seat did not change hands");
+
+        _checkInvariantF("after an exact-depth buyout", 64);
+        _checkInvariantL("after an exact-depth buyout");
+    }
+
+    /// @notice **A BUYOUT OF AN EMPTY SEAT CAN FUND IT IN THE SAME CALL.** `_onSeatTransfer`
+    ///         returns EARLY for a seat that holds nothing and owes nothing — the pure-rank path
+    ///         the whole Phase 4 market leans on — so the funding has to be applied on that branch
+    ///         too, and the line that does it is asserted here.
+    ///
+    /// @dev Deleting `_settleRankOnTransfer` from the early-return branch survived every other
+    ///      test in the suite before this one existed.
+    ///
+    ///      The demotion half of that call is live on this branch too, since the branch now empties
+    ///      a seat that reached it holding depth and no balances — see `test_8_16`.
+    function test_8_14_aBuyoutOfAnEmptySeatCanFundItInTheSameCall() public {
+        _use(ctlHook, ctlKey);
+        address first = address(0xB0B0);
+        address second = address(0xB0B1);
+
+        // Reach the pure-rank state through production: a buyout evacuates the seat outright.
+        _give(first, 0, 0);
+        vm.prank(first);
+        ctlHook.buySeat(0, 0, 0);
+        (uint256 e0, uint256 e1) = ctlHook.seat(0);
+        assertEq(e0 + e1, 0, "the seat is not empty: this test proves nothing");
+        assertEq(ctlHook.seatLiquidity(0), 0, "the seat still holds depth: this test proves nothing");
+        uint256 rankBefore = ctlHook.rankOfId(0);
+
+        _give(second, SEAT0, SEAT1);
+        vm.prank(second);
+        ctlHook.buySeatAndFund(0, 0, 0, SEAT0, SEAT1, type(uint256).max);
+
+        assertEq(ctlHook.ownerOf(0), second, "the empty seat did not change hands");
+        (uint256 g0, uint256 g1) = ctlHook.seat(0);
+        assertEq(g0, SEAT0, "THE FUNDING DID NOT LAND: the empty-seat branch skipped it (token0)");
+        assertEq(g1, SEAT1, "THE FUNDING DID NOT LAND: the empty-seat branch skipped it (token1)");
+        assertGt(ctlHook.seatLiquidity(0), 0, "the funded buyout minted no depth on the empty-seat branch");
+        // It took no depth out — there was none — so it costs no rank.
+        assertEq(ctlHook.rankOfId(0), rankBefore, "funding an EMPTY seat cost the buyer a rank");
+
+        _checkInvariantF("after funding an empty seat through the buyout", 64);
+        _checkInvariantR("after funding an empty seat through the buyout");
+        _checkInvariantL("after funding an empty seat through the buyout");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // 8.15 — A FOURTH DOOR. The PITFALLS 5.122 demotion is bypassed by PRE-FUNDING THE FLOAT.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice 🚨 **THE `withdraw` DEMOTION IS CONDITIONAL ON A BURN, AND THE BURN IS CONDITIONAL
+    ///         ON THE FLOAT.** `_payOut` only touches the position when the float cannot cover the
+    ///         request, so a holder who arranges for the float to cover their WHOLE balance
+    ///         withdraws everything, burns nothing, is charged nothing by `_chargeBurn`, and keeps
+    ///         their place in the queue. That is the PITFALLS 5.122 evacuation with the remedy
+    ///         switched off.
+    ///
+    /// @dev **THIS IS NOT A CORNER, AND THE FLOAT IS CHEAP TO BUILD.** A SINGLE-TOKEN in-range
+    ///      deposit mints zero liquidity (`_liquidityForAmounts` takes the min of the two legs),
+    ///      so the whole of it goes into the shared float while the depositing seat is credited
+    ///      the full amount — it is not a fee, it is not spent, and it can be withdrawn again the
+    ///      same way. The attacker needs a SECOND seat to hold that credit (funding their own seat
+    ///      inflates the balance they are trying to withdraw by exactly the amount they added), and
+    ///      the roster runs to `MAX_SEATS = 32`.
+    ///
+    ///      **IT COLLIDES HEAD-ON WITH THE RULE PITFALLS 5.130 PAID FOR.** `test_8_9` establishes
+    ///      that taking PROFIT out must not cost a rank, and the definition of profit it uses is
+    ///      exactly "a withdrawal the float can cover burns no depth". Under that definition,
+    ///      pre-funding the float makes EVERYTHING profit. The two rules cannot both stand as
+    ///      written, and choosing between them changes who keeps rank — so it is recorded here and
+    ///      NOT patched: see the report. What is asserted below is the CURRENT behaviour, named for
+    ///      what it is.
+    ///
+    ///      It is also the security half of the accounting defect tracked separately in
+    ///      `Maturity.t.sol` (a seat's contributed depth outliving the balances that backed it).
+    function test_8_15_prefundingTheFloatKEEPSTheRankThroughAFullWithdrawal() public {
+        _use(atkHook, atkKey);
+        uint256 victim = atkHook.idAtRank(1); // not the tail: demoting the tail is a no-op
+        address holder = atkHook.ownerOf(victim);
+        uint256 spare = atkHook.idAtRank(N - 1);
+        address spareHolder = atkHook.ownerOf(spare);
+
+        (uint256 b0, uint256 b1) = atkHook.seat(victim);
+        assertGt(b0 + b1, 0, "the victim seat is empty: this test proves nothing");
+        uint128 depth = atkHook.seatLiquidity(victim);
+        assertGt(depth, 0, "the victim seat contributed no depth: this test proves nothing");
+
+        // Build the float out of two SINGLE-TOKEN deposits, which mint nothing and land whole.
+        uint128 spareDepth = atkHook.seatLiquidity(spare);
+        _give(spareHolder, b0 + 1e18, b1 + 1e18);
+        vm.startPrank(spareHolder);
+        atkHook.addToSeat(spare, b0 + 1e18, 0);
+        atkHook.addToSeat(spare, 0, b1 + 1e18);
+        vm.stopPrank();
+        // The two deposits added NO depth — that is what makes the float free to build. The seat
+        // that supplied it is credited every wei and can take it back out the same way.
+        assertEq(atkHook.seatLiquidity(spare), spareDepth, "a single-token deposit minted depth: the setup is wrong");
+        (uint256 f0, uint256 f1) = atkHook.floats();
+        assertGe(f0, b0, "the float does not cover the victim's token0: this test proves nothing");
+        assertGe(f1, b1, "the float does not cover the victim's token1: this test proves nothing");
+
+        _strikeThroughTheFloat(victim, holder, b0, b1, depth);
+    }
+
+    /// @dev The strike itself, split out of `test_8_15` only because that function hit
+    ///      `Stack too deep`. Every assertion is the finding.
+    function _strikeThroughTheFloat(uint256 victim, address holder, uint256 b0, uint256 b1, uint128 depth) internal {
+        uint256 wallet0 = MockERC20(Currency.unwrap(c0)).balanceOf(holder);
+        vm.prank(holder);
+        (uint256 p0, uint256 p1) = atkHook.withdraw(victim, b0, b1);
+
+        // THE FINDING: the whole balance left, and the rank did not.
+        assertEq(p0, b0, "the withdrawal did not pay the whole token0 balance");
+        assertEq(p1, b1, "the withdrawal did not pay the whole token1 balance");
+        assertGt(MockERC20(Currency.unwrap(c0)).balanceOf(holder), wallet0, "the holder was not actually paid");
+        (uint256 z0, uint256 z1) = atkHook.seat(victim);
+        assertEq(z0 + z1, 0, "the seat is not empty after withdrawing everything");
+        assertEq(atkHook.seatLiquidity(victim), depth, "the withdrawal burned depth: the bypass did not engage");
+        assertEq(atkHook.rankOfId(victim), 1, "the float-covered withdrawal DID cost the rank: the door is shut");
+        emit log_string("FOURTH DOOR: full withdrawal, zero burn, rank 1 retained");
+        emit log_named_uint("token0 taken out  ", p0);
+        emit log_named_uint("token1 taken out  ", p1);
+        emit log_named_uint("depth still credited to the emptied seat", depth);
+    }
+
+    /// @notice **A SEAT CAN HOLD DEPTH WITH NO BALANCES, AND MOVING IT MUST TAKE THAT DEPTH WITH
+    ///         IT — AND COST THE RANK.** The pure-rank early return in `_onSeatTransfer` was the
+    ///         sibling of the INVARIANT L mirror below it, and it had the same hole.
+    ///
+    /// @dev The state is `test_8_15`'s: a withdrawal the float covered empties the ledger while
+    ///      every unit of the seat's contributed depth stays in the position. Handing that seat on
+    ///      used to carry the departing holder's depth — and their share of `standingL`, THE
+    ///      PREMIUM'S DENOMINATOR — to the new holder for free, which is precisely what the main
+    ///      evacuation branch goes out of its way to refuse ("the buyer receives rank, never
+    ///      depth"). One rule, two branches, right in one: the family this project has now been
+    ///      bitten by seven times (5.37, 5.50, 5.52 twice, 5.73, 5.125, 5.132).
+    ///
+    ///      INVARIANT L is asserted on BOTH sides of the transfer, which is the assertion that
+    ///      would have caught the missing branch on its own: the orphaned depth has to land in
+    ///      `liquidityUnattributed` or the identity stops closing.
+    function test_8_16_aDepthOnlySeatLeavesItsDepthBehindAndLosesItsRank() public {
+        _use(atkHook, atkKey);
+        uint256 victim = atkHook.idAtRank(1); // not the tail: demoting the tail is a no-op
+        address holder = atkHook.ownerOf(victim);
+        uint128 depth = _emptyThroughTheFloat(victim, holder);
+
+        (,, uint256 unattrBefore) = (uint256(0), uint256(0), _unattributed());
+        _checkInvariantL("a seat holding depth and no balances");
+
+        vm.prank(holder);
+        atkHook.transfer(address(0xA17E8), victim, 1);
+
+        assertEq(atkHook.seatLiquidity(victim), 0, "THE TRANSFER LEFT THE DEPARTING HOLDER'S DEPTH ON THE SEAT");
+        assertEq(_unattributed(), unattrBefore + depth, "the orphaned depth was not booked as unattributed");
+        assertEq(atkHook.rankOfId(victim), N - 1, "A DEPTH-ONLY SEAT KEPT ITS RANK ACROSS A TRANSFER");
+        _checkInvariantL("after transferring a depth-only seat");
+        _checkInvariantF("after transferring a depth-only seat", 64);
+        _checkInvariantR("after transferring a depth-only seat");
+    }
+
+    function _unattributed() internal view returns (uint256 u) {
+        (, u,) = atkHook.liquidityTotals();
+    }
+
+    /// @dev Drive a seat to zero balances while every unit of its contributed depth stays in the
+    ///      position, through production calls only. Two SINGLE-TOKEN deposits into another seat
+    ///      mint nothing (`_liquidityForAmounts` takes the min of the legs) and land in the shared
+    ///      float whole; once the float covers the whole request, `_payOut` burns nothing. Shared
+    ///      by `test_8_15` (which is about what that costs the RANK) and `test_8_16` (about what it
+    ///      does to the DEPTH).
+    function _emptyThroughTheFloat(uint256 victim, address holder) internal returns (uint128 depth) {
+        uint256 spare = atkHook.idAtRank(N - 1);
+        address spareHolder = atkHook.ownerOf(spare);
+
+        (uint256 b0, uint256 b1) = atkHook.seat(victim);
+        assertGt(b0 + b1, 0, "the victim seat is empty: this test proves nothing");
+        depth = atkHook.seatLiquidity(victim);
+        assertGt(depth, 0, "the victim seat contributed no depth: this test proves nothing");
+
+        uint128 spareDepth = atkHook.seatLiquidity(spare);
+        _give(spareHolder, b0 + 1e18, b1 + 1e18);
+        vm.startPrank(spareHolder);
+        atkHook.addToSeat(spare, b0 + 1e18, 0);
+        atkHook.addToSeat(spare, 0, b1 + 1e18);
+        vm.stopPrank();
+        assertEq(atkHook.seatLiquidity(spare), spareDepth, "a single-token deposit minted depth: the setup is wrong");
+
+        vm.prank(holder);
+        atkHook.withdraw(victim, b0, b1);
+        (uint256 z0, uint256 z1) = atkHook.seat(victim);
+        assertEq(z0 + z1, 0, "the withdrawal did not empty the seat: this test proves nothing");
+        assertEq(atkHook.seatLiquidity(victim), depth, "the withdrawal burned depth: the setup did not engage");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // 8.13 — THE SIDE CHANNEL IS CLEARED. A transient that outlives its call is a free deposit.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice **A TRANSIENT IS CLEARED AT THE END OF THE TRANSACTION, NOT AT THE END OF THE
+    ///         CALL.** `fundOnTransfer0/1` carry the buyer's deposit into `_onSeatTransfer`, and
+    ///         `_buySeat` zeroes them when it is done. If it did not, the NEXT change of holder in
+    ///         the same transaction — an ordinary `transfer`, which passes no funding at all —
+    ///         would re-read them, pull the tokens from whoever called it, and keep a rank it did
+    ///         not pay for.
+    ///
+    /// @dev A Foundry test body is ONE transaction, so two consecutive top-level calls here are
+    ///      exactly the shape the hazard needs; no helper contract is required to build it. This
+    ///      is the same class as `paidForSeat`, which is cleared for the same reason on the line
+    ///      below — and the reason both are asserted rather than argued is that "it is transient,
+    ///      so it cannot survive" is true of the TRANSACTION and false of the CALL.
+    function test_8_13_theFundingSideChannelDoesNotLeakIntoTheNextTransfer() public {
+        _use(atkHook, atkKey);
+        address head = atkRoster[0];
+        address alt = address(0xA17E5);
+        address third = address(0xA17E6);
+        uint256 PRICE = 100e18;
+
+        vm.prank(head);
+        atkHook.setSelfPrice(0, PRICE);
+
+        MockERC20(Currency.unwrap(c0)).mint(alt, PRICE + 5_000e18);
+        MockERC20(Currency.unwrap(c1)).mint(alt, 1_000e18);
+        vm.startPrank(alt);
+        MockERC20(Currency.unwrap(c0)).approve(address(atkHook), type(uint256).max);
+        MockERC20(Currency.unwrap(c1)).approve(address(atkHook), type(uint256).max);
+        atkHook.buySeatAndFund(0, PRICE, PRICE, 600e18, 150e18, type(uint256).max);
+        assertEq(atkHook.rankOfId(0), 0, "the funded buyout did not keep the rank: this test proves nothing");
+        assertGt(atkHook.seatLiquidity(0), 0, "the funded buyout minted no depth: this test proves nothing");
+
+        // Same transaction, ordinary transfer, no funding passed. It must be an evacuation like any
+        // other: the seat leaves empty, contributes nothing, and goes to the tail.
+        uint256 spentBefore = MockERC20(Currency.unwrap(c1)).balanceOf(alt);
+        atkHook.transfer(third, 0, 1);
+        vm.stopPrank();
+
+        assertEq(atkHook.seatLiquidity(0), 0, "THE STALE FUNDING RE-FUNDED THE SEAT ON A PLAIN TRANSFER");
+        assertEq(atkHook.rankOfId(0), N - 1, "THE STALE FUNDING BOUGHT A RANK ON A PLAIN TRANSFER");
+        assertGt(
+            MockERC20(Currency.unwrap(c1)).balanceOf(alt),
+            spentBefore,
+            "the transfer took token1 from the caller instead of paying it out"
+        );
+
+        _checkInvariantF("after a buyout followed by a transfer", 64);
+        _checkInvariantL("after a buyout followed by a transfer");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // 8.19 — `buySeat` NAMES A SEAT AND PAYS FOR A RANK. The seller can move the rank first.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice 🚨 **THE BUYER HAD NO RANK GUARD AT ALL — ONLY `maxPrice`.** Since a withdrawal that
+    ///         takes depth out costs the holder their place (PITFALLS 5.122), a seller who sees a
+    ///         buyout coming front-runs it with `withdraw(all)`: the seat lands at the tail, the
+    ///         buyout still succeeds, and the buyer pays the rank-0 price for rank `N-1` while the
+    ///         seller keeps BOTH the price and their capital.
+    ///
+    /// @dev Arm 1 executes the rug against the three-argument `buySeat`, which accepts any rank by
+    ///      construction and always will — that is what "no guard" means, and it is left executable
+    ///      rather than removed so the shape stays visible. Arm 2 is the remedy: the buyer names the
+    ///      worst rank they will accept and the call is refused BY NAME (LAW 2 — the exact reason
+    ///      with its arguments; `buySeat` is a direct call, not a v4 callback, so nothing wraps it).
+    ///
+    ///      **THE GUARD IS A VETO AND THE HONEST THING IS TO SAY SO.** An incumbent can make a
+    ///      rank-guarded buyout revert by demoting themselves first. What it costs them is their
+    ///      whole place in the queue, permanently, and it cannot be repeated — a seat already at the
+    ///      tail has nothing left to give up, and it is still buyable by anyone who passes
+    ///      `type(uint256).max`. So: you can always be bought out of your SEAT; you can only defend
+    ///      your RANK by giving it up. That is not the free, repeatable veto §B.8 forbids.
+    function test_8_19_theSellerCanMoveTheRankOutFromUnderTheBuyer() public {
+        _use(ctlHook, ctlKey);
+        address seller = ctlRoster[0];
+        address buyer = address(0x8B0B);
+        uint256 PRICE = 100e18;
+
+        vm.prank(seller);
+        ctlHook.setSelfPrice(0, PRICE);
+        assertEq(ctlHook.rankOfId(0), 0, "setup: the seat under test is not at the front");
+
+        // THE FRONT-RUN. Same block, before the buyout lands.
+        (uint256 a0, uint256 a1) = ctlHook.seat(0);
+        vm.prank(seller);
+        ctlHook.withdraw(0, a0, a1);
+        assertEq(ctlHook.rankOfId(0), N - 1, "the front-run did not move the rank: this test proves nothing");
+        assertEq(ctlHook.buyPrice(0), PRICE, "the front-run also moved the price: this test proves nothing");
+
+        MockERC20(Currency.unwrap(c0)).mint(buyer, PRICE * 2 + 2_000e18);
+        MockERC20(Currency.unwrap(c1)).mint(buyer, 500e18);
+        vm.startPrank(buyer);
+        MockERC20(Currency.unwrap(c0)).approve(address(ctlHook), type(uint256).max);
+        MockERC20(Currency.unwrap(c1)).approve(address(ctlHook), type(uint256).max);
+
+        // ---- ARM 2 first, because a revert leaves the state untouched: THE GUARD REFUSES IT.
+        vm.expectRevert(abi.encodeWithSelector(QueueHook.RankBelowMinimum.selector, uint256(0), N - 1, uint256(0)));
+        ctlHook.buySeatAndFund(0, PRICE, PRICE, 1_000e18, 250e18, 0);
+
+        // ---- ARM 1: the unguarded buyout still lands, and the buyer is at the back.
+        uint256 spent = MockERC20(Currency.unwrap(c0)).balanceOf(buyer);
+        ctlHook.buySeat(0, PRICE, PRICE);
+        spent -= MockERC20(Currency.unwrap(c0)).balanceOf(buyer);
+        vm.stopPrank();
+
+        assertEq(spent, PRICE, "the unguarded buyer did not pay the posted price");
+        assertEq(ctlHook.ownerOf(0), buyer, "the unguarded buyout did not land");
+        assertEq(ctlHook.rankOfId(0), N - 1, "the unguarded buyer did NOT end up at the tail");
+        (uint256 owed,) = ctlHook.pendingOf(seller);
+        assertGe(owed, PRICE, "the seller was not credited the price they were paid for a tail seat");
+        emit log_named_uint("paid for what was rank 0 when the buyer signed", spent);
+        emit log_named_uint("rank actually delivered                       ", ctlHook.rankOfId(0));
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════════
@@ -983,6 +1552,170 @@ contract EvacuationTest is QueueFixture {
 
         _checkInvariantL("after profit-then-exit");
         _checkInvariantF("after profit-then-exit", 64);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // 8.11 — THE THIRD DOOR. A SYBIL BUYOUT IS AN EVACUATION THAT KEEPS THE RANK, AND IT DEFEATS
+    //        EVERY REMEDY OF THE FORM "a PAID takeover keeps its rank, a gift does not".
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice **THE TEST THAT DECIDED THE REMEDY.** `buySeat` evacuates a seat exactly as
+    ///         `transfer` does (`test_8_3b`), and it is available to ANYBODY — so it is available
+    ///         to the holder's own second address. The price flows from one of the attacker's
+    ///         addresses to the other's `pending0`, where `claimPending` returns it in the same
+    ///         episode: **the buyout price is a WASH between two addresses one person controls.**
+    ///
+    /// @dev **WHAT THIS KILLED.** The natural remedy for PITFALLS 5.123(a) is "demote on a change
+    ///      of holder UNLESS it is a settled buyout at the posted price" — rank survives a PAID
+    ///      takeover but not a gift. This test executes the sybil form of that payment, and before
+    ///      the remedy it reproduced `test_8_1`'s attack in full: the same +267 bps edge, the same
+    ///      +50.4e18 of extra fill dumped on ranks 1..7, ZERO rent (the absence has no duration —
+    ///      `test_8_5`), and the rank kept. The only residual was a firm quote at a number THE
+    ///      ATTACKER CHOSE, which is not a cost the mechanism imposes: set it above whatever the
+    ///      rank is worth to anybody else and nobody takes it. Rent over one `FIRM_WINDOW` at
+    ///      tau = 10%/yr is ~1.1e-5 of the posted price against 2.67e-2 of seat capital.
+    ///
+    ///      So the exemption could not be WHO PAID. It had to be whether the depth the rank is
+    ///      priority over is still standing when the call ends — see `_settleRankOnTransfer`, and
+    ///      `test_8_12` for the sybil who does put it back and gains nothing by it.
+    ///
+    ///      **THE CLAIM IS THE PAIR'S NET, NOT ONE ADDRESS'S.** Everything is measured across BOTH
+    ///      addresses — wallets, seat ledger and pending claims — because measuring only the
+    ///      buyer's wallet would report the self-payment as a cost when it is an internal transfer.
+    function test_8_11_aSybilBuyoutCostsTheRankToo() public {
+        uint160 target = _target();
+        Result memory ctl = _episode(ctlHook, ctlKey, ctlRoster, false, target);
+        Result memory atk = _sybilEpisode(target);
+
+        _reportFills(ctl, atk);
+        _checkMirror(atk, target, "sybil-buyout attack");
+        int256 edge = _reportHeadPnl(ctl, atk, target);
+        int256 backHarm = _reportBackPnl(ctl, atk, target);
+
+        emit log_string("--- where the attacker is standing when it is over ---");
+        emit log_named_uint("control end rank       ", ctl.endRank);
+        emit log_named_uint("sybil   end rank       ", atk.endRank);
+
+        // **THE REMEDY DOES NOT REFUND THE DODGE, AND SAYING IT DID WOULD BE THE OVERCLAIM** —
+        // the same sentence `test_8_1` carries, for the same reason. Capital that is not in the
+        // pool cannot be filled, so the ONE-SHOT edge below is exactly what it was before the
+        // remedy existed. What the remedy takes is the FUTURE: the attacker is standing at the
+        // BACK when it is over and has to buy their way forward, and doing that now costs them a
+        // deposit they cannot pull back out without paying the same price again.
+        assertGt(edge, 0, "the sybil strike does not dodge the fill at all: this test proves nothing");
+        assertLt(backHarm, 0, "the back of the book was not made worse off: this test proves nothing");
+        assertEq(atk.endRank, N - 1, "THE SYBIL BUYOUT KEPT THE FRONT: the third door is still open");
+    }
+
+    /// @dev The strike, through `buySeat` instead of `withdraw`. Self-price 100e18, paid by the
+    ///      attacker's own second address, reclaimed through `claimPending` in the same episode.
+    function _sybilEpisode(uint160 target) internal returns (Result memory r) {
+        _use(atkHook, atkKey);
+        address head = atkRoster[0];
+        address alt = address(0xA17E2);
+        uint256 PRICE = 100e18;
+
+        (r.headStart0, r.headStart1) = _pairHoldings(head, alt, 0);
+        (r.backStart0, r.backStart1) = _backLedger();
+
+        // The attacker posts their OWN number. A founding seat's first price arms no firm window
+        // (`_setPrice`'s else-branch needs a previous price), so the quote is live immediately.
+        vm.prank(head);
+        atkHook.setSelfPrice(0, PRICE);
+        assertEq(atkHook.buyPrice(0), PRICE, "the seat is not priced: this test proves nothing");
+
+        // Fund the second address with the price. It is the attacker's own money moving between
+        // the attacker's own addresses; `_pairHoldings` counts both, so it cannot flatter the
+        // result. Minted rather than transferred out of `head` only so the wallet split is legible.
+        MockERC20(Currency.unwrap(c0)).mint(alt, PRICE);
+        vm.startPrank(alt);
+        MockERC20(Currency.unwrap(c0)).approve(address(atkHook), type(uint256).max);
+        MockERC20(Currency.unwrap(c1)).approve(address(atkHook), type(uint256).max);
+        vm.stopPrank();
+        r.headStart0 += PRICE; // the mint is not profit: count it on both sides of the episode
+
+        (uint256 a0, uint256 a1) = atkHook.seat(0);
+        assertGt(a0 + a1, 0, "nothing happened: the head is empty, this test proves nothing");
+
+        uint256 before = gasleft();
+        vm.prank(alt);
+        atkHook.buySeat(0, PRICE, PRICE);
+        uint256 gasBuy = before - gasleft();
+
+        // The evacuation half is unchanged — a change of holder still empties the seat — but the
+        // rank it was standing in is gone with the depth.
+        (uint256 e0, uint256 e1) = atkHook.seat(0);
+        assertEq(e0 + e1, 0, "the buyout did not evacuate the seat");
+        assertEq(atkHook.rankOfId(0), N - 1, "THE SYBIL BUYOUT KEPT ITS RANK: the third door is open");
+        assertEq(atkHook.ownerOf(0), alt, "the seat did not change hands");
+        (uint256 pend0,) = atkHook.pendingOf(head);
+        assertGe(pend0, PRICE, "the price was not credited back to the attacker's other address");
+
+        // The informed trader walks the pool to the common target while the front stands empty.
+        r.amountIn = _inputToReach(target);
+        (, r.amountOut) = _advSwap(address(this), true, r.amountIn);
+
+        // Back to the front, fully funded, same seat, same rank.
+        r.gasRoundTrip = gasBuy + _sybilRestore(head, alt);
+
+        // ZERO RENT, for the reason `test_8_5` gives: the absence had no duration.
+        assertEq(atkHook.rentDue(0), 0, "the sybil buyout left a rent bill behind");
+
+        (r.finalSqrt,,,) = poolManager.getSlot0(atkKey.toId());
+        r.endRank = atkHook.rankOfId(0);
+        (r.head0, r.head1) = _pairHoldings(head, alt, 0);
+        (r.back0, r.back1) = _backLedger();
+        r.headGave1 = r.headStart1 > r.head1 ? r.headStart1 - r.head1 : 0;
+        r.backGave1 = r.backStart1 > r.back1 ? r.backStart1 - r.back1 : 0;
+
+        // THE RESIDUAL COST, and it is a number the ATTACKER chose: the seat stands firm at their
+        // own price for FIRM_WINDOW. Nobody takes a seat at a price its holder is happy with.
+        emit log_string("--- what the sybil buyout actually cost ---");
+        emit log_named_uint("firm quote left standing ", atkHook.buyPrice(0));
+        emit log_named_uint("rent charged             ", 0);
+        emit log_named_uint("gas, buySeat+addToSeat   ", r.gasRoundTrip);
+        assertEq(atkHook.buyPrice(0), PRICE, "the seat is firm at something other than the attacker's own price");
+
+        _checkInvariantF("sybil buyout episode", 64);
+        _checkInvariantR("sybil buyout episode");
+        _checkInvariantL("sybil buyout episode");
+    }
+
+    /// @dev The second half of the strike: the capital moves between the attacker's two addresses
+    ///      in the open, goes back into the seat it never lost, and the self-payment is claimed.
+    ///      Split out of `_sybilEpisode` only because that function hit `Stack too deep`.
+    function _sybilRestore(address head, address alt) internal returns (uint256 gasUsed) {
+        uint256 h0 = MockERC20(Currency.unwrap(c0)).balanceOf(head);
+        uint256 h1 = MockERC20(Currency.unwrap(c1)).balanceOf(head);
+        vm.startPrank(head);
+        MockERC20(Currency.unwrap(c0)).transfer(alt, h0);
+        MockERC20(Currency.unwrap(c1)).transfer(alt, h1);
+        vm.stopPrank();
+
+        // The arguments are read BEFORE the prank. `vm.prank` binds the NEXT external call, and an
+        // argument expression that makes one would eat it — the first run of this test failed with
+        // `NotSeatOwner(0, <the test contract>)` for exactly that reason.
+        uint256 back0 = MockERC20(Currency.unwrap(c0)).balanceOf(alt);
+        uint256 back1 = MockERC20(Currency.unwrap(c1)).balanceOf(alt);
+        uint256 before = gasleft();
+        vm.prank(alt);
+        atkHook.addToSeat(0, back0, back1);
+        gasUsed = before - gasleft();
+
+        // ...and the self-payment comes straight back out.
+        (uint256 cp0, uint256 cp1) = atkHook.pendingOf(head);
+        vm.prank(head);
+        atkHook.claimPending(cp0, cp1);
+    }
+
+    /// @dev Everything the attacker owns across BOTH of their addresses. A single-address measure
+    ///      would score the self-payment as a cost, which is the mistake this test is about.
+    function _pairHoldings(address a, address b, uint256 seatId) internal view returns (uint256 t0, uint256 t1) {
+        (uint256 s0, uint256 s1) = hook.seat(seatId);
+        (uint256 pa0, uint256 pa1) = hook.pendingOf(a);
+        (uint256 pb0, uint256 pb1) = hook.pendingOf(b);
+        t0 = s0 + pa0 + pb0 + MockERC20(Currency.unwrap(c0)).balanceOf(a) + MockERC20(Currency.unwrap(c0)).balanceOf(b);
+        t1 = s1 + pa1 + pb1 + MockERC20(Currency.unwrap(c1)).balanceOf(a) + MockERC20(Currency.unwrap(c1)).balanceOf(b);
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════════

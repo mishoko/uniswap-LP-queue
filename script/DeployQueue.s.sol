@@ -113,13 +113,15 @@ contract DeployQueue is Script, QueueDeployBase {
 
         // -------------------------------------------- BEAT 4: a transfer moves rank, capital goes back
         _transferSeat(d, 0, actor[1], 4);
-        _logSeats(d, "BEAT 4 - seat 4 transferred: rank changed hands, the capital went to the seller");
+        _logSeats(d, "BEAT 4 - seat 4 transferred: the SEAT changed hands, the capital went to the seller");
 
         // ------------------------------------------------- BEAT 5: an under-priced seat is taken
         _setSelfPrice(d, 0, 0, 100e18);
         _logSeats(d, "BEAT 5a - the head seat posts its own price of 100e18");
-        _buySeat(d, 1, 0, 100e18, 250e18);
-        _logSeats(d, "BEAT 5b - the head seat was TAKEN at the price its holder set");
+        // The buyer replaces the depth in the same call. A plain buyout would hand them an EMPTY
+        // seat at the TAIL — a change of holder evacuates the seat, and rank is backed by depth.
+        _buySeatAndFund(d, 1, 0, 100e18, 250e18, 1_000e18, 4_000e6, 0); // rank 0 or nothing
+        _logSeats(d, "BEAT 5b - the head seat was TAKEN at the price its holder set, and REFUNDED");
 
         // --------------------------------------------------- BEAT 6: rent, front to back, in real time
         _fundRent(d, 1, 0, 50e18);

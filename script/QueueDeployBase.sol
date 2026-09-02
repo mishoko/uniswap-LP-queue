@@ -69,6 +69,35 @@ abstract contract QueueDeployBase is CommonBase {
     /// @dev φ — the share of the LP fee a filled seat hands to the seats still standing behind it.
     ///      7,900 bps = 79%.
     ///
+    ///      🚨 **RETRACTED 2026-09-02 (Phase 9). EVERY NUMBER IN THIS DERIVATION IS WITHDRAWN, ON
+    ///      TWO INDEPENDENT GROUNDS, AND φ = 7,900 IS NOT CURRENTLY JUSTIFIED BY ANYTHING.** The
+    ///      constant is left in place because a deployment needs one and this is the last value that
+    ///      was ever argued for; it is NOT evidence. Read `docs/research/seat-economics/FRONTIER.md`
+    ///      and `PITFALLS.md` 5.140-5.142 before quoting anything below.
+    ///
+    ///        1. **THE SWEEP WAS RUN ON A PREMIUM RULE THIS CONTRACT DOES NOT IMPLEMENT.**
+    ///           `results-shipping.txt` was produced with `sim.PREM_WEIGHT = 'inventory'` — the
+    ///           PRE-Phase-8 weighting — because `report_shipping.py` never sets the flag and
+    ///           `sim.py:66` defaults to it. So [7455, 8312] and the 45%-vol window [4114, 8921]
+    ///           describe a mechanism with NO `[start, next]` exclusion in it at all. The rule we
+    ///           ship has never been swept (PITFALLS 5.142).
+    ///        2. **THE FRONT'S BAR WAS HANDICAPPED ON AN AXIS NOBODY SWEPT.** The keeper below is
+    ///           modelled converting AGAINST ITS OWN POOL, and that single term is 61.60 of its
+    ///           70.23 points of cost — 88%. A real keeper routes through an aggregator: off-venue
+    ///           at 5 bps it scores +6.20% against the passive LP's +5.02%, so the front's bar is
+    ///           ABOVE the back's, `LP − B₁` is NEGATIVE, and by the closed form
+    ///           `SLACK = c₁·(LP − B₁)` **no φ clears in ANY regime** (PITFALLS 5.140).
+    ///
+    ///      **"80-123%/yr" BELOW IS UNPROVEN AND APPEARS NOWHERE ON DISK.** No results file contains
+    ///      a %/yr conversion cost; annualising all 30 published and measured cells produces neither
+    ///      80 nor 123 (PITFALLS 5.141).
+    ///
+    ///      **AND THE DIAL IS NOT φ.** `SLACK = c₁·(LP − B₁)` is linear in the HEAD'S CAPITAL SHARE
+    ///      and independent of the seat count and of the ordering rule. A deployer tuning this
+    ///      contract should be choosing `c₁` and the band width, not φ.
+    ///
+    ///      --- everything below is the retracted derivation, kept verbatim so it can be checked ---
+    ///
     ///      **SOLVED FROM A STATED PARTICIPATION CONSTRAINT, NOT SWEPT FOR A GREEN NUMBER, AND
     ///      MEASURED ON THE ROSTER THIS SCRIPT ACTUALLY DEPLOYS.** The previous value of 8,500 was
     ///      chosen against "0 of 32 seats negative" — a SIGN TEST, which AGENTS.md §3b names as the
@@ -119,6 +148,36 @@ abstract contract QueueDeployBase is CommonBase {
 
     /// @dev Five founding seats over two holders. Small enough to read on screen, large enough that
     ///      a sweeping swap visibly walks more than one seat.
+    ///
+    /// @dev **THE DIAL THAT DECIDES WHETHER THIS POOL IS WORTH ANYTHING IS NOT THIS NUMBER — IT IS
+    ///      THE HEAD'S SHARE OF THE BOOK'S CAPITAL. READ THIS BEFORE CHANGING EITHER.**
+    ///
+    ///      The mechanism's entire value ceiling is, in closed form:
+    ///
+    ///          SLACK = c1 x (LP - B1)
+    ///
+    ///      where `c1` is the HEAD seat's share of the book's capital, `LP` the pro-rata LP return
+    ///      and `B1` rank 1's own outside bar. The head's own return cancels out. **So do `SEATS`,
+    ///      the ordering rule, and `PREMIUM_BPS`.** Depth is not the economic variable; `c1` is,
+    ///      and it enters LINEARLY (`docs/research/seat-economics/FRONTIER.md`, confirmed
+    ///      numerically to 2.4e-16 against an independent long-form computation).
+    ///
+    ///      What that means for anyone editing this file:
+    ///
+    ///        * **A flat capital schedule destroys the mechanism no matter how few seats there
+    ///          are.** Five seats funded equally is `c1 = 0.2`; the LINEAR schedule this project
+    ///          actually deploys (`DeployQueue.s.sol`, `mul = SEATS - i`, i.e. weights 5:4:3:2:1)
+    ///          is `c1 = 5/15 = 0.333` and yields ~0.19 pp of book (~1.1%/yr). Thirty-two equal
+    ///          seats is `c1 = 0.031` and yields 0.018 pp — essentially nothing.
+    ///        * **Raising `SEATS` is only harmful through `c1`.** A deep roster with a fat head is
+    ///          fine; a shallow roster split evenly is not. Do not reason about depth directly.
+    ///        * `MAX_SEATS = 32` is a STRUCTURAL ceiling (one byte per rank in the 32-byte `order`
+    ///          word), not a recommendation. **Deploying at or near 32 is a mistake for economic
+    ///          reasons before it is one for gas reasons** — though it is also the worst case for
+    ///          both costs: a 32-seat sweep is 1,188,484 gas and a worst-case `addToSeat` into a
+    ///          full roster is 2,667,423, against 667,969 for the sweep of the roster below.
+    ///
+    ///      Gas figures: `test/queue/Gas.t.sol` (`test_5_3d` measures exactly this roster).
     uint256 internal constant SEATS = 5;
 
     struct Deployment {
@@ -299,6 +358,25 @@ abstract contract QueueDeployBase is CommonBase {
     function _buySeat(Deployment memory d, uint256 who, uint256 seatId, uint256 maxPrice, uint256 newPrice) internal {
         _as(who);
         d.hook.buySeat(seatId, maxPrice, newPrice);
+        _stopActing();
+    }
+
+    /// @dev Take a seat AND replace the depth in the same call, which is what keeps its rank. A
+    ///      plain `buySeat` on a FUNDED seat hands the buyer the tail, because a change of holder
+    ///      empties the seat and rank is backed by depth (PITFALLS 5.123a). The demo takes the
+    ///      front seat, so the demo funds it.
+    function _buySeatAndFund(
+        Deployment memory d,
+        uint256 who,
+        uint256 seatId,
+        uint256 maxPrice,
+        uint256 newPrice,
+        uint256 amount0,
+        uint256 amount1,
+        uint256 maxRank
+    ) internal {
+        _as(who);
+        d.hook.buySeatAndFund(seatId, maxPrice, newPrice, amount0, amount1, maxRank);
         _stopActing();
     }
 

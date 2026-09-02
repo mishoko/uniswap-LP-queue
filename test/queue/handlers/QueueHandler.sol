@@ -99,6 +99,19 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
     uint256 public buyouts;
     uint256 public evacuationsWithCapital;
 
+    /// @dev **THE COVERAGE SIGNAL FOR INVARIANT I9, AND WITHOUT IT I9 PASSES VACUOUSLY.** I9 only
+    ///      bites when an evacuation burns LESS depth than the seat contributed — the case where
+    ///      the FLOAT covered the payout and `_onSeatTransfer` has to book the difference as
+    ///      unattributed. Mid-band, a seat still holding both tokens forces the burn on its token1
+    ///      leg, so every evacuation in a run can burn at least the contribution and I9 never sees
+    ///      the branch it was written for.
+    ///
+    ///      It is a COUNTER and not an assertion because under `fail_on_revert = false` an
+    ///      assertion inside a handler is a revert and is swallowed (AGENTS §3b). The floor is
+    ///      asserted in `test_6_0`, not in `afterInvariant`, because the shrinker answers a
+    ///      cumulative assertion there by shrinking to a one-call sequence.
+    uint256 public floatCoveredEvacuations;
+
     // ------------------------------------------------------------------ the measured residual (I2)
     /// @dev The worst SHORTFALL of backing against the ledger seen at any point in this run, in
     ///      parts per billion of the ledger. **The bound in `Invariant.t.sol` is DERIVED from this
@@ -260,6 +273,7 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
         uint256 rentBefore = _rentPot();
         uint256 b0 = _bal(c0, from);
         uint256 b1 = _bal(c1, from);
+        _depthBefore(id);
 
         if (viaTransferFrom) {
             vm.prank(from);
@@ -268,6 +282,7 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
             // of `transferFrom` is entered at all — `msg.sender == sender` short-circuits past it.
             try hook.transferFrom(from, to, id, 1) {
                 _afterEvacuation("transferSeat", from, b0, b1, rentBefore, s0, s1);
+                _noteFloatCovered();
             } catch (bytes memory err) {
                 _bad("transferSeat", err);
             }
@@ -275,10 +290,31 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
             vm.prank(from);
             try hook.transfer(to, id, 1) {
                 _afterEvacuation("transferSeat", from, b0, b1, rentBefore, s0, s1);
+                _noteFloatCovered();
             } catch (bytes memory err) {
                 _bad("transferSeat", err);
             }
         }
+    }
+
+    /// @dev The two numbers I9's coverage signal is computed from, read before the evacuation.
+    ///      They live in STORAGE rather than on the stack because `buySeat` is already at the stack
+    ///      limit — two more locals there is a `Stack too deep`, not a style choice.
+    uint128 private snapHad;
+    uint128 private snapPos;
+
+    function _depthBefore(uint256 id) internal {
+        snapHad = hook.seatLiquidity(id);
+        snapPos = hook.positionLiquidity();
+    }
+
+    /// @dev Count an evacuation the FLOAT paid for: the seat's whole contribution left the ledger
+    ///      while the position gave up less than that — the branch I9 exists to watch.
+    function _noteFloatCovered() internal {
+        if (snapHad == 0) return;
+        uint128 posAfter = hook.positionLiquidity();
+        uint128 burned = snapPos > posAfter ? snapPos - posAfter : 0;
+        if (snapHad > burned) floatCoveredEvacuations++;
     }
 
     /// @dev Take a seat at the price its holder set. The buyer is any actor that is not the holder.
@@ -301,10 +337,15 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
         uint256 b0 = _bal(c0, from);
         uint256 b1 = _bal(c1, from);
         uint256 buyerBefore = _bal(c0, buyer);
+        // **THIS IS THE PATH THAT REACHES I9's BRANCH MOST RELIABLY.** `buySeat` credits the price
+        // into `float0` BEFORE `_payOut` runs, so on a seat an ordinary front-first fill has
+        // already drained of one token, the float can cover the whole payout and NOTHING is burned.
+        _depthBefore(id);
 
         vm.prank(buyer);
         try hook.buySeat(id, maxPrice, newPrice) {
             buyouts++;
+            _noteFloatCovered();
             // **THE PRICE IS MEASURED, NOT ASSUMED.** `buySeat` settles BEFORE it reads the quote,
             // and settlement can foreclose the seat on the way in — which zeroes `selfPrice` and
             // therefore the price actually charged. The pre-call quote would be wrong in exactly
@@ -664,6 +705,14 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
             || sel == QueueHook.OverEntitlement.selector || sel == QueueHook.NothingDeposited.selector
             || sel == QueueHook.NoSuchSeat.selector || sel == QueueHook.PriceAboveMax.selector
             || sel == QueueHook.CannotBuyOwnSeat.selector || sel == QueueHook.SelfPriceTooLarge.selector
+            // **A SEAT PROMOTED IN THIS BLOCK IS NOT FOR SALE IN IT** (PITFALLS 5.123b, Rule A).
+            // The campaign reaches this on its own and it is a REFUSAL, not a defect: the shrunk
+            // sequence is `withdraw` (which demotes and so promotes the seat behind it) followed by
+            // `buySeat` on that seat in the same block — which is exactly `test_8_7`'s attack, at a
+            // 10x discount, arrived at by random search. `RankBelowMinimum` is deliberately NOT
+            // listed: this handler always passes `type(uint256).max` through the three-argument
+            // `buySeat`, so that guard cannot fire here and listing it would hide a real defect.
+            || sel == QueueHook.SeatWasJustPromoted.selector
             // v4's own refusals on a degenerate swap: a zero specified amount, and a swap large enough
             // to walk the price out of the usable tick range. Both are the ROUTER refusing, not the
             // hook, and neither is reachable through any hook-controlled input.

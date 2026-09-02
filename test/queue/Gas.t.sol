@@ -74,58 +74,66 @@ contract GasTest is QueueFixture {
     ///      size effect. One variable at a time.
     uint256 internal constant HEAD_DIVISOR = 12_800;
 
-    /// @dev PLAN §B.9's own figure, and the one `MAX_SEATS = 32` was chosen against. Restated here
-    ///      as a constant so the two tests below cannot drift from the document or from each other.
-    /// @dev **RAISED FROM 300,000 TO 400,000 WHEN MARGINAL PRICING LANDED, AND THE REASON IS A
-    ///      MECHANISM CHANGE THAT WAS PAID FOR DELIBERATELY — NOT A TOLERANCE WIDENED TO BUY A
-    ///      GREEN.** Read this before quoting either number.
+    /// @dev **THERE IS NO GAS BUDGET ANY MORE, AND DELETING IT IS THE FINDING RATHER THAN A
+    ///      CONCESSION. `BUDGET` USED TO LIVE HERE. IT WAS FICTION.**
     ///
-    ///      The old figure was measured against an allocator that did ONE `mulDiv` per seat,
-    ///      because every seat a swap reached was credited the swap's AVERAGE price. That was the
-    ///      head's free lane: it took all of the volume and none of the price risk, and simulated
-    ///      across benign, normal and toxic regimes it beat an ordinary pro-rata LP in every one
-    ///      of them. Closing that means each seat is credited the price SEGMENT it actually
-    ///      absorbed, which costs one price-curve evaluation per seat: measured, **8,070 -> 9,945
-    ///      per seat**, and 342,365 at `MAX_SEATS`.
+    ///      What stood here was `BUDGET = 550_000`, described in its own log line as "the 300k
+    ///      budget". Those are not the same number, and the derived roster depth the suite printed
+    ///      — 27 — was `(550,000 - 24,125) / 19,280`. A real 300,000 budget supports **14**. The
+    ///      label had been wrong through two raises without anybody noticing, because nothing in
+    ///      the arithmetic ever had to agree with the word.
     ///
-    ///      Three things make raising the number the honest response rather than the convenient one:
+    ///      **Where 300,000 came from (`PLAN.md` §B.9): nowhere external.** `MAX_SEATS = 32` was
+    ///      chosen as "comfortably inside a 300k budget" against the Phase-0 spike's 6,753 gas per
+    ///      seat — 32 x 6,753 = 216,096, rounded up with slack. PLAN's own next sentence is "Both
+    ///      halves were wrong." So the budget was back-formed to make 32 look comfortable, and 32
+    ///      was then *derived* from the budget. It is circular. It is not a block-limit fraction,
+    ///      not a router gas stipend, not an L2 assumption.
     ///
-    ///      * **`MAX_SEATS` cannot absorb it.** 32 is not a gas choice, it is the 32 bytes of the
-    ///        packed `order` word (`QueueSeats`, asserted by `test_4_41`). The budget supports 28;
-    ///        shipping 28 would waste four bytes of a word and settle a structural constant with a
-    ///        gas measurement.
-    ///      * **The path that pays is the rare one.** A head-only swap — what almost every trade
-    ///        is — went from 128,625 to 128,848, **+223 gas**, because the curve is built lazily
-    ///        and a swap the head absorbs alone never builds one. The 23% is paid only by a trade
-    ///        large enough to empty the entire book.
-    ///      * **The real constraint is asserted separately and did not move.** 300,000 was always
-    ///        a proxy for "a full sweep is an ordinary transaction". `test_5_3c` asserts that
-    ///        directly, in absolute terms, on a completely cold fixture: 826,799 gas against an
-    ///        850,000 ceiling. THAT is the number that binds, and it is the one to argue with.
-    /// @dev **RAISED 400,000 -> 550,000 IN PHASE 7, AND THE REASON IS A REAL COST, NOT A
-    ///      REGRESSION TO BE TUNED AWAY.** The priority premium settles each seat it walks against
-    ///      an accumulator, and an accumulator needs a per-seat MARK. That mark is one extra cold
-    ///      storage slot, measured at **+4,832 gas per seat walked** (slope 9,945 -> 14,777) — and a
-    ///      slot is 5,000 gas whatever it holds, so no amount of packing removes it. Marks for both
-    ///      tokens now share one slot; unpacked they cost twice this.
+    ///      **And it ratcheted every time it was about to bind:** 300k -> 400k -> 550k, while
+    ///      `test_5_3c`'s absolute ceiling went 500k -> 850k -> 1,050k -> 1,100k -> 1,250k. Each
+    ///      raise was argued honestly as a real mechanism cost. That is exactly the problem: a
+    ///      budget which is raised whenever it binds is not a budget, it is a changelog, and
+    ///      `assertEq(supported, 27)` was a change-detector wearing a constraint's costume.
     ///
-    ///      So the choice was between the roster and the budget, and the roster is not free to
-    ///      move: `MAX_SEATS == 32` is the 32 BYTES OF THE PACKED `order` WORD (`test_4_41` asserts
-    ///      that coupling), which is what lets a demotion rewrite the whole queue in one `SSTORE`.
-    ///      Shrinking it to 25 would buy nothing back — the word is one slot at any width — and
-    ///      would shrink the product's stated capacity to protect a number that was itself derived,
-    ///      not chosen. The budget moves.
+    ///      **This argument has now been had twice — PITFALLS 5.108 and 5.129 — and it came back
+    ///      because 5.108's CONCLUSION survived while its REASONING did not.** Both of 5.108's
+    ///      supports are false: `test_4_41` was a bare `assertEq(MAX_SEATS, 32)` that could only
+    ///      fail if somebody edited the constant (now fixed to assert the actual coupling), and
+    ///      "shrinking `MAX_SEATS` buys nothing back, the word is one slot at any width" is true
+    ///      of the WORD and false of the COST: measured, 32 -> 27 is -96,645 on the sweep and
+    ///      -620,191 on the worst-case deposit. Deleting the budget is what stops a third round.
     ///
-    ///      What it costs: a full 32-seat sweep is the extreme case (a single trade draining the
-    ///      entire book) and is measured separately by `test_5_3c`. The number a trader actually
-    ///      pays is the head-only swap, and that went 128,848 -> 148,892, +15.6%.
-    uint256 internal constant BUDGET = 550_000;
+    ///      **What replaces it, and it is strictly stronger:** the slope is pinned directly
+    ///      (`test_5_3b`), and the two costs that matter are asserted in ABSOLUTE terms against a
+    ///      fraction of a real block — `test_5_3c` (sweep) and `test_5_6` (deposit). Those are
+    ///      tied to something outside this repo. The budget never was.
 
-    /// @dev The deepest roster this project actually deploys. `QueueDeployBase` ships a small
-    ///      roster on purpose; `MAX_SEATS` is a STRUCTURAL ceiling (one byte per rank in the 32-byte
-    ///      `order` word), not a statement that 32 seats are affordable to sweep in one transaction.
-    ///      See `test_5_3b`, where those two stopped agreeing in Phase 8.
-    uint256 internal constant SHIPPING_SEATS = 8;
+    /// @dev THE SWEEP SLOPE, PINNED TO ITS MEASUREMENT. See `test_5_3b`.
+    uint256 internal constant SLOPE = 19_280;
+
+    /// @dev **THE TOLERANCE IS DERIVED, NOT CHOSEN TO PASS.** Two independent estimators of the
+    ///      slope exist in this suite — `test_5_1` fits 1 -> 32 and reads 19,279; `test_5_3`/
+    ///      `test_5_3b` difference 2 -> 32 and read 19,280 — so the spread attributable to the
+    ///      estimator rather than to the code is **1 gas**. The smallest REAL regression this is
+    ///      meant to catch is one storage slot entering the per-seat walk, which is >= 2,100 gas
+    ///      cold. 150 sits an order of magnitude below that floor and two orders above the
+    ///      estimator spread.
+    ///
+    ///      Stated plainly so nobody widens it later: this pins the slope against a STRUCTURAL
+    ///      change to the seat walk. It is deliberately NOT sensitive to a 100-gas warm-write
+    ///      difference, and it is not meant to be.
+    uint256 internal constant SLOPE_TOL = 150;
+
+    /// @dev **THE ROSTER THIS PROJECT ACTUALLY DEPLOYS — mirrors `QueueDeployBase.SEATS`, which is
+    ///      `internal` and so cannot be read from here.** If that constant moves, `test_5_3d`'s
+    ///      headline number is measuring a roster nobody ships; `test/queue/Deploy.t.sol` is what
+    ///      executes the real script and would catch the divergence.
+    ///
+    ///      `MAX_SEATS` is a STRUCTURAL ceiling (one byte per rank in a 32-byte `order` word), not
+    ///      a claim that 32 seats are affordable to sweep — nor, since the seat-economics frontier
+    ///      landed, a depth anybody should deploy at. See `test_5_3d`.
+    uint256 internal constant SHIPPING_SEATS = 5;
 
     // One roster per depth per shape, all seeded in `setUp()`.
     QueueHarness[6] internal headHooks;
@@ -402,18 +410,17 @@ contract GasTest is QueueFixture {
 
     // ───────────────────────────────────────────────────────────────────────────────── 5.3 / G4
 
-    /// @dev **THE STATED BUDGET: 300,000 GAS OF QUEUE-ATTRIBUTABLE COST ON THE WORST SWAP THE
-    ///      CONTRACT CAN PRODUCE**, and it is not a number invented here. PLAN §B.9 chose
-    ///      `MAX_SEATS = 32` against exactly this figure — "round, comfortably inside a 300k
-    ///      budget" — so re-measuring the hook against it is the only way to find out whether the
-    ///      roster bound was ever justified.
+    /// @dev **THE ANATOMY OF THE QUEUE WALK: its slope, its two one-offs, and what they are made
+    ///      of.** This used to be phrased as a test that the walk "fits the stated budget". There
+    ///      is no stated budget any more and there never honestly was one — see the note where
+    ///      `BUDGET` used to be declared. What survives that deletion is the part which was always
+    ///      doing the work: decomposing the walk into a per-seat cost and two one-time costs, and
+    ///      asserting each against what it is physically made of.
     ///
-    ///      **IT WAS NOT, ON THE NUMBERS §B.9 USED.** That table came from the Phase-0 spike at
-    ///      6,753 gas per seat. This hook, measured, was **12,254** — the spike had no cursors, no
-    ///      owners, no seat tokens and no lease, and its state was written in the same test body
-    ///      that measured it. A full 32-seat sweep cost 412,028 gas of queue work: 37% over the
-    ///      budget the roster bound was picked to fit. Phase 5b's packing brought it to 8,070 per
-    ///      seat and 278,140 in total, which is inside the budget with ~7% to spare.
+    ///      For the record of how bad the original figure was: §B.9's table came from the Phase-0
+    ///      spike at 6,753 gas per seat. This hook, measured, was **12,254** — the spike had no
+    ///      cursors, no owners, no seat tokens and no lease, and its state was written in the same
+    ///      test body that measured it. Phase 5b's packing brought it to 8,070; it is 19,280 today.
     ///
     ///      **EVERY NUMBER HERE IS A DIFFERENCE BETWEEN TWO SWAPS OF IDENTICAL SIZE AGAINST
     ///      IDENTICALLY SEEDED POOLS.** Only the roster depth changes, so the router's work,
@@ -421,7 +428,7 @@ contract GasTest is QueueFixture {
     ///      approximately. Subtracting a head-only swap from a sweeping one — the obvious thing,
     ///      and what an earlier draft did — leaves ~20,000 gas of price-impact difference sitting
     ///      inside a number labelled "the queue".
-    function test_5_3_theQueueWalkFitsTheStatedBudget() public {
+    function test_5_3_theQueueWalkIsDecomposedIntoWhatItIsMadeOf() public {
         _warmUp();
 
         uint256 g1 = _sweepAt(0, 1);
@@ -477,42 +484,94 @@ contract GasTest is QueueFixture {
         // contributed no depth) while the per-SEAT cost rose by a slot. Given a head-only swap is
         // the dominant case and a 32-seat sweep is the worst one, that is the right direction to
         // have moved in — but it is a real cost and it is written here rather than smoothed away.
-        assertLt(queueCost, 700_000, "the queue walk has blown the budget MAX_SEATS was chosen against");
+        // **A CEILING, AND IT IS NO LONGER PRETENDING TO BE DERIVED FROM ANYTHING.** This once
+        // read "has blown the budget MAX_SEATS was chosen against"; that budget was fiction and is
+        // gone. The queue-attributable cost at the structural extreme is kept under observation
+        // here so a regression is loud, but the claim that MATTERS is absolute and lives in
+        // `test_5_3c` (32 seats, 1,188,462 = 4.0% of a 30M block) and `test_5_3d` (the roster we
+        // actually ship, 667,947 = 2.2%). Those are measured against a real block. This is not.
+        assertLt(queueCost, 700_000, "the queue-attributable cost at the structural extreme has regressed");
     }
 
-    /// @dev 5.3 continued — **THE ROSTER BOUND IS DERIVED FROM THE BUDGET, NOT ASSERTED BESIDE
-    ///      IT.** `MAX_SEATS` is a constant in the source and 300,000 is a number in a document;
-    ///      nothing but this test makes them agree. If a future change raises the per-seat cost,
-    ///      this fails and names the depth the budget actually supports, rather than leaving
-    ///      §B.9's justification quietly false the way Phase 0's did.
-    function test_5_3b_maxSeatsIsWhatTheBudgetSupports() public {
+    /// @dev 5.3 continued — **THE SLOPE, PINNED DIRECTLY. THIS REPLACED A DERIVED ROSTER DEPTH
+    ///      THAT WAS COMPUTED FROM A BUDGET THAT DID NOT EXIST** (see the note on `SLOPE` above).
+    ///
+    ///      What stood here computed `supported = (BUDGET - 24,125) / perSeat`, printed it as
+    ///      "seats the 300k budget supports", and asserted it equalled 27 — three numbers that
+    ///      never had to agree with each other, derived from a constant reading 550,000. Every
+    ///      regression it could actually catch was a change in `perSeat`, so `perSeat` is what is
+    ///      asserted now: same detection, no fabricated constraint, and nothing left to ratchet.
+    ///
+    ///      **What would make this FAIL** (LAW 5's question, answered rather than assumed): a
+    ///      storage slot entering or leaving the per-seat walk, a branch added inside the seat
+    ///      loop, or the loop reading something per-seat it used to hoist. All of those move the
+    ///      slope by thousands. Nothing about the *fixture* moves it by more than 1 gas — which is
+    ///      the whole basis for `SLOPE_TOL`, and it is stated there rather than guessed here.
+    function test_5_3b_theSweepSlopeIsWhatItWasMeasuredAt() public {
         _warmUp();
 
         uint256 g2 = _sweepAt(1, 2);
         uint256 g32 = _sweepAt(5, 32);
         uint256 perSeat = (g32 - g2) / 30;
 
-        uint256 supported = (BUDGET - 24_125) / perSeat;
-        emit log_named_uint("seats the 300k budget supports", supported);
-        emit log_named_uint("MAX_SEATS (structural, the order word)", QueueSeats(address(sweepHooks[5])).MAX_SEATS());
+        emit log_named_uint("gas per seat walked", perSeat);
+        assertApproxEqAbs(
+            perSeat, SLOPE, SLOPE_TOL, "the per-seat sweep cost has moved: re-derive it, do not widen the tolerance"
+        );
+    }
 
-        // **THE HONEST SENTENCE, IN ONE PLACE: the 300k budget supports 27 seats, `MAX_SEATS` is 32
-        // because the `order` word has 32 bytes, and the roster this project ships is 5. The gap is
-        // real and it is not reachable by any configuration we recommend.**
-        //
-        // This test used to assert `supported >= MAX_SEATS` — that the budget pays for the deepest
-        // roster the order word can express. After Phase 8 it does not: a fourth storage slot per
-        // seat (the premium's weight) and the two marks unpacking took the per-seat walk from 14,778
-        // to 19,280. `MAX_SEATS` stays 32 because it is a STRUCTURAL CAP, never an affordability
-        // claim.
-        //
-        // Both halves are asserted, and the second is what makes this STRONGER than what it
-        // replaced rather than weaker: `>= SHIPPING_SEATS` is the premise that was actually
-        // intended, and pinning the exact number catches any future regression in the sweep cost
-        // immediately instead of letting it eat the remaining headroom in silence. A comment cannot
-        // do a test's job, so it does not have to.
-        assertGe(supported, SHIPPING_SEATS, "the roster we actually deploy no longer fits the budget");
-        assertEq(supported, 27, "the sweep cost has moved: re-derive this number, do not widen it");
+    /// @notice **THE NUMBER THAT BELONGS IN THE DOCS: WHAT A SWEEP OF THE ROSTER WE ACTUALLY SHIP
+    ///         COSTS.** Nothing measured it until now, and every figure the project published was
+    ///         for a 32-seat book nobody deploys.
+    ///
+    /// @dev Measured exactly as `test_5_3c` measures the 32-seat extreme — deliberately NOT warmed
+    ///      up, so it carries every cold cost a real first transaction pays — and at the depth
+    ///      `QueueDeployBase` actually constructs (`SHIPPING_SEATS`).
+    ///
+    ///      **Measured: 667,969 gas, 2.2% of a 30M block.** For scale, on the identical fixture a
+    ///      ONE-seat sweep is ~566,600 (545,350 in `test_5_1`'s warmed table, plus the ~21,200 of
+    ///      cold-account access `_warmUp` exists to factor out) — so the entire cost of having a
+    ///      five-deep queue rather than no queue at all is ~101,000 gas, and the head-only swap
+    ///      that almost every trade actually is stays FLAT in depth (221,316 at 5 seats against
+    ///      221,318 at 32; `test_5_1`).
+    ///
+    ///      **THE LAST TWO DIGITS DRIFT, AND THAT IS RECORDED RATHER THAN SMOOTHED.** Across the
+    ///      Phase 8/9 session this figure was measured three times at 667,947, 668,013 and 667,969
+    ///      as seat-transfer and INVARIANT-L work landed in `QueueHook` beside it — a spread of 66
+    ///      gas, 0.01%, moving identically on the 32-seat sweep. **Quote ~668,000, not a six-digit
+    ///      number implying a precision this does not have**, and re-measure at the commit you are
+    ///      publishing from. The value above is the reading on a tree verified free of any live
+    ///      mutation (no `mutate.py` process, no `.forge-snapshots/MUTATION_IN_PROGRESS` marker),
+    ///      which is a check worth making rather than assuming (PITFALLS 5.146).
+    ///
+    ///      **The 32-seat figure is a STRUCTURAL extreme, not a product configuration, and the
+    ///      reason is economics rather than gas.** The seat-economics frontier gives the
+    ///      mechanism's whole value ceiling as `SLACK = c1 x (LP - B1)`, where `c1` is the HEAD's
+    ///      share of the book's capital — roster depth `N` cancels out entirely. So depth is not
+    ///      the economic variable and never was; the head's capital share is, and it enters
+    ///      linearly. A 32-seat roster split evenly puts `c1` at 0.031 and leaves essentially no
+    ///      slack to divide (0.018 pp of book, against 0.19 pp for the shipped 5-seat schedule).
+    ///      **Nobody should deploy at 32 seats, and gas is the least of the reasons.**
+    ///
+    ///      **Who can be made to pay the deep number, since it is bounded rather than impossible:**
+    ///      seats cannot be CREATED after deployment (`_mintRoster` is constructor-only), so the
+    ///      walk can never grow — but depth within the roster is attacker-controllable, because
+    ///      `_fundSeat` rewinds both cursors and seats are Harberger-purchasable. What stops it is
+    ///      the RENT, not the fixed roster: the attacker's `addToSeat` is superlinear (2,667,423 at
+    ///      32 seats) against the victim's linear ~19,280 per seat. Full accounting in PITFALLS
+    ///      5.145 — and do not restate the fixed roster as the defence.
+    ///
+    ///      Which is also why `MAX_SEATS` is the wrong lever in both directions: capping `N` does
+    ///      not cap `c1`. A 32-seat roster with a fat head has the same economics as a shallow one,
+    ///      and a 5-seat roster split evenly has worse. The dial belongs to the deployer's capital
+    ///      schedule, and it is documented where a deployer reads it (`QueueDeployBase`).
+    function test_5_3d_theShippedRosterIsTheNumberToQuote() public {
+        uint256 g = _sweepAt(2, SHIPPING_SEATS);
+        emit log_named_uint("SHIPPED roster full sweep, complete tx, nothing warmed", g);
+
+        // A ceiling, not a correctness claim — its job is to make a regression on the configuration
+        // we actually deploy loud, and it is the one figure quoted outside this repo.
+        assertLt(g, 750_000, "the sweep of the roster we ship has stopped being an ordinary transaction");
     }
 
     /// @dev THE NUMBER TO QUOTE A TRADER. Deliberately NOT warmed up: this is the only measurement
@@ -563,7 +622,7 @@ contract GasTest is QueueFixture {
     function test_5_3c_aFullSweepIsAnOrdinaryTransaction() public {
         uint256 g = _sweepAt(5, 32);
         emit log_named_uint("full 32-seat sweep, complete tx, nothing warmed", g);
-        // 850,000 -> 1,050,000 in Phase 7, for the per-seat mark costed in `BUDGET` above: 32 seats
+        // 850,000 -> 1,050,000 in Phase 7, for the per-seat mark costed in the slope note above: 32 seats
         // x 4,832 is 155k of the 132k this moved by. Measured 996,805 = 3.3% of a 30M block, so the
         // claim this test defends — that a sweeping trade is priced like a trade rather than like an
         // event — still holds. It is the only measurement here that is an absolute rather than a
