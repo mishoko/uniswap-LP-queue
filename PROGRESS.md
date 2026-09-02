@@ -21,9 +21,92 @@ Newest entry first. Never delete an entry — supersede it.
 | 8 | Evacuation attack + premium hold branch | **CODE COMPLETE 2026-09-02** | **PARTLY** — 242 tests. `withdraw` now demotes; `_accruePremium` releases incrementally. **TWO EVACUATION DOORS REMAIN OPEN — PITFALLS 5.123.** |
 | 10 | Value question CLOSED + all four open defects fixed | **COMPLETE 2026-09-02** | **YES** — 311 tests, 0 failed. Four defects fixed at the root, 11 tests inverted, 3 new. The constrained-buyer door closed by MEASUREMENT (PITFALLS 5.160) |
 | 9 | Evacuation doors + the closed-form surplus | **COMPLETE 2026-09-02** | **PARTLY** — 308 tests. Ten defects found; four left OPEN and all four are now closed by Phase 10 |
+| 11 | Handoff §3.2/§3.3 closed + the solvency meter repaired | **COMPLETE 2026-09-02** | **YES** — 314 tests, 0 failed. INVARIANT W written down (5.175, closes 5.164), the campaign aimed at the premium (5.133 closed), and `_noteSolvency`'s missing `premiums()` found and fixed (5.176). `src/` untouched |
 | 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-02** | **PARTLY** — 224 tests. **THE MECHANISM IS SOUND AND THE BUSINESS CASE IS MISSING** — the 32 seats share one LP position, so they can at best TIE with not using the hook; the priority premium fixed the distribution (29/32 losing → 0/32) but creates no reason to participate. Next session is a BRAINSTORM for an outside payer, not a build. See `docs/research/seat-economics/VALUE.md`. Earlier note: 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## PHASE 11 — 2026-09-02. THE TWO OUTSTANDING HANDOFF ITEMS CLOSED, AND THE SOLVENCY METER WAS WRONG.
+
+**Status: code work COMPLETE. Suite 314 passed / 0 failed / 1 skipped (was 311/0/1). `src/` UNTOUCHED,
+so the 85-case mutation campaign is unaffected and was not re-run. Read `PITFALLS.md` 5.175, 5.176.**
+
+### 1. INVARIANT W — and 5.164's recorded safety argument was dead (PITFALLS 5.175, closes 5.164)
+
+The handoff §3.3 asked for the invariant that makes `_syncSeat`'s cursor-blindness safe. Writing it
+down required first noticing that **5.164's stated reason no longer holds**: it argues a drained seat
+is *"weighted zero in the accrual"*, which was true only while the premium was weighted by the seat's
+BALANCE. `_claims` weights by `s.liquidity` (`QueueHook.sol:1356`) and liquidity is not zeroed by a
+fill, so a fully drained seat still accrues in BOTH tokens. The conclusion survived; the argument did
+not, and nothing went red because the code is still correct.
+
+**The property that actually holds is `min(cursor0, cursor1) == 0`.** Induction on two lines of
+`_allocate`: a fill raises the OUTGOING cursor to `next` and pulls the INCOMING one back to `start`,
+which is the outgoing cursor's own old value; both begin at 0; `_fundSeat` and `_demoteToTail` only
+ever LOWER one. So one cursor is always parked at the front, every fill walks from rank 0 in one
+direction, and every seat below the other cursor is re-`_syncSeat`'d by the very fill that grew that
+token's accumulator. No premium credit can strand outside a reachable window.
+
+Asserted in `_checkInvariantC` (**124 tests reach it** — inverting the constant turns all 124 red) and
+as `invariant_I10` over 256 runs x 16,384 calls. `test_N4b` asserts the NEGATION against the
+`NO_CURSOR_PULLBACK` mutant with a paired positive control, so it is known to be capable of firing.
+
+**Stated rather than left to be found later:** under the shipped one-ended walk W and C are maintained
+by the SAME line, C fires first against that mutant, and **W is not an independent detector today.**
+It is a tripwire for the change 5.164 actually warns about — a two-ended book or a reversed walk.
+
+**A found-and-corrected error in this session's own first draft:** the first version of `test_N4b`
+sized its reverse leg at `expT1 / 50` (copied from `test_N4`'s scenario) and the mutant did NOT break
+W, because the fill never fully exhausted a seat and `cursor0` never advanced. The test's own
+non-vacuity guard caught it. `expT1 / 5` is the size that discriminates.
+
+### 2. The campaign is now aimed at the premium (PITFALLS 5.133, closed)
+
+Three actions, each with an **OUTCOME floor rather than a call count** — a settle that finds nothing
+accrued proves nothing:
+
+| action | what it aims at | scripted attempts → hits |
+|---|---|---|
+| `settlePremiumOnSeat` | `withdraw(id,0,0)` is a pure `_syncSeat`: no money moves, no demotion | 25 → **5 claims cashed** |
+| `swapToSeatBoundary` | exact-output sized to exhaust ranks `[cursor, r]` — 5.152's `next = m+1` | 10 → **3 boundary fills** |
+| `swapSweepingTheWholeBook` | 5.170's `sweptBook` branch, the one that bricked the pool | 12 → **4 sweeps** |
+
+Fuzz campaign: ~1,100 calls on each, 0 unexpected reverts, every invariant green. The dispatch table's
+first twelve branches are **untouched** — the new actions were appended at picks 100-114 (modulus
+107 → 115) so coverage was added rather than traded, and the existing floors were re-measured
+(`orderPermuted` is still exactly 1, so that assertion was restored rather than weakened).
+
+**The `_refAllocate` half of 5.133 is deliberately NOT done.** Porting a 200-line reference allocator
+into a second file is the one-rule-two-places hazard this repo has paid for nine times — and §3 below
+is exactly what that hazard looks like when it lands in an instrument. Front-first (I4) and per-seat
+composition stay covered by the fixture's witness in the directed suites.
+
+### 3. NOT ASKED FOR, AND THE REAL FIND: the campaign's solvency meter omitted the premium (5.176)
+
+`QueueHandler._noteSolvency` computed `owed = totals + pending` against `backing = positionValue +
+float` — **leaving out `premiumOwed`, the identical omission `invariant_I2_solvency` names in its own
+docblock and fixed for ITSELF.** Unsettled premium is in the backing and was missing from the owed.
+
+| quantity | before | after |
+|---|---|---|
+| worst surplus token0 | 3.57e19 wei | **0, exactly** |
+| worst surplus token1 | 1.03e19 wei | **0, exactly** |
+| worst shortfall token0 | 20 wei | **47 wei** |
+| worst shortfall token1 | 31 wei | **62 wei** |
+
+The whole reported "surplus" was instrument. Worse, a too-small `owed` **understates every shortfall**
+— and `SHORTFALL_PPB` is DERIVED from these numbers, so the bound had been derived from an
+under-measurement. It still clears by orders of magnitude (ppb 0).
+
+**No mechanism defect is implied and none was found.** `_solvent` requires exact equality on the
+over-backed branch and I2 has passed throughout, so the position was never over-backed; only the
+handler's record of it was.
+
+**The tell was free and went unread for four phases: the docblock stated the expected value ("worst
+SURPLUS 0 wei, both tokens, exactly") and the test PRINTED a different number on every run.** A value
+that is emitted but never asserted is a value nobody checks.
 
 ---
 
