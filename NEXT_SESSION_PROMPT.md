@@ -42,19 +42,51 @@ one claim survived, it is measured, and it is enough.
 > tokens printed, no dilution, no vesting, no forum post that can be reversed — the subsidy is fill
 > order and rent routing, and it is mechanical.
 
-### THE NUMBERS WE QUOTE, AND ONLY THESE
+### ⚠ THE NUMBERS — RETRACTED AND NOT YET REPLACED. DO NOT FILM UNTIL THIS IS FIXED.
 
-`results-tranche.txt` §12, φ = 8500, per-path excess over a pro-rata LP on the SAME seed:
+**The table that stood here was wrong on four axes at once (roster, rank, φ, and premium basis) and
+it is retracted in full. See PITFALLS 5.177–5.179. Nothing below is safe to say on camera yet.**
 
-| regime | LP itself | rank 28 excess (p5) | beat LP | rank 32 excess (p5) | beat LP |
-|---|---|---|---|---|---|
-| BENIGN ±10% | +3.36% | +2.14% (+1.37%) | **100%** | +3.29% (+1.74%) | **100%** |
-| NORMAL ±10% | −0.26% | +1.98% (+1.50%) | **100%** | +3.24% (+2.46%) | **100%** |
-| TOXIC ±10% | −2.23% | +1.80% (+1.68%) | **100%** | +3.01% (+2.63%) | **100%** |
-| TOXIC ±30% | −5.74% | +4.37% (+4.26%) | **100%** | +6.86% (+6.57%) | **100%** |
+**1. It cherry-picked by omission.** It claimed *"p5 excess positive in EVERY regime, beats a passive
+LP on 100% of paths."* `results-tranche.txt` has SIX config blocks; the table quoted four. The two it
+omitted are where the claim fails — BENIGN ±30% (`results-tranche.txt:585-590`) reads rank 28 and
+rank 32 at **p5 −4.96%, beat LP 77%**. "Every regime" was assembled out of the blocks that had been
+read. Not intended; false as published, which is the only thing that matters.
 
-**The 5th-percentile excess is POSITIVE in every regime** — this is not a mean effect with a bad tail.
-Capital-weighted mean excess across all 32 ranks is `−0.00%`: it is a transfer, and we say so.
+**2. THE BASIS IS THE PRE-PHASE-8 PREMIUM RULE — the big one.** `sim.py:66` sets
+`PREM_WEIGHT = 'inventory'` and **no report overrides it** (`report_shipping.py`, `report_tranche.py`,
+`book_report.py` all inherit the default). The contract has weighted by CONTRIBUTED LIQUIDITY with the
+payers excluded since Phase 8. **So `results-shipping.txt`, `results-tranche.txt`, `results-book.txt`,
+the feasible window `[7455, 8312]` and the shipped `PREMIUM_BPS = 7,900` derived as its midpoint are
+all on a basis the deployed contract does not implement.** PITFALLS 5.142 said this at the start of
+Phase 10 and it was read, quoted, and then not applied. `report_depth_basis.py` exists to fix exactly
+this and has no committed output.
+
+**3. Several 5.160 magnitudes do not reproduce.** Regenerated from the (empty-committed)
+`results-book.txt`: the pro-rata LP bar **+135.9 bps does not exist — +50.2 does**, the rows mixed φ
+blocks, and the "−476 bps" cost of priority computes as **−391.9**. What DOES reproduce exactly is the
+load-bearing falsification control: **+4.487 pp / −1.277 pp at t = +61.96 / −20.10.** So the
+CONCLUSION of 5.160 stands — priority is a direction bet, not a gain — and its arithmetic does not.
+
+### WHAT SURVIVES, AND MAY BE SAID
+
+* **The mechanism.** Fill order inside one position is non-pro-rata, transferable and self-priced.
+  That is a property of the code, not of a simulation. 314/0/1, 85/85 mutations RED.
+* **The direction.** The front loses and the back gains, robustly, everywhere. Sign, not size.
+* **The identity.** Capital-weighted return == the passive LP return, exactly. It is a TRANSFER.
+* **Priority is worth negative money to its holder** (the mirror control reproduces).
+
+### THE HONEST CURRENT NUMBER, still on the wrong premium basis
+
+`results-shipping.txt`, the SHIPPED roster (5 seats, 5:4:3:2:1, $333,333 head), φ = 8500 — fraction of
+(path, seat) cells in seats 2–5 beating a pro-rata LP: **BENIGN 80.0%, NORMAL 86.5%, TOXIC 75.8%.**
+All of seats 2–5 clear the bar from φ = 7455 (BENIGN) and φ = 4114 (NORMAL); **in TOXIC there is no φ
+at which they all clear it — s2 never does.**
+
+### THE GATE BEFORE ANY PITCH
+
+**Re-run the economics on `PREM_WEIGHT` matching the shipped contract, on the shipped roster, and
+re-derive `PREMIUM_BPS` from that.** Until then the mechanism claim is sayable and no magnitude is.
 
 ### WHAT WE MUST NEVER CLAIM — each of these is disproven in this repo
 
