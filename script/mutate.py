@@ -42,9 +42,14 @@ MUTS = [
     # matches is a BAD-PATTERN, not a mutation, and the campaign said so. It now carries the loop
     # header above it, which belongs to `_allocate` alone.
     ("M5", HOOK, "the allocator indexes by SEAT ID instead of by rank",
-     "        for (uint256 i = start; i < n && st.remaining > 0; i++) {\n"
+     # REPAIRED 2026-09-02 (Phase 10): `_allocate` HOISTED `i` out of the `for` header so the
+     # premium could be handed the last rank TOUCHED rather than the cursor. The old header no
+     # longer exists and this case silently stopped running.
+     "        uint256 i = start;\n"
+     "        for (; i < n && st.remaining > 0; i++) {\n"
      "            Seat storage seat_ = q[_idAt(ord, i)];",
-     "        for (uint256 i = start; i < n && st.remaining > 0; i++) {\n"
+     "        uint256 i = start;\n"
+     "        for (; i < n && st.remaining > 0; i++) {\n"
      "            Seat storage seat_ = q[i];"),
     ("M6", HOOK, "the degenerate fill indexes by rank instead of resolving the seat",
      "                uint256 idx = _idAt(order, rank);", "                uint256 idx = rank;"),
@@ -90,8 +95,9 @@ MUTS = [
 
     # ----------------------------------------------------------------------- distribution
     ("M20", HOOK, "the payer receives its own rent (loop starts at its own rank)",
-     "        for (uint256 i = r + 1; i < n; i++) {\n            w += q[_idAt(ord, i)].a0;",
-     "        for (uint256 i = r; i < n; i++) {\n            w += q[_idAt(ord, i)].a0;"),
+     # REPAIRED 2026-09-02 (Phase 10): rent is weighted by `liquidity`, not `a0`.
+     "        for (uint256 i = r + 1; i < n; i++) {\n            w += q[_idAt(ord, i)].liquidity;",
+     "        for (uint256 i = r; i < n; i++) {\n            w += q[_idAt(ord, i)].liquidity;"),
     ("M21", HOOK, "the credit loop starts at the payer's own rank",
      "        for (uint256 i = r + 1; i < n && st.remaining > 0; i++) {",
      "        for (uint256 i = r; i < n && st.remaining > 0; i++) {"),
@@ -123,7 +129,8 @@ MUTS = [
     ("M31", HOOK, "the firm quote is not the running minimum over the window",
      "            if (newPrice < l.firmPrice) l.firmPrice = newPrice;", "            // MUT"),
     ("M32", HOOK, "a first assessment is armed at zero, leaving every new price free for the window",
-     "        } else if (old != 0) {", "        } else {"),
+     # REPAIRED 2026-09-02: Phase 9 added `&& !promoted` and this case has not run since.
+     "        } else if (old != 0 && !promoted) {", "        } else {"),
     ("M33", HOOK, "the firm quote keeps the NEW price rather than the lower of the two",
      "            l.firmPrice = old < newPrice ? old : newPrice;", "            l.firmPrice = newPrice;"),
     ("M34", HOOK, "repricing does not reset the rent clock",
@@ -140,14 +147,21 @@ MUTS = [
     ("M37", HOOK, "the buyer's price cap is not enforced",
      "        if (price > maxPrice) revert PriceAboveMax(price, maxPrice);", "        // MUT"),
     ("M38", HOOK, "the buyout does not settle the seller's rent first",
-     "        _settleSeat(seatId);\n\n        address holder = seatHolder[seatId];", "        address holder = seatHolder[seatId];"),
+     # REPAIRED 2026-09-02: Phase 9 inserted the rank guards between `_settleSeat` and the holder
+     # read, so the old two-line pattern stopped matching. Anchored on the comment above the call,
+     # which belongs to `_buySeat` alone.
+     "        // then pays whatever the seat is actually worth after that, not before it.\n"
+     "        _settleSeat(seatId);",
+     "        // then pays whatever the seat is actually worth after that, not before it.\n"
+     "        // MUT: the seller's rent is not settled before the sale"),
     ("M39", HOOK, "the seller is not credited the sale price",
      "            pending0[holder] += price;\n            pendingTotal0 += price;",
      "            pendingTotal0 += price;"),
     ("M40", HOOK, "the sale price is not added to the float that backs the claim",
      "            float0 += price;", "            // MUT"),
     ("M41", HOOK, "the firm quote is not armed at what the buyer paid",
-     "        paidForSeat = price;\n        _moveSeat", "        _moveSeat"),
+     # REPAIRED 2026-09-02: Phase 9's `buySeatAndFund` inserted `fundOnTransfer0/1` between these.
+     "        paidForSeat = price;\n        fundOnTransfer0", "        fundOnTransfer0"),
     ("M42", HOOK, "buying your own seat is allowed",
      "        if (holder == msg.sender) revert CannotBuyOwnSeat(seatId);", "        // MUT"),
     ("M43", HOOK, "the buyer's own assessment is not applied",
@@ -325,7 +339,9 @@ MUTS = [
     # current source, and it is what this mutation now does.
     ("M82", HOOK, "the seats a fill PAID are not excluded from the pot they generated, so the head is "
                   "handed back a share of its own payment",
-     "        _settlePremium(ord, start, next, outIsOne, amtIn - st.amtIn);",
+     # REPAIRED 2026-09-02 (Phase 10): `_settlePremium` now receives `i`, the rank one past the
+     # last TOUCHED, rather than the cursor `next`.
+     "        _settlePremium(ord, start, i, outIsOne, amtIn - st.amtIn);",
      "        _accruePremium(outIsOne, amtIn - st.amtIn, 0);"),
     ("M83", HOOK, "a seat's mark is only advanced when its claim was non-zero, so a claim that "
                   "floored away leaves the interval claimable AGAIN later against a bigger balance",
@@ -437,9 +453,39 @@ def run(ids, campaign=False):
             print(f"restored {os.path.relpath(path, ROOT)}", flush=True)
 
 
+def preflight(src, todo):
+    """Validate EVERY pattern against the source BEFORE running a single case.
+
+    **A BAD-PATTERN IS AN UNRUN CASE, NEVER A PASS, AND A TRUNCATED RUN USED TO HIDE THAT.**
+    Phase 9's campaign was interrupted at 30 of 85 and reported `0 BAD-PATTERN` — true of the 30 it
+    reached and silent about the 55 it did not. Three cases (M32, M38, M41) had in fact been
+    disarmed by Phase 9's own edits and did not run again until Phase 10, which is two phases of a
+    free firm-quote window, a buyout that skips the seller's rent settlement, and a firm quote not
+    armed at what the buyer paid, all going untested.
+
+    Patterns are literal source text, so ANY edit to `src/` can silently disarm one. Checking them
+    all up front costs milliseconds and makes the failure loud at second zero instead of at the case
+    that may never be reached. Prose did not prevent this (AGENTS §3b: prose is not an interlock);
+    this does.
+    """
+    broken = [(mid, desc, src[path].count(find)) for mid, path, desc, find, _ in todo
+              if src[path].count(find) != 1]
+    if broken:
+        print("==== PREFLIGHT FAILED: patterns that do not match the source EXACTLY ONCE ====")
+        for mid, desc, n in broken:
+            print(f"  {mid:5} ({n} matches)  {desc}", flush=True)
+        print("\nThese cases CANNOT RUN. A BAD-PATTERN is an unrun case, never a pass.")
+        print("Re-point each pattern at the current source, then re-run.")
+        print("Check the source with `git show HEAD:src/queue/QueueHook.sol`, NOT the working tree,")
+        print("in case something is already holding a mutant there.")
+    return broken
+
+
 def _run(src, disk, ids, campaign):
     results = []
     todo = [m for m in MUTS if not ids or m[0] in ids]
+    if preflight(src, todo):
+        return 2
     for mid, path, desc, find, repl in todo:
         original = src[path]
         # Before touching the file, confirm it is still what we last left there. If it is not,

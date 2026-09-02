@@ -118,6 +118,41 @@ computation. Full derivation and the conditions under which it is exact:
 | ~~a keeper bot at its best width~~ **RETRACTED — see §0.25. A handicapped bar: the only positive cell in a 105-cell grid** | ~~+0.57 pp~~ | ~~0.19 pp~~ → **≤ 0** | **no product** |
 | a keeper bot at 1% width | +74 pp | 24.7 pp | nobody rational runs that |
 
+### 0.35 🛑 PHASE 10 — AND THE CONSTRAINED BUYER IS NOW MEASURED TOO. §0.4 IS REFUTED.
+
+**§0.4 below says the product works for capital whose mandate forbids passive LPing. That was the
+last open door and it is now shut, by measurement rather than by argument. Read this before §0.4;
+§0.4 is kept only because it is what a reader will otherwise reconstruct for themselves.**
+
+The constrained buyer's alternative is not passive LPing — it is **paying to trade**: fee, price
+impact, gas, a keeper. So the right comparison is not a return, it is an **execution price**. In the
+only regime where such a buyer's order actually fills:
+
+```
+   who                       average price it BOUGHT at     vs doing it as a TAKER
+   an ordinary pro-rata LP            1906.99                      +136 bps   ← already better
+   QUEUE rank 1 (as shipped)          1932.41                      −108 bps
+   QUEUE rank 1 (front-loaded)        1981.82                      −340 bps
+                                        ▲
+                    the more priority you hold, the WORSE you buy
+```
+
+**An ordinary Uniswap range order already beats trading as a taker. Buying priority takes you from
++136 bps to −340.** Priority is worth roughly **minus 476 bps** to the person holding it.
+
+**Why, in one sentence a non-specialist can check:** being first in the queue means you are the first
+person the market trades against — so in a falling market you buy the whole way down, starting at the
+highest prices. Spreading your order across everyone (which is what an ordinary Uniswap position
+does) is the same thing as averaging in. **Front of the queue is not a privilege; it is the seat that
+absorbs the loss first.**
+
+**And there is no configuration that fixes it**, because it is not a tuning problem: putting more
+capital at the front makes the front fill even earlier, which makes its average price worse.
+
+**The general statement, which is the one to remember: a rank in the queue is the same economic
+object as a distance from the current price — and Uniswap already lets any LP choose that, for free,
+with no hook.** See [`FRONTIER.md`](docs/research/seat-economics/FRONTIER.md) and PITFALLS 5.160–5.162.
+
 ### 0.4 Which means: QUEUE only works for CONSTRAINED capital
 
 **Unconstrained capital — anyone chasing yield — can simply be a passive LP.** For them `B₁ ≥ LP`,

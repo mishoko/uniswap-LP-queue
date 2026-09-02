@@ -14,7 +14,7 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 
 ---
 
-# ⬛ BUILD STATUS — updated 2026-08-28
+# ⬛ BUILD STATUS — updated 2026-09-02 (Phase 10)
 
 **This table is the authoritative answer to "what is done".** Each completed phase also carries a
 ✅ block at its own §C section, and each exit criterion in those sections is ticked individually.
@@ -31,7 +31,8 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 | **6** | Adversarial + invariant campaign | ✅ **COMPLETE** 2026-08-28 | §D.8 PASS | all 5 criteria; 11 invariants x 256 runs x 64 depth; **3 REAL BUGS FOUND AND FIXED** (PITFALLS 5.73, 5.74, 5.76/5.77); 66 mutations red, **0 survivors** |
 | **7** | Testnet + demo + video | 🟨 **IN PROGRESS** 2026-08-29 | §D.9 | Deploy script + demo built and **fork-verified against live Unichain Sepolia**; frontend built; `pool()` disclosure added; §5.17's orthogonality claim PROVEN; **broadcast and video still outstanding** |
 | **8** | Evacuation + premium hold branch | ✅ **COMPLETE** 2026-09-02 | — | 248 tests; five defects found and fixed; 80 mutations RED, 0 survivors; invariant campaign green at φ > 0 for the first time. **Left TWO evacuation doors OPEN — PITFALLS 5.123** |
-| **9** | The value question, answered in closed form | 🟨 **IN PROGRESS** 2026-09-02 | — | **`SLACK = c₁·(LP − B₁)`** derived and confirmed to 2.4e-16 — the mechanism's entire value, independent of `N`, the ordering rule and φ (PITFALLS 5.137, `docs/research/seat-economics/FRONTIER.md`). The published φ windows were measured against a **handicapped competitor** (5.136) and the shipped φ = 7,900 sat in an empty one. Security: a **THIRD** evacuation door found and executed (sybil buyout, +267 bps); **INVARIANT L breaks by 20% of the position on an ordinary buyout, in band, on committed HEAD**; the exit path of a fixed-term instrument had zero coverage until this phase |
+| **10** | Value question CLOSED; all four open defects fixed | ✅ **COMPLETE** 2026-09-02 | — | **311 tests, 0 failed.** The bricked pool + the premium erasure were ONE bug; rent re-weighted to contributed depth; the fourth evacuation door shut. 11 tests INVERTED, 3 added. **The constrained-buyer door — the last one Phase 9 left open — closed by MEASUREMENT: priority costs its holder ~476 bps** (PITFALLS 5.160) |
+| **9** | The value question, answered in closed form | ✅ **COMPLETE** 2026-09-02 | — | **`SLACK = c₁·(LP − B₁)`** derived and confirmed to 2.4e-16 — the mechanism's entire value, independent of `N`, the ordering rule and φ (PITFALLS 5.137, `docs/research/seat-economics/FRONTIER.md`). The published φ windows were measured against a **handicapped competitor** (5.136) and the shipped φ = 7,900 sat in an empty one. Security: a **THIRD** evacuation door found and executed (sybil buyout, +267 bps); **INVARIANT L breaks by 20% of the position on an ordinary buyout, in band, on committed HEAD**; the exit path of a fixed-term instrument had zero coverage until this phase |
 
 **⚠ THE TWO NUMBERS BELOW WERE STALE FOR TWO PHASES — 183 was the Phase 7 count and this dashboard
 still carried it after Phase 8 took the suite to 248. Recorded rather than quietly corrected, because

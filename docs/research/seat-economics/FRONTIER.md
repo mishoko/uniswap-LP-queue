@@ -49,6 +49,51 @@
 > is unknown. Anyone re-opening this must size the path count to resolve `LP − B₁` first, or accept
 > that the answer comes from the identity alone.
 >
+> ---
+>
+> ## 🛑 PHASE 10 — THE LAST DOOR IS NOW CLOSED TOO, AND IT WAS CLOSED BY MEASUREMENT.
+>
+> Everything above rests on an OUTSIDE-OPTION argument: `B₁ ≥ LP`, so no *unconstrained* party will
+> fund rank 1. It explicitly leaves one buyer unpriced — **a party whose mandate forbids passive
+> LPing and whose alternative is paying taker cost** — and calls that "a conversation, not a build".
+>
+> **That party has now been measured, and it is worse off as well.** In TOXIC-DN, the only regime in
+> which such a buyer's mandate is actually fillable (`conv>0 = 1.00`; in BENIGN and NORMAL only about
+> half the paths convert in the wanted direction at all, so the statistic is undefined):
+>
+> ```
+>     who                     avg price it BOUGHT at     vs a TWAP taker      SE
+>     pro-rata LP                    1906.99                +135.9 bps       12.9
+>     SHIPPED   rank 0               1932.41                −108.2 bps       16.5
+>     two-ended rank 0               1981.82                −340.1 bps        9.9
+> ```
+>
+> **Monotone in how much priority you hold.** A plain range order ALREADY beats the taker by +136 bps;
+> adding priority costs roughly **−476 bps** against the pro-rata position it displaces.
+>
+> **The reason is physical rather than parametric, which is why no configuration rescues it.**
+> Pro-rata spreads a fill across the whole move — *a pro-rata range order IS a TWAP*. Front-of-queue
+> concentrates the fill at the FIRST prices of a move, which for a buyer in a down-move are the
+> HIGHEST ones. **Being first in an AMM queue is absorbing the adverse selection first.** An end-heavy
+> capital schedule makes it worse, not better, by putting rank 0 further forward.
+>
+> **THE CONTROL THAT SETTLES IT COULD HAVE FALSIFIED THE HEADLINE** (LAW 5, first corollary). A
+> monotone accumulator is long delta, so a genuine mechanism gain must SURVIVE a mirrored drift while
+> a direction bet must FLIP. Paired path-by-path: TOXIC `+4.487 pp` (t = +61.96), TOXIC-DN
+> `−1.277 pp` (t = −20.10). **It flips.**
+>
+> **AND THE GENERAL FORM, which is the sentence to hand the next person who re-opens this:**
+> **rank is distance from spot.** Front of queue ≈ liquidity nearest spot (fills first and most,
+> worst prices); back of queue ≈ liquidity far from spot (fills rarely, best prices). Uniswap's tick
+> structure already sells that choice, for free, with no hook. The one axis on which rank is genuinely
+> new is that it sorts by **trade SIZE** — and trade size is forgeable by splitting a quantity, which
+> is `AGENTS.md` §6's proven-impossible rule wearing a new hat.
+>
+> Evidence: `results-book.txt` §5 and its integrity section §0–§1 (transcription bit-identical 48/48,
+> N=1 known-answer 1.8e-14, `tie_out` clean on all 1,920 runs). PITFALLS 5.160–5.162.
+>
+> ---
+>
 > **CONCLUSION: no ordering rule, no φ, no roster, no band width and no capital schedule can make
 > this mechanism create surplus for its participants.** The identity forbids it and the outside
 > option caps it. What remains is a redistribution with a real cost attached (+119% gas), and the

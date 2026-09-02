@@ -19,11 +19,91 @@ Newest entry first. Never delete an entry — supersede it.
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
 | 8 | Evacuation attack + premium hold branch | **CODE COMPLETE 2026-09-02** | **PARTLY** — 242 tests. `withdraw` now demotes; `_accruePremium` releases incrementally. **TWO EVACUATION DOORS REMAIN OPEN — PITFALLS 5.123.** |
+| 10 | Value question CLOSED + all four open defects fixed | **COMPLETE 2026-09-02** | **YES** — 311 tests, 0 failed. Four defects fixed at the root, 11 tests inverted, 3 new. The constrained-buyer door closed by MEASUREMENT (PITFALLS 5.160) |
+| 9 | Evacuation doors + the closed-form surplus | **COMPLETE 2026-09-02** | **PARTLY** — 308 tests. Ten defects found; four left OPEN and all four are now closed by Phase 10 |
 | 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-02** | **PARTLY** — 224 tests. **THE MECHANISM IS SOUND AND THE BUSINESS CASE IS MISSING** — the 32 seats share one LP position, so they can at best TIE with not using the hook; the priority premium fixed the distribution (29/32 losing → 0/32) but creates no reason to participate. Next session is a BRAINSTORM for an outside payer, not a build. See `docs/research/seat-economics/VALUE.md`. Earlier note: 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
 
 ---
+
+## PHASE 10 — 2026-09-02. THE LAST DOOR CLOSED, AND ALL FOUR OPEN DEFECTS FIXED AT THE ROOT.
+
+**Status: COMPLETE. Suite 311 passed / 0 failed / 1 skipped. Read `PITFALLS.md` 5.160–5.171.**
+
+### 1. The value question is now fully closed, and this session closed the half Phase 9 left open
+
+Phase 9 proved `B₁ ≥ LP`, so **unconstrained** capital will never fund rank 1. It explicitly left one
+buyer unpriced — a party whose mandate forbids passive LPing, whose alternative is paying taker cost
+— and called that "a conversation, not a build". **It was measurable, it was measured, and that buyer
+is worse off too.**
+
+TOXIC-DN, the only regime where such a mandate is fillable (`conv>0 = 1.00`):
+
+| who | avg price it BOUGHT at | vs a TWAP taker | SE |
+|---|---|---|---|
+| pro-rata LP | 1906.99 | **+135.9 bps** | 12.9 |
+| SHIPPED rank 0 | 1932.41 | **−108.2 bps** | 16.5 |
+| two-ended-book rank 0 | 1981.82 | **−340.1 bps** | 9.9 |
+
+**Monotone in priority.** A plain range order already beats the taker; priority costs ~**−476 bps**
+against the pro-rata position it displaces. Front-of-queue concentrates the fill at the *first* prices
+of a move, which for a buyer in a down-move are the *highest*. **A pro-rata range order IS a TWAP;
+priority is what destroys that.**
+
+**The control that settles it could have falsified the headline** (LAW 5, first corollary): a monotone
+accumulator is long delta, so a real gain must survive a mirrored drift and a direction bet must flip.
+Paired path-by-path: TOXIC `+4.487 pp` (t = +61.96), TOXIC-DN `−1.277 pp` (t = −20.10). **It flips.**
+
+**General form, for whoever re-opens this: RANK IS DISTANCE FROM SPOT** — front ≈ liquidity nearest
+spot, back ≈ liquidity far from it. Uniswap's ticks already sell that choice for free. The one novel
+axis is that rank sorts by **trade size**, which is forgeable by splitting — `AGENTS.md` §6's
+proven-impossible rule in a new hat.
+
+**A two-ended book (one roster read from both ends, so rank 0 is a monotone accumulator) was designed,
+simulated and KILLED by the numbers above.** It is not built and must not be.
+
+### 2. All four OPEN defects fixed at the root — no labels, no bandaids
+
+| # | defect | resolution |
+|---|---|---|
+| 5.152 + the maturity brick | **They were ONE bug.** `_settlePremium` took the CURSOR as its payer range, so it advanced the mark of a seat the walk never visited (7.17e19 wei erased); and a whole-book fill left `standingL − lTouched == 0`, so the pot was HELD forever, the ledger went short, and `_afterSwap` reverted `QueueUnderflow` — a bricked pool | `_allocate` hoists its loop variable (no new local — it is at the stack limit); `_settlePremium` gained a `sweptBook` branch that distributes over full `standingL` and moves NO marks, and is now `virtual`. **"The payer does not pay itself" has no meaning on a fill that swept the whole book.** 4 mutations RED |
+| 5.168 | `_distributeRent` weighted by `a0` — the one quantity front-first allocation destroys. Above the band **one wei took the entire pot** | Both loops read `liquidity`. `w == 1` special-case considered and REJECTED (patches a symptom; an attacker sits one wei above any threshold). Both copies mutated SEPARATELY: 7 RED / 21 RED |
+| 5.154 | The fourth evacuation door. A payout the FLOAT covers burns nothing, so nothing was demoted while the whole balance left | **RESOLVED AGAINST 5.130's refinement: any payout costs the rank.** Every alternative needs a price-dependent valuation of principal, under which an honest front seat is demoted for its MARKOUT LOSSES — 5.130 one level deeper, not a fix |
+| — | New `test_8_10`: the demotion rule has TWO LEGS and each is now asserted directly. `p0`-only was caught by exactly ONE test, `p1`-only by two | The family's eighth appearance (5.37, 5.50, 5.52 ×2, 5.73, 5.125, 5.132) |
+
+**Eleven tests asserted the defect as the specification and were INVERTED, not deleted.** The headline
+is `test_M7f`, which asserted *"after the exit every swap that could reach the pot reverts"* and now
+asserts the pool still swaps.
+
+### 3. Things that went right, and are worth copying
+
+* **`test_M2`'s one-wei clamp was diagnosed, not papered over** — it is the terminal §E.4 residue, and
+  the test now asserts a STRONGER claim: a clamp may occur at most once, and only with position,
+  float and liquidity all at zero.
+* **The gas slope moved 19,280 → 18,448 and was RE-DERIVED, not widened** — a φ=0 control, where
+  `_accruePremium` is byte-identical either side, isolates the saving to the skipped mark loop. The
+  magnitude is recorded **UNPROVEN** (a naive opcode count gives a few hundred, not 833) rather than
+  dressed up, and a stale attribution elsewhere in the file is flagged instead of silently rewritten.
+* **A control that stopped being able to fail was RE-ARMED, not relaxed** (5.167). The rent
+  re-weighting killed the flash-loan grab outright — it returned *exactly* the honest share — so
+  `test_4_14` now attacks with a two-token borrowed deposit, which still mints real depth.
+* **New `RentDecimals.t.sol`** — LAW 1 for a single-currency flow means both DECIMAL ASSIGNMENTS of
+  that currency, not both branches. The predicted 5.124-shaped hazard turned out **not to exist**
+  (the `L`s cancel); the test was written anyway and both directions catch both mutations.
+
+### 4. Process failures, recorded while they are cheap
+
+* **5.166 — an agent stashing for a clean gas baseline looked exactly like destroyed work.** `git
+  status` showed the whole tree gone with `git log` unchanged. The one-line diagnostic is `git stash
+  list`. Remedy: use a git WORKTREE or `git show HEAD:path`, never a stash, for a baseline read.
+* **I ran `forge` while a teammate still held the tree, and measured a mutant against the WRONG test
+  suite** (309 tests instead of 346). That is 5.79's corollary, violated by the person who had just
+  written 5.166 about the same class of hazard. **Stop the agents before taking the toolchain.**
+* **My own headline thesis was refuted by my own commissioned measurement, mid-session.** The
+  two-ended book was argued from first principles, looked strong, and was wrong. It cost one panel and
+  saved a build.
+
 
 ## PHASE 9 — 2026-09-02. THE VALUE QUESTION, ANSWERED IN CLOSED FORM. AND FOUR RETRACTIONS, ALL IN OUR OWN FAVOUR.
 
