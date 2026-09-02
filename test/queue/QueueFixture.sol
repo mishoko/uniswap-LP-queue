@@ -545,13 +545,25 @@ abstract contract QueueFixture is BaseTest {
         }
         require(owed == 0, "reference underflow");
 
+        // **THE CURSOR AND THE PAYER SET ARE TWO DIFFERENT NUMBERS AND THEY ARE NOW COMPUTED
+        // SEPARATELY. That separation IS the fix this witness models.**
+        //
         // `adv` is the hook's `next`: the last rank the fill reached, or ONE PAST it when that seat
-        // was exactly exhausted. It is the cursor AND the far end of the payer set, and the two
-        // meanings coming apart is what §7 of the spec is about — see `_refAccrue`.
+        // was exactly exhausted. It is a CURSOR — where the next fill in this direction starts.
+        // Handing it to the premium as the far end of the payer set was the erasure defect: on an
+        // exact exhaustion it names a rank the walk never visited, and marking that rank destroys
+        // its claim on every EARLIER accrual (`test_W6`/`test_W7`, 7.17e19 wei).
+        //
+        // `payerEnd` is the hook's `i` on loop exit: ONE PAST the last rank actually touched, in
+        // every case, exhausted or not. The payer set is `[begin, payerEnd)` — a half-open range,
+        // written that way here rather than as an inclusive `last` because `touchedAny == false`
+        // would underflow an inclusive form at `begin == 0`.
         uint256 adv = begin;
+        uint256 payerEnd = begin;
         if (touchedAny) {
             uint256 lastId = refOrder[lastIdx];
             adv = (outIsOne ? ref1[lastId] : ref0[lastId]) == 0 ? lastIdx + 1 : lastIdx;
+            payerEnd = lastIdx + 1;
             if (outIsOne) {
                 refC1 = adv;
                 if (begin < refC0) refC0 = begin;
@@ -560,7 +572,7 @@ abstract contract QueueFixture is BaseTest {
                 if (begin < refC1) refC1 = begin;
             }
         }
-        _refAccrue(outIsOne, pot, begin, adv);
+        _refAccrue(outIsOne, pot, begin, payerEnd);
     }
 
     /// @dev What one seat is credited. Split out of `_refAllocate` only because that function is at
@@ -705,26 +717,41 @@ abstract contract QueueFixture is BaseTest {
 
     /// @notice The witness's copy of `_settlePremium` + `_accruePremium`, written from the rule.
     ///
-    /// @dev `adv` is the hook's `next`. The payer set is ranks **[begin, last] INCLUSIVE**, with
-    ///      `last = min(adv, n-1)` — the seats this fill just paid do not pay themselves.
+    /// @dev `payerEnd` is the hook's `i` on loop exit: ONE PAST the last rank the fill actually
+    ///      touched. The payer set is ranks **[begin, payerEnd)** — the seats this fill just paid do
+    ///      not pay themselves. It used to be the hook's `next`, which is a CURSOR and is one past
+    ///      the walk on an exact exhaustion; the witness modelled that faithfully, counted the
+    ///      resulting destruction of an untouched seat's claim in `refErased0/1`, and `test_W6`/
+    ///      `test_W7` measured it at 7.17e19 wei. The hook no longer hands the cursor over, so
+    ///      **`refErased` should now stay at zero for every fill** — it is kept, not deleted,
+    ///      because a counter that reads zero because a defect is fixed is evidence, and one that
+    ///      starts reading non-zero again is the regression alarm.
     ///
-    ///      **THE SECOND LOOP IS NOT AN AFTERTHOUGHT.** `_settlePremium` advances the payers' marks
-    ///      whether or not anything accrued, because it runs after `_accruePremium` returns and does
-    ///      not look at what that call decided. And when the last seat the fill reached was EXACTLY
-    ///      exhausted, `adv` is one PAST the walk — so the seat at that rank has its mark advanced
-    ///      having never been settled. Anything it had already earned is not deferred anywhere: it
-    ///      is not in `premiumHeld`, it is not claimable by anyone else, and it stays in
-    ///      `premiumOwed` forever. The witness models that faithfully — it must, or the split
-    ///      comparison would be measuring the wrong contract — and COUNTS it in `refErased0/1` so
-    ///      the quantity has a name instead of hiding inside a residual.
-    function _refAccrue(bool outIsOne, uint256 pot, uint256 begin, uint256 adv) internal {
+    ///      **THE THREE BRANCHES, AND WHY THE MIDDLE ONE EXISTS.**
+    ///
+    ///        * `excluded == refStandingL` and there IS depth — the fill reached every standing
+    ///          seat. "The payer does not pay itself" has no meaning here: there is no seat that did
+    ///          not pay, so there is no seat the rule protects. The pot is divided over the FULL
+    ///          `refStandingL`, everybody included, **and no mark moves** — full denominator plus
+    ///          unmoved marks is the only self-consistent pairing, exactly as in `_settlePremium`.
+    ///          Modelling the old HOLD here would make the witness agree with a contract that
+    ///          bricks (`test_M7f`).
+    ///        * `refStandingL == 0` — genuinely nobody to pay, because nobody has contributed
+    ///          depth. HELD, folded into the next accrual that has a recipient, never destroyed
+    ///          (`test_7_12`/`test_7_13`, and control N8 for what dropping it looks like).
+    ///        * otherwise — the ordinary exclusion.
+    ///
+    ///      **THE MARK LOOP IS NOT AN AFTERTHOUGHT.** On the ordinary branch `_settlePremium`
+    ///      advances the payers' marks whether or not anything accrued, because it runs after
+    ///      `_accruePremium` returns and does not look at what that call decided.
+    function _refAccrue(bool outIsOne, uint256 pot, uint256 begin, uint256 payerEnd) internal {
         uint256 n = refOrder.length;
         if (n == 0) return;
-        uint256 last = adv < n ? adv : n - 1;
+        if (payerEnd > n) payerEnd = n;
 
         bool[] memory payer = new bool[](refL.length);
         uint256 excluded;
-        for (uint256 r = begin; r <= last; r++) {
+        for (uint256 r = begin; r < payerEnd; r++) {
             uint256 id = refOrder[r];
             payer[id] = true;
             excluded += refL[id];
@@ -738,10 +765,33 @@ abstract contract QueueFixture is BaseTest {
             refWLast1 = w;
         }
 
+        // THE WHOLE-BOOK SWEEP. Full denominator, everybody paid, marks untouched — so this returns
+        // BEFORE the mark loop at the bottom, which is the half that makes it conserve.
+        if (w == 0 && refStandingL != 0) {
+            if (total == 0) return;
+            if (outIsOne) {
+                refHeld0 = 0;
+            } else {
+                refHeld1 = 0;
+            }
+            for (uint256 id; id < refL.length; id++) {
+                if (refL[id] == 0) continue;
+                uint256 share = FullMath.mulDiv(total, refL[id], refStandingL);
+                if (outIsOne) {
+                    refPend0[id] += share;
+                    refK0[id] += 1;
+                } else {
+                    refPend1[id] += share;
+                    refK1[id] += 1;
+                }
+            }
+            return;
+        }
+
         if (total != 0) {
             if (w == 0) {
-                // Nobody standing behind this fill. The wei has left the allocation, so it is HELD
-                // and folded into the next accrual that has a recipient — never destroyed
+                // Nobody has contributed depth at all. The wei has left the allocation, so it is
+                // HELD and folded into the next accrual that has a recipient — never destroyed
                 // (test_7_12 / test_7_13, and control N8 for what dropping it looks like).
                 if (outIsOne) {
                     refHeld0 = total;
@@ -779,7 +829,7 @@ abstract contract QueueFixture is BaseTest {
             }
         }
 
-        for (uint256 r = begin; r <= last; r++) {
+        for (uint256 r = begin; r < payerEnd; r++) {
             uint256 id = refOrder[r];
             if (outIsOne) {
                 refErased0 += refPend0[id];
@@ -1336,6 +1386,55 @@ abstract contract QueueFixture is BaseTest {
         }
         if (rank < refC0) refC0 = rank;
         if (rank < refC1) refC1 = rank;
+    }
+
+    /// @notice Drive the pool into the ONE state in which a premium pot is genuinely HELD:
+    ///         `standingL == 0` while the seats hold inventory and the pool still quotes depth.
+    ///
+    /// @dev **THIS IS NOT A BACK DOOR. Every step is an ordinary external call any address may
+    ///      make**, and the state it lands in is a real one the product can reach.
+    ///
+    ///      Since the whole-book-sweep fix, `_accruePremium`'s HOLD branch is reachable through
+    ///      exactly one condition: `w == standingL - excludedL == 0` with `excludedL == 0`, i.e.
+    ///      `standingL == 0`. A fill that reaches every standing seat no longer holds — it
+    ///      distributes over the full denominator (that was the brick, `test_M7f`). So a test that
+    ///      wants the hold path has to reach a pool where **nobody has contributed depth** and yet
+    ///      there is depth to trade against and seats to fill. The route:
+    ///
+    ///        1. every seat withdraws everything, which burns its liquidity and charges the burn
+    ///           against its own contribution;
+    ///        2. every seat re-funds SINGLE-SIDED. An in-range deposit with one leg at zero mints
+    ///           ZERO liquidity — `_liquidityForAmounts` takes the binding leg — so it lands in the
+    ///           float whole while the seat is credited every wei;
+    ///        3. `sweepFloatIntoPosition()` — permissionless, and it CREDITS NOBODY — turns that
+    ///           float into position depth counted as `liquidityUnattributed`;
+    ///        4. and once more, because the first exit leaves a handful of units of contribution
+    ///           behind against the §E.4 shortfall, and it takes a second burn to charge them down.
+    ///
+    ///      The end state is asserted rather than hoped for: a caller that silently failed to reach
+    ///      `standingL == 0` would be testing the ordinary accrual path while claiming to test the
+    ///      hold (PITFALLS 5.54).
+    /// @param n the roster size.
+    /// @param a0 / @param a1 the single-sided top-ups, one per leg, per seat.
+    function _driveStandingLToZero(uint256 n, uint256 a0, uint256 a1) internal {
+        for (uint256 round; round < 2; round++) {
+            for (uint256 i; i < n; i++) {
+                (uint256 b0, uint256 b1) = hook.seat(i);
+                if (b0 != 0 || b1 != 0) _withdrawTracked(i, b0, b1);
+            }
+            for (uint256 i; i < n; i++) {
+                address who = hook.ownerOf(i);
+                if (a0 != 0) _addTo(who, i, a0, 0);
+                if (a1 != 0) _addTo(who, i, 0, a1);
+            }
+            hook.sweepFloatIntoPosition();
+        }
+
+        (uint256 standingL_,,) = hook.liquidityTotals();
+        require(standingL_ == 0, "fixture: standingL is not zero -- the hold branch was not reached");
+        require(hook.positionLiquidity() != 0, "fixture: the pool quotes no depth -- no fill can happen");
+        (uint256 t0, uint256 t1) = hook.totals();
+        require(t0 != 0 && t1 != 0, "fixture: the roster is not standing in both tokens");
     }
 
     /// @dev Withdraw and keep the witness in step. `withdraw` pays `min(face, available)`, so the

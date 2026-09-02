@@ -52,14 +52,31 @@ import {console} from "forge-std/console.sol";
 ///      where a real pool with any wing at all comes to rest. `_matureDown`/`_matureUp` assert
 ///      STRICT exit (`tick < tickLower`, `tick >= tickUpper`) so no test here can pass while the
 ///      price is still in the band.
-/// @dev **CONTROL — the premium's payer exclusion, DELETED, and nothing else.** `_accruePremium` is
-///      `virtual` for exactly this purpose. Production removes the weight of the ranks the fill just
-///      paid from the denominator, which on a fill that reaches the tail removes ALL of it and takes
-///      the `w == 0` hold branch. This subclass passes `0` for `excludedL` instead, so the same
-///      terminal fill accrues normally and `test_M7`'s assertions MUST go red against it. Without
-///      this control, "the accumulator did not move" could be a property of the fixture rather than
-///      of the exclusion, and the finding would rest on reading the source.
-contract NoExclusionQueueHook is QueueHarness {
+/// @dev **CONTROL — THE `sweptBook` BRANCH OF `_settlePremium`, DELETED, AND NOTHING ELSE.**
+///
+///      **THIS SUBCLASS HAS BEEN REPLACED AND THE REASON IS THE ONE THIS PROJECT KEEPS PAYING FOR.**
+///      It used to override `_accruePremium` to pass `0` for `excludedL` — the payer exclusion,
+///      deleted — and `test_M7d` used it to prove `test_M7`'s stranding assertions were falsifiable.
+///      Production now passes `0` ITSELF on a whole-book sweep, which is exactly the terminal fill
+///      `test_M7` drives, so that subclass became an EQUIVALENT MUTANT of the fix: it produced a
+///      contract that behaves identically to production on the only fill the test makes, and a
+///      control that cannot fail reads as coverage. That is the third time on this project
+///      (`CompoundingPremiumHook` in Phase 8, PITFALLS 5.128a; M86 in 5.135; `UnfixedTransferQueueHook`
+///      below).
+///
+///      What replaces it removes the branch instead of duplicating it. `_settlePremium` is
+///      `virtual`; this override is production's body with the two `sweptBook` lines taken out, so
+///      a fill that reaches every standing seat once again excludes every one of them, `w` is zero
+///      to the wei, and `_accruePremium` takes its HOLD branch. **That is the pre-fix contract, and
+///      `test_M7d` asserts what it does: the pot is held whole, no seat can claim a wei of it, and
+///      once the roster exits the pool is BRICKED.** `test_M7`, `test_M7f` and `test_M13` are
+///      therefore falsifiable, which is the only thing that makes them findings rather than
+///      observations about a fixture.
+///
+///      The mark loop is kept EXACTLY as production has it, because the two halves of the exclusion
+///      have to agree and moving one without the other strands the money a different way — see
+///      `_settlePremium`'s own docblock. One divergence, not two (PITFALLS 5.105).
+contract NoSweptBookQueueHook is QueueHarness {
     constructor(
         IPoolManager pm,
         Currency c0_,
@@ -74,8 +91,30 @@ contract NoExclusionQueueHook is QueueHarness {
         uint256 pb
     ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
-    function _accruePremium(bool inIsZero, uint256 pot, uint256) internal override {
-        super._accruePremium(inIsZero, pot, 0);
+    function _settlePremium(uint256 ord, uint256 start, uint256 touchedEnd, bool outIsOne, uint256 pot)
+        internal
+        override
+    {
+        uint256 last = touchedEnd - 1;
+
+        uint256 lTouched;
+        for (uint256 i = start; i <= last; i++) {
+            lTouched += q[_idAt(ord, i)].liquidity;
+        }
+
+        // THE MUTATION, and it is the whole of it: production tests `standingL == lTouched` here and
+        // passes `0` instead, returning before the mark loop. This does neither.
+        _accruePremium(outIsOne, pot, lTouched);
+
+        uint256 g = outIsOne ? premGrowth0 : premGrowth1;
+        for (uint256 i = start; i <= last; i++) {
+            Seat storage seat_ = q[_idAt(ord, i)];
+            if (outIsOne) {
+                seat_.snap0 = g;
+            } else {
+                seat_.snap1 = g;
+            }
+        }
     }
 }
 
@@ -424,27 +463,96 @@ contract MaturityTest is QueueFixture {
     ///      own claim in `test_M2c`, where it is asserted rather than dodged.
     /// @param liveIsZero which token the out-of-range position can still release.
     function _partialThenTheRest(string memory dir, bool liveIsZero) internal {
+        uint256 shortfalls;
         for (uint256 i; i < 5; i++) {
-            (uint256 a0, uint256 a1) = hook.seat(i);
-            uint256 live = liveIsZero ? a0 : a1;
-            assertGt(live, 1, "nothing happened: this seat holds no live-side balance");
-            uint256 half = live / 2;
-
-            (uint256 p0, uint256 p1) = _wd(i, liveIsZero ? half : 0, liveIsZero ? 0 : half, string.concat(dir, " half"));
-            assertEq(liveIsZero ? p0 : p1, half, "a partial live-leg request out of band was clamped");
-
-            // ...and the seat still holds the rest, to the wei. The IDENTITY, not a bound: the seat
-            // is debited by what was PAID and by nothing else.
-            (uint256 r0, uint256 r1) = hook.seat(i);
-            assertEq(r0, a0 - p0, "the seat was debited more token0 than it was paid");
-            assertEq(r1, a1 - p1, "the seat was debited more token1 than it was paid");
-
-            uint256 rest = liveIsZero ? r0 : r1;
-            (p0, p1) = _wd(i, liveIsZero ? rest : 0, liveIsZero ? 0 : rest, string.concat(dir, " rest"));
-            assertEq(liveIsZero ? p0 : p1, rest, "the second tranche was clamped");
+            shortfalls += _twoTranches(i, dir, liveIsZero);
         }
+        // **AT MOST ONE TRANCHE IN THE WHOLE ROSTER MAY FALL SHORT, AND ONLY THE LAST ONE.** A
+        // clamp that appeared twice would not be the terminal §E.4 residue; it would be a payout
+        // path that under-delivers, and this loop would not be able to tell the difference without
+        // this line.
+        assertLe(shortfalls, 1, "more than one tranche was clamped: this is not the terminal residue");
+        console.log("tranches short of face by the terminal residue", shortfalls);
         _checkInvariantF(string.concat(dir, " after partial withdrawals"), 1_000);
         _checkInvariantL(string.concat(dir, " after partial withdrawals"));
+    }
+
+    /// @dev One seat's two tranches, in its own frame: `_partialThenTheRest` is at the stack limit
+    ///      without `via_ir` and the shortfall counter is the local that tips it over.
+    function _twoTranches(uint256 i, string memory dir, bool liveIsZero) internal returns (uint256) {
+        (uint256 a0, uint256 a1) = hook.seat(i);
+        uint256 live = liveIsZero ? a0 : a1;
+        assertGt(live, 1, "nothing happened: this seat holds no live-side balance");
+        uint256 half = live / 2;
+
+        (uint256 p0, uint256 p1) = _wd(i, liveIsZero ? half : 0, liveIsZero ? 0 : half, string.concat(dir, " half"));
+        assertEq(liveIsZero ? p0 : p1, half, "a partial live-leg request out of band was clamped");
+
+        // ...and the seat still holds the rest, to the wei. The IDENTITY, not a bound: the seat is
+        // debited by what was PAID and by nothing else.
+        (uint256 r0, uint256 r1) = hook.seat(i);
+        assertEq(r0, a0 - p0, "the seat was debited more token0 than it was paid");
+        assertEq(r1, a1 - p1, "the seat was debited more token1 than it was paid");
+
+        uint256 rest = liveIsZero ? r0 : r1;
+        (p0, p1) = _wd(i, liveIsZero ? rest : 0, liveIsZero ? 0 : rest, string.concat(dir, " rest"));
+        return _assertPaidInFullOrNothingWasLeft(liveIsZero ? p0 : p1, rest, liveIsZero);
+    }
+
+    /// @notice **A TRANCHE IS PAID IN FULL, OR THERE WAS NOTHING ANYWHERE LEFT TO PAY IT WITH.**
+    ///
+    /// @dev **THIS ASSERTION WAS `assertEq(paid, rest)` AND IT WENT RED BY EXACTLY ONE WEI ON THE
+    ///      LAST TRANCHE OF THE LAST SEAT, BELOW THE BAND ONLY. Diagnosed rather than widened, and
+    ///      the diagnosis is the reason the shape below is an identity and not a tolerance.**
+    ///
+    ///      Measured, seat by seat, below the band: seats 0-3 are paid both tranches to the wei.
+    ///      Seat 4 asks for `3944511495245597924`; the ENTIRE remaining position redeems for
+    ///      `3944511495245597923` and the float is empty, so `positionLiquidity` goes
+    ///      `20479677823723506557 -> 0` and `_positionValue` goes to zero with it. **Nothing was
+    ///      left behind. Face value simply exceeded redeemable value by one wei** — §E.4, and the
+    ///      case `_payOut`'s own docblock names: "Paying face exactly makes the LAST withdrawer's
+    ///      call revert; F1 spreads the residual over whoever withdraws instead of dumping it on
+    ///      them."
+    ///
+    ///      **WHY IT ONLY APPEARS BELOW THE BAND, since an asymmetry that is not explained is a
+    ///      defect that has not been found.** `_liquidityToCover` adds one unit of liquidity to
+    ///      cover the two truncations (`if (d != 0) d += 1`) and then clamps `d > liquidity`. Every
+    ///      earlier tranche leaves surplus position behind, so the `+1` survives and the release
+    ///      covers face; the FINAL draining request is the one where the clamp eats it. Above the
+    ///      band the last seat's live-leg face happens to land under redeemable and the clamp does
+    ///      not bite — an arithmetic accident of the direction, which is exactly what this
+    ///      function's own docblock warns mirrored pairs about.
+    ///
+    ///      **AND WHY IT WAS NOT VISIBLE BEFORE.** The terminal fill used to HOLD the whole premium
+    ///      pot, so the ledger sat ~0.0496e18 BELOW what the position could release and that slack
+    ///      absorbed the residue. The pot now reaches the roster (`test_M7`) and the ledger is tight
+    ///      against the position — total gap two wei over a 38.58e18 exit — so the residue has
+    ///      nowhere left to hide. Confirmed by running this test against the pre-fix contract, where
+    ///      it passes.
+    ///
+    ///      **THE ASSERTION, therefore, is `paid == rest` OR the position and the float were BOTH
+    ///      emptied by the attempt.** A payout that clamps while any capital remains — the defect
+    ///      this test exists to catch — goes red, because it would leave `positionLiquidity` or the
+    ///      live-leg value non-zero. Nothing here is widened: the equality is still asserted on
+    ///      every tranche that had anything left to draw on.
+    /// @return one if this tranche fell short, zero otherwise.
+    function _assertPaidInFullOrNothingWasLeft(uint256 paid, uint256 rest, bool liveIsZero)
+        internal
+        view
+        returns (uint256)
+    {
+        if (paid == rest) return 0;
+        assertLt(paid, rest, "the payout EXCEEDED the request");
+        assertEq(
+            uint256(hook.positionLiquidity()), 0, "the tranche was clamped while the position still held liquidity"
+        );
+        (uint256 f0, uint256 f1) = hook.floats();
+        assertEq(liveIsZero ? f0 : f1, 0, "the tranche was clamped while the float still held the token");
+        (uint256 pv0, uint256 pv1) = _positionValue();
+        assertEq(liveIsZero ? pv0 : pv1, 0, "the tranche was clamped while the position still held the token");
+        // The §E.4 bound is sub-wei per swap; a whole-roster exit cannot accumulate a tranche of it.
+        assertLe(rest - paid, 1_000, "the shortfall is capital, not the rounding residue");
+        return 1;
     }
 
     /// @notice **THE DEAD-SIDE RESIDUE IS UNPAYABLE, AND THAT IS DUST POLICY F1 RATHER THAN A
@@ -644,45 +752,43 @@ contract MaturityTest is QueueFixture {
     // 4. DO THE OTHER MECHANISMS STILL BEHAVE OUT OF BAND?
     // =============================================================================================
 
-    /// @notice **DEFECT-GRADE FINDING — THE TERMINAL FILL WITHHOLDS THE ENTIRE PREMIUM POT FROM
-    ///         EVERY SEAT THAT PAID IT, AND ONCE THE ROSTER WITHDRAWS IT CAN NEVER BE RELEASED TO
-    ///         ANYBODY.**
+    /// @notice **THE TERMINAL FILL PAYS THE WHOLE PREMIUM POT TO THE WHOLE ROSTER. THIS TEST USED
+    ///         TO ASSERT THE OPPOSITE, AND THE OPPOSITE WAS A BRICKED POOL.**
     ///
-    /// @dev The mechanism is `_settlePremium` doing exactly what it was written to do. It excludes
-    ///      the ranks the fill reached, `[start, next]`, from the accrual denominator, because
-    ///      including the boundary seat let a last-wei holder take an entire pot (`test_7_14`). A
-    ///      fill that reaches the TAIL therefore excludes EVERY rank, and `w = standingL - lTouched`
-    ///      is then ZERO to the wei — INVARIANT L says `standingL` IS the sum of the seats. So
-    ///      `_accruePremium` takes its `w == 0` branch, `premGrowth` does not move, and the whole
-    ///      pot lands in `premiumHeld`.
+    /// @dev **WHAT IT USED TO SAY, kept because the scenario it executes is the evidence the fix
+    ///      was needed.** `_settlePremium` excluded the ranks the fill reached, `[start, next]`,
+    ///      from the accrual denominator, because including the boundary seat let a last-wei holder
+    ///      take an entire pot (`test_7_14`). A fill that reaches the TAIL therefore excluded EVERY
+    ///      rank, and `w = standingL - lTouched` was ZERO to the wei — INVARIANT L says `standingL`
+    ///      IS the sum of the seats. So `_accruePremium` took its `w == 0` branch, `premGrowth` did
+    ///      not move, and the whole pot landed in `premiumHeld`.
     ///
-    ///      In the middle of an instrument's life that is a DEFERRAL and the comment in
-    ///      `_settlePremium` says so honestly: held pots fold forward into the next accrual. **At
-    ///      maturity there is no next accrual.** The fill that ends the instrument's life is, by
-    ///      construction, a fill that sweeps the whole queue — so the pot that is stranded is the
-    ///      pot skimmed off the single largest trade the pool will ever see.
+    ///      That was called a DEFERRAL. It was not one. **A held pot is money the position holds
+    ///      that `standing0`/`standing1` does not count**, so the ledger goes short of what the
+    ///      position can pay, and the next fill in the other direction cannot be sourced: it reverts
+    ///      `QueueUnderflow` from inside `_afterSwap`, which is a bricked pool rather than a lost
+    ///      wei. Measured in this exact state: the position held 4.9567e16 wei of token0 against
+    ///      2.573e17 of liquidity it could not trade (`test_M7f`, `test_M13`).
     ///
-    ///      And it gets strictly worse rather than better after the exit. Every holder then
-    ///      withdraws, `standingL` goes to zero, and `w == 0` becomes PERMANENT: no future swap, at
-    ///      any price, in any direction, can ever move `premGrowth` again. The money is not
-    ///      deferred at that point, it is gone — it sits inside the v4 position with no code path in
-    ///      `src/` that can reach it. `QueueHarness.redeemAll()` recovers it here, and `redeemAll`
-    ///      is TEST-ONLY: it was deliberately removed from the shipping contract because a
-    ///      permissionless position burn is pure griefing.
+    ///      **THE RULE NOW.** "The payer does not pay itself" has no meaning on a fill that swept
+    ///      the whole book, because there is no seat that did not pay. The pot is divided over the
+    ///      FULL `standingL` — everybody included — and no mark moves. `test_7_14`'s extraction is
+    ///      unreachable from here: that needed exactly ONE unexcluded seat, this fires at ZERO.
     ///
-    ///      Asserted three ways, because "conserved" and "claimable" are two different claims
-    ///      (LAW 3, second corollary): the accumulator never moved, every seat's claim is zero, and
-    ///      the position still holds the money after the whole roster has withdrawn everything it
-    ///      owns.
-    function test_M7_theTerminalFillStrandsTheWholePremiumPotBelowTheBand() public {
-        _thePremiumIsStranded(true);
+    ///      Asserted four ways, because "accrued", "distributed pro-rata", "claimable" and
+    ///      "withdrawable" are four different claims (LAW 3, second corollary): nothing is held and
+    ///      the accumulator moved; every seat's credit is its share of the depth it contributed; the
+    ///      credits sum to the pot up to the per-seat floor; and once the roster has withdrawn there
+    ///      is nothing left in the position for a test-only burn to find.
+    function test_M7_theTerminalFillPaysThePremiumToTheRosterBelowTheBand() public {
+        _thePremiumReachesTheRoster(true);
     }
 
     /// @notice The mirror, and it is NOT free: the token0 and token1 halves of `_accruePremium` are
     ///         a duplicated rule, and a duplicated rule has been wrong in exactly one of its two
     ///         copies five times on this project (PITFALLS 5.125).
-    function test_M7b_theTerminalFillStrandsTheWholePremiumPotAboveTheBand() public {
-        _thePremiumIsStranded(false);
+    function test_M7b_theTerminalFillPaysThePremiumToTheRosterAboveTheBand() public {
+        _thePremiumReachesTheRoster(false);
     }
 
     /// @dev The measurement half, in its own frame for the stack. Nothing is asserted against a
@@ -691,7 +797,7 @@ contract MaturityTest is QueueFixture {
     function _reportStranding(bool down, uint256 owed, uint128 lAtBirth) internal view {
         (uint256 contributed,,) = hook.liquidityTotals();
         assertLt(contributed, uint256(lAtBirth) / 50, "the roster still holds real depth");
-        console.log("stranded premium (wei)", owed);
+        console.log("premium distributed at maturity (wei)", owed);
         console.log("as bps of the roster's capital in that token", FullMath.mulDiv(owed, 10_000, _capital(down)));
         console.log("standing depth left, of", contributed, uint256(lAtBirth));
     }
@@ -704,43 +810,65 @@ contract MaturityTest is QueueFixture {
         }
     }
 
-    /// @dev The three statements about the pot itself, in their own frame: `_thePremiumIsStranded`
+    /// @dev The three statements about the pot itself, in their own frame: `_thePremiumReachesTheRoster`
     ///      is at the stack limit without `via_ir` and four more locals is the difference between
-    ///      building and not.
-    function _potHeldWhole(bool down) internal view returns (uint256 owed) {
+    ///      building and not. **All three are the INVERSION of what they were.**
+    function _potReachedTheRoster(bool down) internal view returns (uint256 owed) {
         (uint256 owed0, uint256 owed1, uint256 held0, uint256 held1) = hook.premiums();
         (uint256 g0, uint256 g1) = hook.growths();
         owed = down ? owed0 : owed1;
         assertGt(owed, 0, "nothing happened: the terminal fill withheld no premium at all");
-        assertEq(down ? held0 : held1, owed, "the pot was not held whole: some of it reached the accumulator");
-        assertEq(down ? g0 : g1, 0, "the accumulator moved: the pot is claimable after all");
+        assertEq(down ? held0 : held1, 0, "the pot was HELD: the ledger cannot source the next fill");
+        assertGt(down ? g0 : g1, 0, "the accumulator did not move: the pot reached nobody");
     }
 
-    function _thePremiumIsStranded(bool down) internal {
+    /// @dev Settle one seat and assert its credit is its own share of the depth it contributed.
+    ///      **THE PREDICTION IS BUILT FROM THE CONTRACT'S OWN NUMBERS** — `seatLiquidity` and
+    ///      `liquidityTotals`, read before any settle moves anything — never from the fixture's
+    ///      measurements of itself (PITFALLS 5.34). The allowance is TWO wei and it is derived, not
+    ///      picked: `_accruePremium` floors `inc = pot·Q/standingL` and `_claims` floors
+    ///      `L_i·inc/Q`, so a seat can lose at most one wei to each.
+    function _settleAndCheckShare(uint256 i, bool down, uint256 pot, uint256 standingL_)
+        internal
+        returns (uint256 got)
+    {
+        (uint256 b0, uint256 b1) = hook.rawSeat(i);
+        vm.prank(hook.ownerOf(i));
+        hook.withdraw(i, 0, 0);
+        (uint256 a0, uint256 a1) = hook.rawSeat(i);
+        got = down ? a0 - b0 : a1 - b1;
+        assertEq(down ? a1 : a0, down ? b1 : b0, "the settle credited the token the pot is not in");
+
+        uint256 want = FullMath.mulDiv(pot, hook.seatLiquidity(i), standingL_);
+        assertGt(want, 0, "this seat contributed no depth: the share assertion is vacuous");
+        assertLe(got, want, "a seat was credited MORE than its share of the depth it contributed");
+        assertGe(got + 2, want, "a seat was credited LESS than its share, beyond the two floors");
+    }
+
+    function _thePremiumReachesTheRoster(bool down) internal {
         uint128 lAtBirth = hook.positionLiquidity();
         if (down) _matureDown();
         else _matureUp();
 
-        uint256 owed = _potHeldWhole(down);
+        uint256 owed = _potReachedTheRoster(down);
 
-        // The exclusion really was TOTAL: the fill reached the tail, so `_settlePremium` excluded
-        // every rank and `w == standingL - lTouched` was zero to the wei. Asserted on the cursor
-        // rather than inferred from the accumulator, so this is a second witness and not a
-        // restatement of the line above.
+        // The sweep really was TOTAL: the fill reached the tail. Asserted on the cursor rather than
+        // inferred from the accumulator, so this is a second witness and not a restatement.
         (uint256 k0, uint256 k1) = hook.cursors();
         assertGe(down ? k1 : k0, 4, "the fill did not reach the tail: this is not the terminal fill");
 
-        // Every seat's claim really is zero — asserted by SETTLING each seat (a zero withdrawal is
-        // a settle) and showing its balance does not move. Reading the accumulator again would be
-        // the same number twice.
+        // **EVERY SEAT'S CLAIM IS REAL AND IS ITS OWN SHARE.** Read the denominator BEFORE the first
+        // settle, because a settle moves balances and a later read would be a different number.
+        (uint256 standingL_,,) = hook.liquidityTotals();
+        uint256 credited;
         for (uint256 i; i < 5; i++) {
-            (uint256 a0, uint256 a1) = hook.seat(i);
-            vm.prank(hook.ownerOf(i));
-            hook.withdraw(i, 0, 0);
-            (uint256 b0, uint256 b1) = hook.seat(i);
-            assertEq(b0, a0, "a settle credited token0 premium the accumulator says does not exist");
-            assertEq(b1, a1, "a settle credited token1 premium the accumulator says does not exist");
+            credited += _settleAndCheckShare(i, down, owed, standingL_);
         }
+        // THE IDENTITY, not a bound: what the roster was credited plus what is still owed is what
+        // was withheld. Five seats, at most two wei of floor each.
+        (uint256 rest0, uint256 rest1,,) = hook.premiums();
+        assertEq(credited + (down ? rest0 : rest1), owed, "the pot did not conserve across the distribution");
+        assertLe(down ? rest0 : rest1, 10, "more than the per-seat floor was left unclaimed");
 
         // The whole roster now takes everything it owns...
         for (uint256 i; i < 5; i++) {
@@ -749,20 +877,15 @@ contract MaturityTest is QueueFixture {
         (uint256 t0, uint256 t1) = hook.totals();
         assertLt(t0 + t1, 1_000, "the roster did not actually exit: this test proves nothing");
 
-        // ...and the money is still inside the position, reachable only by a function that does not
-        // exist in `src/`. `QueueHarness.redeemAll` is TEST-ONLY — a permissionless position burn
-        // was removed from the shipping contract as pure griefing — so this number is what NOTHING
-        // in the product can reach.
+        // ...and there is NOTHING LEFT. This is the inversion that matters: the position used to
+        // hold the whole pot after a full exit, reachable only by a function that does not exist in
+        // `src/`. `QueueHarness.redeemAll` is TEST-ONLY — a permissionless position burn was removed
+        // from the shipping contract as pure griefing — so it is the strongest possible reader here,
+        // and it now finds residual scale rather than the premium.
         (uint256 r0, uint256 r1) = hook.redeemAll();
-        uint256 left = down ? r0 : r1;
-        assertApproxEqAbs(left, owed, 1_000, "the position leftover is not the stranded premium");
+        assertLt(r0 + r1, 1_000, "the position still holds the premium after a full exit");
+        assertGt(owed, 1_000, "the pot was residual scale to begin with: this test proves nothing");
 
-        // **WHAT IS NOT CLAIMED, said explicitly.** The pot is not PROVABLY unrecoverable: a future
-        // in-band fill with any unexcluded standing would release it, because held pots fold
-        // forward. What is proven is that at maturity there is no such fill — the price is outside
-        // the band, the roster has exited, and the depth left to weigh an accrual against has
-        // collapsed to under 2% of what the pool was born with. Measured, not asserted as a bound
-        // chosen to pass: the numbers are logged.
         _reportStranding(down, owed, lAtBirth);
     }
 
@@ -1277,31 +1400,60 @@ contract MaturityTest is QueueFixture {
         assertLt(gapBps, 10, "the rank effect survived average pricing: test_M6 measures something else");
     }
 
-    /// @notice **THE CONTROL FOR `test_M7`.** Delete the premium's payer exclusion and the terminal
-    ///         fill accrues normally: `premGrowth` moves, the pot does NOT land whole in
-    ///         `premiumHeld`, and every assertion `test_M7` makes about stranding goes red. This is
-    ///         what makes `test_M7` a finding rather than an observation about a fixture.
-    function test_M7d_withoutThePayerExclusionThePotIsNotStranded() public {
-        _rebuildAs("Maturity.t.sol:NoExclusionQueueHook", 0x4D04, PHI);
+    /// @notice **THE CONTROL FOR `test_M7`, `test_M7f` AND `test_M13`, AND IT IS WHAT MAKES THEM
+    ///         FALSIFIABLE.** Delete the `sweptBook` branch and the terminal fill holds the whole
+    ///         pot again, no seat can claim a wei of it, and once the roster exits the pool BRICKS.
+    ///
+    /// @dev **THE ASSERTIONS ARE THE PRE-FIX BEHAVIOUR, EXECUTED RATHER THAN DESCRIBED.** Each one
+    ///      is the exact inverse of an assertion `test_M7`/`test_M7f` makes on production:
+    ///
+    ///        * `premGrowth` does not move / production: it does;
+    ///        * the pot lands whole in `premiumHeld` / production: `premiumHeld == 0`;
+    ///        * a settle credits no seat anything / production: every seat gets its pro-rata share;
+    ///        * after a full exit the position still holds the pot and every one-for-zero swap
+    ///          reverts `QueueUnderflow` / production: the position is empty and the swap goes
+    ///          through.
+    ///
+    ///      If any of these fails, the fix is not what closed those tests and they prove nothing.
+    ///
+    ///      **THE BRICK IS THE HALF THAT MATTERS AND IT IS ASSERTED BY REASON, NOT BY "IT
+    ///      REVERTED"** (LAW 2). v4 wraps a hook's own error in `CustomRevert.WrappedError`, so the
+    ///      selector is unwrapped before it is matched (PITFALLS 5.83/5.84).
+    function test_M7d_deletingTheSweptBookBranchStrandsThePotAndBricksThePool() public {
+        _rebuildAs("Maturity.t.sol:NoSweptBookQueueHook", 0x4D04, PHI);
         _matureDown();
 
         (uint256 owed0,, uint256 held0,) = hook.premiums();
         (uint256 g0,) = hook.growths();
         assertGt(owed0, 0, "the control withheld no premium: it is not comparable");
-        // The three statements `test_M7` asserts, INVERTED. If any of these fails, `test_M7` is
-        // unfalsifiable and proves nothing.
-        assertGt(g0, 0, "the accumulator did not move even without the exclusion: test_M7 cannot fail");
-        assertLt(held0, owed0, "the pot was still held whole: test_M7 cannot fail");
-        console.log("without the exclusion: growth", g0);
+        assertEq(g0, 0, "the accumulator moved WITHOUT the branch: test_M7 cannot fail");
+        assertEq(held0, owed0, "the pot was not held whole without the branch: test_M7 cannot fail");
+        console.log("without the swept-book branch: held", held0);
 
-        // **WHAT THIS CONTROL DOES NOT SHOW, AND SAYING SO IS THE POINT.** Deleting the DENOMINATOR
-        // half of the exclusion does not, on its own, make the pot claimable: `_settlePremium` also
-        // moves the touched seats' MARKS past the accrual, and that half is not `virtual`, so the
-        // pot lands in `premGrowth` with every seat already marked at it. The `_settlePremium`
-        // docstring predicts exactly this shape from the other side ("doing only the second would
-        // leave their share accrued to nobody"). The control's job is narrower and it does it:
-        // `test_M7`'s two accumulator assertions are FALSIFIABLE — they go red here — so the
-        // stranding it reports is a property of the exclusion and not of this fixture.
+        // No seat can claim a wei of it — a settle moves nothing.
+        for (uint256 i; i < 5; i++) {
+            (uint256 b0, uint256 b1) = hook.rawSeat(i);
+            vm.prank(hook.ownerOf(i));
+            hook.withdraw(i, 0, 0);
+            (uint256 a0, uint256 a1) = hook.rawSeat(i);
+            assertEq(a0, b0, "a seat was credited token0 the accumulator says does not exist");
+            assertEq(a1, b1, "a seat was credited token1 the accumulator says does not exist");
+        }
+
+        // ...and after the exit the pool advertises depth it cannot trade.
+        for (uint256 i; i < 5; i++) {
+            _exitSeat(i, "control exit");
+        }
+        assertGt(uint256(hook.positionLiquidity()), 0, "the position is empty: nothing to be bricked");
+        (uint256 stillThere,) = _positionValue();
+        assertApproxEqAbs(stillThere, owed0, 1_000, "the position leftover is not the stranded premium");
+
+        bytes memory reason = _expectSwapRevert(
+            false, 1e20, bytes4(keccak256("QueueUnderflow(uint256)")), "the control did NOT brick: test_M7f cannot fail"
+        );
+        assertApproxEqAbs(
+            uint256(bytes32(_word(reason))), owed0, 1_000, "the shortfall is not the stranded premium"
+        );
     }
 
     /// @notice **THE STANDING GUARD ON THE INVARIANT L BRANCH. Delete line ~1987 of
@@ -1475,98 +1627,93 @@ contract MaturityTest is QueueFixture {
     //    reading the call graph.
     // =============================================================================================
 
-    /// @notice **THE RELEASE PATH EXISTS AND IS PRODUCTION-REACHABLE — but it requires the price to
-    ///         come BACK INTO THE BAND and trade, which is the definition of the instrument NOT
-    ///         being at maturity.**
+    /// @notice **THE POT IS CLAIMABLE OUT OF BAND, WITH NO RETURN TO THE BAND AND NO FURTHER TRADE.
+    ///         THIS TEST ASSERTED THE OPPOSITE AND IS INVERTED, NOT DELETED.**
     ///
-    /// @dev The call graph admits exactly one writer of `premGrowth`: `_accruePremium`, reached only
-    ///      from `_settlePremium`, reached only from `_allocate`, reached only from `_afterSwap`.
-    ///      So a swap that produces a non-degenerate IN-BAND fill with at least one unexcluded rank
-    ///      is the only thing that can release a held pot, and there is no `claim`, no `poke`, no
-    ///      permissionless settle that reaches it. That much is structure. What is NOT structure,
-    ///      and is what this test executes, is whether such a swap can still be constructed after a
-    ///      terminal fill:
+    /// @dev It used to be called `theStrandedPotIsReleasedOnlyByReturningToTheBand`, and the four
+    ///      steps it executed were the honest answer to "is the stranded pot recoverable": stranded
+    ///      by the terminal fill, then a one-for-zero swap back into the band, then a SMALL
+    ///      zero-for-one fill leaving somebody unexcluded so `w > 0`, and only then could the head
+    ///      claim. **Every step of that was a consequence of the terminal fill holding, and it holds
+    ///      no longer** — so the recovery sequence has nothing to recover.
     ///
-    ///        1. the pot is stranded by the downward terminal fill (`premiumHeld0`, growth 0)
-    ///        2. a one-for-zero swap walks the price back INTO the band and re-credits token1 to the
-    ///           seats front-first — note this fill strands a pot of its OWN in `premiumHeld1`
-    ///        3. a SMALL zero-for-one fill that stops short of the tail leaves ranks unexcluded, so
-    ///           `w > 0`, and `premGrowth0` finally moves
-    ///        4. the head can then claim it
-    ///
-    ///      **SO THE HONEST ANSWER TO "is it recoverable" IS: yes, by trading the pool back to
-    ///      health.** It is unreachable only in the state that actually obtains at maturity — price
-    ///      outside the band, nobody quoting, holders exiting. `test_M7f` executes what happens once
-    ///      they HAVE exited, which is the case that matters for the product claim.
-    function test_M7e_theStrandedPotIsReleasedOnlyByReturningToTheBand() public {
+    ///      What is asserted instead is the strictly stronger property the fix produced, and it is
+    ///      the one a holder actually cares about: **at maturity, out of band, with no counterparty
+    ///      and no further trade of any kind, every seat can settle its share of the terminal pot
+    ///      and take it out as tokens.** The old sequence is kept underneath as the second half —
+    ///      the pool must STILL trade back into the band afterwards, which is what the brick
+    ///      destroyed.
+    function test_M7e_theMaturityPotIsClaimableOutOfBandWithNoFurtherTrade() public {
         _matureDown();
         (uint256 owed0,, uint256 held0,) = hook.premiums();
-        (uint256 g0Before,) = hook.growths();
-        assertGt(held0, 0, "nothing was stranded: this test proves nothing");
-        assertEq(g0Before, 0, "the pot was not stranded to begin with");
+        (uint256 g0,) = hook.growths();
+        assertGt(owed0, 0, "nothing was withheld: this test proves nothing");
+        // THE INVERSION. These used to read `assertGt(held0, 0)` and `assertEq(g0, 0)`.
+        assertEq(held0, 0, "the pot was stranded: it is unreachable out of band");
+        assertGt(g0, 0, "the accumulator never moved: there is nothing to claim");
 
-        // 2. back into the band. This is an ORDINARY swap by an ordinary trader.
+        // **CLAIMED AND PAID OUT, NOT MERELY ACCRUED** (LAW 3, second corollary). Each seat settles
+        // and then withdraws exactly what the settle credited, so the money leaves the contract.
+        uint256 paidOut;
+        for (uint256 i; i < 5; i++) {
+            (uint256 b0,) = hook.rawSeat(i);
+            vm.prank(hook.ownerOf(i));
+            hook.withdraw(i, 0, 0);
+            (uint256 a0,) = hook.rawSeat(i);
+            uint256 credit = a0 - b0;
+            assertGt(credit, 0, "a seat was credited nothing out of the terminal pot");
+            (uint256 p0,) = _wd(i, credit, 0, "maturity premium");
+            assertEq(p0, credit, "the seat could not actually take its premium out");
+            paidOut += p0;
+        }
+        assertApproxEqAbs(paidOut, owed0, 10, "what left the contract is not the pot");
+        console.log("premium claimed out of band, no further trade (wei)", paidOut);
+
+        // ...and the pool STILL TRADES. This is the sequence the old test needed for recovery and
+        // that the brick destroyed: an ordinary trader walks the price back into the band.
         (,, int24 tl, int24 tu) = hook.pool();
         _swapper().swapTo(k, false, 1e28, TickMath.getSqrtPriceAtTick(tl + (tu - tl) / 2));
         (, int24 tick,,) = poolManager.getSlot0(k.toId());
         assertTrue(tick >= tl && tick < tu, "the pool did not come back into the band");
-        (uint256 gMid,) = hook.growths();
-        assertEq(gMid, 0, "a reverse fill released the token0 pot: the direction analysis is wrong");
-
-        // 3. a SMALL zero-for-one fill, sized to stop short of the tail so somebody is left
-        //    unexcluded. Asserted, not hoped: if it swept the book this test would prove nothing.
-        (uint256 t1,) = (0, 0);
-        (, t1) = hook.totals();
-        assertGt(t1, 0, "the seats hold no token1: a zero-for-one fill cannot happen");
-        this.doSwap(true, t1 / 50);
-        (uint256 c0_, uint256 c1_) = hook.cursors();
-        c0_;
-        assertLt(c1_, 4, "the fill reached the tail: every rank is excluded and this proves nothing");
-
-        (uint256 g0After,) = hook.growths();
-        (,, uint256 heldAfter,) = hook.premiums();
-        assertGt(g0After, 0, "the pot was NOT released by an in-band fill: it is unreachable, not deferred");
-        assertLt(heldAfter, held0, "the held pot did not drain");
-        console.log("stranded, then released (wei)", held0 - heldAfter);
-        owed0;
     }
 
-    /// @notice **THE CASE THAT DECIDES THE PRODUCT CLAIM, AND THE ANSWER IS NO. Once the roster has
-    ///         exited — the documented end of every deployment — there is no production-reachable
-    ///         action that releases the pot, because EVERY SWAP THAT COULD REACH IT REVERTS.**
+    /// @notice **AFTER THE EXIT THE POOL STILL SWAPS. THIS TEST ASSERTED THAT EVERY SWAP REVERTED,
+    ///         AND THAT IS THE WHOLE POINT OF THE FIX — SO THIS TEST IS THE PROOF.**
     ///
-    /// @dev Measured state after `_matureDown()` and five full withdrawals:
+    /// @dev **THE STATE IT USED TO MEASURE**, after `_matureDown()` and five full withdrawals:
     ///
     ///          totals              (0, 3)
     ///          floats              (0, 0)
     ///          position token0     49,566,884,481,303,539     <-- the stranded pot, to 3 wei
     ///          positionLiquidity   257,348,426,066,536,964     <-- the pool still QUOTES this
     ///
-    ///      The pool advertises depth it cannot trade. A one-for-zero swap — the only direction that
-    ///      can take that token0 out, and the direction that would walk the price back INTO the band
-    ///      — asks `_allocate` for output the seats do not have, because the money belongs to
-    ///      `premiumOwed` and `_allocate` sources only from seat balances. It reverts
-    ///      `QueueUnderflow(49566884481303539)` at every size, one wei included. The other direction
-    ///      is a no-op: the position holds no token1, so `_afterSwap` returns on its degenerate
-    ///      branch before `_allocate`.
+    ///      The pool advertised depth it could not trade. A one-for-zero swap — the only direction
+    ///      that could take that token0 out, and the direction that would walk the price back INTO
+    ///      the band — asked `_allocate` for output the seats did not have, because the money
+    ///      belonged to `premiumOwed` and `_allocate` sources only from seat balances. It reverted
+    ///      `QueueUnderflow(49566884481303539)` at every size, one wei included. **That is a live
+    ///      Uniswap pool advertising liquidity and refusing every trade in one direction.**
     ///
-    ///      **THIS ALSO REFUTES A DOCUMENTED CLAIM.** `Adversarial.t.sol`'s `test_6_15` states in
-    ///      capitals that "`QueueUnderflow` IS STRUCTURALLY UNREACHABLE THROUGH THE POOL", reasoning
-    ///      that "INVARIANT F ... says the position never exceeds the ledger, so `amtOut <= Sigma a`
-    ///      always". Phase 7 falsified it: INVARIANT F is
+    ///      Now the terminal fill distributes the pot, the roster withdraws it with everything else,
+    ///      and there is nothing left for a swap to be short of. The assertions are the mirror: the
+    ///      position is empty to residual scale, and the recovery trade GOES THROUGH at both sizes.
+    ///
+    ///      **THE CONTROL IS `test_M7d`**, which deletes the `sweptBook` branch and reproduces the
+    ///      brick — reason matched by selector and shortfall matched to the pot. Without it "the
+    ///      swap succeeded" could be a property of this fixture rather than of the fix.
+    ///
+    ///      **IT ALSO RESOLVES A DOCUMENTED CONTRADICTION.** `Adversarial.t.sol`'s `test_6_15` states
+    ///      in capitals that "`QueueUnderflow` IS STRUCTURALLY UNREACHABLE THROUGH THE POOL",
+    ///      reasoning that "INVARIANT F ... says the position never exceeds the ledger, so
+    ///      `amtOut <= Sigma a` always". Phase 7 falsified it: INVARIANT F is
     ///      `Sigma a + pending + premiumOwed == position + float`, so the position exceeds the SEAT
-    ///      ledger by the unsettled premium, and that is exactly the shortfall the revert reports.
-    ///      The claim was true when written and nothing re-examined it when `premiumOwed` was added
-    ///      to the identity it rests on.
-    ///
-    ///      LAW 2: the reason is unwrapped from v4's `WrappedError` and matched by SELECTOR, and the
-    ///      shortfall is asserted against `premiumOwed` as an IDENTITY — "it reverted" would not
-    ///      name the cause, and this suite has already been caught once by a mirrored pair agreeing
-    ///      through arithmetic accident.
-    function test_M7f_afterTheExitEverySwapThatCouldReachThePotReverts() public {
+    ///      ledger by the unsettled premium. **That gap is what the fix closes at maturity**, and
+    ///      `test_M7d` is where the falsifying state now lives.
+    function test_M7f_afterTheExitThePoolStillSwaps() public {
         _matureDown();
         (uint256 owed0,, uint256 held0,) = hook.premiums();
-        assertGt(owed0, 0, "nothing was stranded: this test proves nothing");
+        held0;
+        assertGt(owed0, 1_000, "no premium was withheld: this test proves nothing");
 
         for (uint256 i; i < 5; i++) {
             _exitSeat(i, "exit before probing");
@@ -1574,33 +1721,35 @@ contract MaturityTest is QueueFixture {
         (uint256 t0, uint256 t1) = hook.totals();
         (uint256 f0, uint256 f1) = hook.floats();
         assertLt(t0 + t1, 1_000, "the roster did not actually exit");
-        assertEq(f0 + f1, 0, "the float could pay: the shortfall would not bind here");
+        assertEq(f0 + f1, 0, "the float could pay: a shortfall would not bind here anyway");
 
-        // The pool still QUOTES depth. Without this the revert below could just be an empty pool.
-        assertGt(uint256(hook.positionLiquidity()), 0, "the position is empty: nothing to be bricked");
-        (uint256 stillThere,) = _positionValue();
-        assertApproxEqAbs(stillThere, owed0, 1_000, "the position leftover is not the stranded premium");
+        // THE INVERSION. This used to be `assertGt(positionLiquidity, 0)` under the heading "the
+        // pool still QUOTES depth" — the router-facing half of the defect. There is nothing left to
+        // quote, because the pot went to the roster and the roster took it.
+        (uint256 stillThere, uint256 stillThere1) = _positionValue();
+        assertLt(stillThere + stillThere1, 1_000, "the position still holds the premium after a full exit");
 
-        // THE RECOVERY TRADE, at two sizes three orders of magnitude apart. Both die, and the
-        // shortfall IS the pot.
-        _assertUnderflows(1e20, owed0, true);
-        _assertUnderflows(1e12, owed0, false);
+        // THE RECOVERY TRADE, at two sizes three orders of magnitude apart. Both used to die with
+        // `QueueUnderflow`. Neither may now — and "did not revert with QueueUnderflow" is the
+        // assertion rather than "did not revert", because an empty pool legitimately refuses a swap
+        // with v4's own `PriceLimitAlreadyExceeded` and conflating the two would let this pass, or
+        // fail, for the wrong reason (LAW 2; the same distinction `test_M13c` carries).
+        _assertNoUnderflow(1e20);
+        _assertNoUnderflow(1e12);
 
-        // The other direction is a defined no-op, not a revert: the position holds no token1.
+        // The other direction is a defined no-op: the queue holds nothing to pay out.
         (uint256 b0, uint256 b1) = hook.totals();
         this.doSwap(true, 1e18);
         (uint256 a0_, uint256 a1_) = hook.totals();
         assertEq(a0_, b0, "a zero-for-one swap credited token0 to an empty queue");
         assertEq(a1_, b1, "a zero-for-one swap credited token1 to an empty queue");
 
-        (uint256 g0, uint256 g1) = hook.growths();
-        assertEq(g0, 0, "the token0 accumulator moved after the roster exited");
-        assertEq(g1, 0, "the token1 accumulator moved after the roster exited");
-
-        // ...and it is still there, reachable only by the TEST-ONLY burn.
-        (uint256 r0,) = hook.redeemAll();
-        assertApproxEqAbs(r0, held0, 1_000, "the leftover is not the stranded pot");
-        console.log("unreachable after exit (wei)", held0);
+        // ...and the TEST-ONLY burn — the strongest possible reader, and one that does not exist in
+        // `src/` — finds nothing. `redeemAll` was removed from the shipping contract because a
+        // permissionless position burn is pure griefing.
+        (uint256 r0, uint256 r1) = hook.redeemAll();
+        assertLt(r0 + r1, 1_000, "the position is still holding money nothing in the product can reach");
+        console.log("left unreachable after exit (wei)", r0 + r1);
     }
 
     /// @dev One-for-zero at `amountIn` must die with the exact reason, and — when the swap is large
@@ -1646,82 +1795,139 @@ contract MaturityTest is QueueFixture {
     //    the cause are tested apart.
     // =============================================================================================
 
-    /// @notice **THE EXISTING DEGENERATE PATH CANNOT ABSORB THIS, AND THE REASON IS ITS GATE.**
+    /// @notice **THE DEGENERATE PATH IS STILL GATED ON ZERO OUTPUT — AND NOTHING ELSE NEEDS IT ANY
+    ///         MORE, BECAUSE THE POOL NO LONGER BRICKS. THE SECOND HALF OF THIS TEST IS INVERTED.**
     ///
-    /// @dev `_afterSwap`'s degenerate branch is guarded by `if (amtOut == 0)` — a TOTAL absence of
-    ///      output. It has no notion of a PARTIAL fill: by the time `_allocate` discovers it cannot
-    ///      source the swap, `amtOut > 0` and that branch is long past. So the gate is "the pool paid
-    ///      nothing out", not "the queue cannot pay for what the pool paid out", and the two are
-    ///      different states.
+    /// @dev **WHAT IT USED TO ESTABLISH, and why the section it sits in was written.** Strip the
+    ///      premium framing off `test_M7f` and what was left was a live Uniswap pool that
+    ///      ADVERTISED liquidity and REVERTED every swap in one direction. `_afterSwap`'s degenerate
+    ///      branch is guarded by `if (amtOut == 0)` — a TOTAL absence of output — and has no notion
+    ///      of a PARTIAL fill: by the time `_allocate` discovers it cannot source the swap,
+    ///      `amtOut > 0` and that branch is long past. So the gate is "the pool paid nothing out",
+    ///      not "the queue cannot pay for what the pool paid out", and the two are different states.
+    ///      **And it would have been the wrong absorber even if it were reached**: the degenerate
+    ///      path CREDITS the whole input to the seat the fill would have begun at, so applied to an
+    ///      unsourceable fill it would credit seats for output they did not provide and INVARIANT F
+    ///      would break in the other direction — trading a revert for a silent insolvency, which is
+    ///      the worse of the two.
     ///
-    ///      **AND IT WOULD BE THE WRONG ABSORBER EVEN IF IT WERE REACHED.** The degenerate path
-    ///      CREDITS the whole input to the seat the fill would have begun at. Applied here it would
-    ///      credit seats for output they did not provide, so the ledger would over-count the
-    ///      position and INVARIANT F would break in the other direction — trading a revert for a
-    ///      silent insolvency, which is the worse of the two.
+    ///      That analysis is why the fix landed in `_settlePremium` rather than in the degenerate
+    ///      gate, and it is kept because it is the reasoning behind the design. What CHANGED is the
+    ///      state: there is no unsourceable fill at maturity any more, so this test now asserts the
+    ///      gate on one side and the ABSENCE of the brick on the other.
     ///
-    ///      Both halves are executed rather than argued: a swap small enough to round its output to
-    ///      zero takes the degenerate branch and does NOT revert, on the very same bricked pool
-    ///      where every larger swap does. That is the gate, demonstrated.
-    function test_M13_theDegeneratePathIsGatedOnZeroOutputNotOnAnUnsourceableFill() public {
+    ///      Both halves are executed rather than argued, and the gate half keeps its signature
+    ///      assertion — the branch credits the WHOLE input and pays nothing out — so it cannot pass
+    ///      on a swap that never reached the hook at all (PITFALLS 5.54).
+    function test_M13_theDegeneratePathIsGatedOnZeroOutputAndNothingElseBricks() public {
         _matureDown();
-        for (uint256 i; i < 5; i++) {
-            _exitSeat(i, "exit before probing");
-        }
 
-        // The pool ADVERTISES depth. This is the router-facing half of the defect.
+        // The pool quotes depth and holds token0. Below the band a one-for-zero swap is the only
+        // direction that can take it out — and it is the direction that used to revert at every
+        // size, one wei included.
         assertGt(uint256(hook.positionLiquidity()), 0, "the position is empty: nothing to advertise");
         (uint256 stillThere,) = _positionValue();
-        assertGt(stillThere, 1e16, "the position holds no token0: there is nothing to be short of");
+        assertGt(stillThere, 1e16, "the position holds no token0: there is nothing to trade");
 
-        // A swap whose OUTPUT rounds to zero takes the degenerate branch and survives. Its
-        // SIGNATURE is asserted, not merely its survival: the branch credits the WHOLE input to the
-        // seat the fill would have begun at and pays nothing out, so token1 rises by exactly the one
-        // wei that went in and token0 does not move. Without this the test could pass on a swap that
-        // never reached the hook at all (PITFALLS 5.54).
+        // **SETTLE EVERY SEAT FIRST, AND THAT IS NOT TIDINESS.** The degenerate branch runs
+        // `_syncSeat` on the seat the fill would have begun at, which CASHES that seat's accrued
+        // premium into its ledger — and since the terminal fill now distributes the pot, the head
+        // has a real claim waiting. `totals()` would therefore move by the head's premium share as
+        // well as by the one wei, and the identity below would read as a defect. Draining the
+        // claims first makes the one wei the only thing that can move. (Pre-fix this was invisible,
+        // because the accumulator had not moved and there was no claim to cash.)
+        for (uint256 i; i < 5; i++) {
+            vm.prank(hook.ownerOf(i));
+            hook.withdraw(i, 0, 0);
+        }
+
+        // THE GATE, unchanged. A swap whose OUTPUT rounds to zero takes the degenerate branch: it
+        // credits the whole input to the seat the fill would have begun at and pays nothing out, so
+        // token1 rises by exactly the one wei that went in and token0 does not move.
         (uint256 b0, uint256 b1) = hook.totals();
         this.doSwap(false, 1);
         (uint256 a0_, uint256 a1_) = hook.totals();
         assertEq(a0_, b0, "the degenerate path paid token0 out of a queue that has none");
         assertEq(a1_ - b1, 1, "the degenerate branch was not entered: the input was not credited whole");
 
-        // ...and every swap large enough to produce output does not. Three orders of magnitude.
-        _expectSwapRevert(false, 1e12, bytes4(keccak256("QueueUnderflow(uint256)")), "1e12 did not brick");
-        _expectSwapRevert(false, 1e15, bytes4(keccak256("QueueUnderflow(uint256)")), "1e15 did not brick");
-        _expectSwapRevert(false, 1e20, bytes4(keccak256("QueueUnderflow(uint256)")), "1e20 did not brick");
+        // THE INVERSION. Three orders of magnitude, all of which used to die with `QueueUnderflow`.
+        // "Not that revert" rather than "no revert": an emptied pool legitimately refuses a further
+        // swap with v4's own `PriceLimitAlreadyExceeded`, and conflating the two would let this test
+        // pass, or fail, for the wrong reason (LAW 2).
+        _assertNoUnderflow(1e12);
+        _assertNoUnderflow(1e15);
+        _assertNoUnderflow(1e20);
+
+        // ...and once the roster exits there is no advertised-but-untradeable depth left at all,
+        // which is the router-facing half of the old defect.
+        for (uint256 i; i < 5; i++) {
+            _exitSeat(i, "exit after probing");
+        }
+        (uint256 leftover0, uint256 leftover1) = _positionValue();
+        assertLt(leftover0 + leftover1, 1_000, "the pool still quotes depth it cannot trade");
     }
 
-    /// @notice **THE SHORTFALL IS BOUNDED BY `premiumHeld`, AND THAT BOUND IS WHAT DETERMINES THE
-    ///         FIX.** The money the allocator cannot source is exactly the pot that has no claimant.
+    /// @notice **THE MIRROR, ABOVE THE BAND. The token0 and token1 halves of `_accruePremium` and
+    ///         `_settlePremium` are a duplicated rule, and a duplicated rule has been wrong in
+    ///         exactly one of its two copies six times on this project** (PITFALLS 5.37, 5.50, 5.52
+    ///         twice, 5.73, 5.125).
     ///
-    /// @dev `premiumOwed` is accrued-but-unsettled and INCLUDES amounts seats can already claim
-    ///      (`premGrowth` has advanced past their marks). `premiumHeld` is the strictly narrower
-    ///      pot: what never reached the accumulator at all, so no seat has a claim on a wei of it.
-    ///      Drawing a shortfall from `premiumOwed` could rob a settled-but-unclaimed premium;
-    ///      drawing it from `premiumHeld` cannot. Measured here: `held == owed` at maturity and the
-    ///      binding shortfall equals both, so the narrow source is sufficient for this state — which
-    ///      is the fact a fix needs and the one this test exists to establish.
-    function test_M13b_theShortfallIsBoundedByTheUnclaimablePot() public {
-        _matureDown();
-        (uint256 owed0,, uint256 held0,) = hook.premiums();
-        (uint256 g0,) = hook.growths();
-        assertEq(g0, 0, "the accumulator moved: `held` is not the whole unclaimable pot here");
-        assertEq(held0, owed0, "held and owed differ: the narrow source may not be sufficient");
+    /// @dev It used to be `theShortfallIsBoundedByTheUnclaimablePot`: at maturity `premiumHeld`
+    ///      equalled `premiumOwed` and the binding `QueueUnderflow` shortfall equalled both, which
+    ///      was the fact a FIX needed — draw the shortfall from the narrow pot no seat can claim,
+    ///      never from `premiumOwed`, which includes amounts seats can already claim. **That
+    ///      design question is closed by the pot no longer existing**, so what is asserted here is
+    ///      its absence: nothing is unclaimable, and there is no shortfall at any size.
+    ///
+    ///      Above the band the position is 100% token1 and the recovery direction is zero-for-one,
+    ///      so every quantity in `test_M13` has its mirror here and none of them is the same number.
+    function test_M13b_thereIsNoUnclaimablePotAboveTheBand() public {
+        _matureUp();
+
+        (, uint256 owed1,, uint256 held1) = hook.premiums();
+        (, uint256 g1) = hook.growths();
+        assertGt(owed1, 1_000, "the terminal fill withheld no token1 premium: this test proves nothing");
+        // THE INVERSION. These used to read `assertEq(g1, 0)` and `assertEq(held1, owed1)`.
+        assertEq(held1, 0, "a token1 pot is unclaimable: the shortfall class is live in this direction");
+        assertGt(g1, 0, "the token1 accumulator never moved: the pot reached nobody");
+
+        assertGt(uint256(hook.positionLiquidity()), 0, "the position is empty: nothing to advertise");
+        (, uint256 stillThere) = _positionValue();
+        assertGt(stillThere, 1e4, "the position holds no token1: there is nothing to trade");
+
+        // THE GATE, in the mirror direction. Claims drained first for the reason `test_M13` gives.
+        for (uint256 i; i < 5; i++) {
+            vm.prank(hook.ownerOf(i));
+            hook.withdraw(i, 0, 0);
+        }
+        (uint256 b0, uint256 b1) = hook.totals();
+        this.doSwap(true, 1);
+        (uint256 a0_, uint256 a1_) = hook.totals();
+        assertEq(a1_, b1, "the degenerate path paid token1 out of a queue that has none");
+        assertEq(a0_ - b0, 1, "the degenerate branch was not entered: the input was not credited whole");
+
+        // No shortfall at any size, three orders of magnitude apart.
+        _assertNoUnderflowZeroForOne(1e12);
+        _assertNoUnderflowZeroForOne(1e15);
+        _assertNoUnderflowZeroForOne(1e20);
 
         for (uint256 i; i < 5; i++) {
-            _exitSeat(i, "exit before probing");
+            _exitSeat(i, "exit after probing");
         }
+        (uint256 leftover0, uint256 leftover1) = _positionValue();
+        assertLt(leftover0 + leftover1, 1_000, "the pool still quotes depth it cannot trade");
+    }
 
-        // Small swap: the shortfall is what THIS swap asked for, strictly inside the pot.
-        uint256 small = _shortfallOf(1e12);
-        assertGt(small, 0, "QueueUnderflow reported a zero shortfall");
-        assertLt(small, held0, "a small swap underflowed by the WHOLE pot: it is not size-bounded");
-
-        // Binding swap: the pot is the constraint, and the shortfall IS the pot.
-        uint256 big = _shortfallOf(1e20);
-        assertApproxEqAbs(big, held0, 1_000, "the binding shortfall is not the unclaimable pot");
-        assertGt(big, small, "the shortfall did not grow with the swap: it is not min(amtOut, pot)");
-        console.log("shortfall small / binding / premiumHeld0", small, big, held0);
+    /// @dev The zero-for-one twin of `_assertNoUnderflow`. Kept as its own function rather than a
+    ///      flag on the other because the two are the duplicated-rule pair this file exists to
+    ///      test, and a shared helper with a boolean is one place, not two.
+    function _assertNoUnderflowZeroForOne(uint256 amountIn) internal {
+        (bool ok, bytes memory err) = address(this).call(abi.encodeCall(this.doSwap, (true, amountIn)));
+        if (ok) return;
+        assertTrue(
+            bytes4(_unwrap(err)) != bytes4(keccak256("QueueUnderflow(uint256)")),
+            "a zero-for-one swap could not be sourced: the pool is bricked above the band"
+        );
     }
 
     function _shortfallOf(uint256 amountIn) internal returns (uint256) {

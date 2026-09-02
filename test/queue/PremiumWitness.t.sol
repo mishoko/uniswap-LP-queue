@@ -338,11 +338,24 @@ contract PremiumWitnessTest is PremiumWitnessBase {
     /// @notice **THE KNOWN-ANSWER CASE, and it is the one that actually protects the witness**
     ///         (LAW 5, third corollary: build the case whose answer you know in advance).
     ///
-    /// @dev A ONE-SEAT roster. The only seat is always the payer, so `w == 0` on every accrual,
-    ///      every claim must be EXACTLY zero, and `premiumHeld` must equal the whole of what was
-    ///      withheld. No floor is involved anywhere, so there is no bound to hide inside: if the
-    ///      exclusion rule or the hold rule is wrong, this is off by the entire pot.
-    function test_W1_knownAnswer_aSoleSeatIsAlwaysItsOwnPayerAndIsPaidNothing() public {
+    /// @dev A ONE-SEAT roster. The sole seat is the payer on every fill AND the only contributor of
+    ///      depth, so it is its own recipient: **the premium is a NO-OP for it.** It pays φ of the
+    ///      fee out of the fill and gets the whole of it back through the accumulator, minus the
+    ///      per-accrual floor. That is the right answer and it is knowable without running anything:
+    ///      with nobody standing behind you, there is nothing you are paying FOR.
+    ///
+    ///      **THIS TEST HAS BEEN INVERTED AND THE OLD FORM IS WORTH RECORDING.** It used to assert
+    ///      that the pot was HELD WHOLE — `held0 == owed0`, `g0 == 0` — because the sole seat was
+    ///      excluded from its own denominator, `w` was zero, and `_accruePremium` took its hold
+    ///      branch. **That is the maturity brick in miniature**: a held pot is money the position
+    ///      holds that `standing0`/`standing1` does not count, and on a one-seat roster EVERY fill
+    ///      held, so the shortfall grew without bound (`test_M7f`, `test_7_7`). A fill that sweeps
+    ///      the whole book now distributes over the full `standingL` and moves no marks, which on
+    ///      this roster hands the seat its own pot straight back.
+    ///
+    ///      No floor is involved in the accrual itself, so there is still no bound to hide inside:
+    ///      if the sweep rule or the mark rule is wrong, this is off by the entire pot.
+    function test_W1_knownAnswer_aSoleSeatIsItsOwnPayerAndItsOwnRecipient() public {
         address a = address(FLAGS ^ (uint160(0xD200) << 144));
         deployCodeTo("QueueHarness.sol:QueueHarness", _ctorArgsPremium(_syntheticRoster(1), PHI), a);
         hook = QueueHarness(a);
@@ -358,11 +371,28 @@ contract PremiumWitnessTest is PremiumWitnessBase {
 
         (uint256 owed0, uint256 owed1, uint256 held0, uint256 held1) = hook.premiums();
         assertGt(owed0 + owed1, 0, "nothing was withheld: this test proves nothing");
-        assertEq(held0, owed0, "a token0 pot with no recipient was not held WHOLE");
-        assertEq(held1, owed1, "a token1 pot with no recipient was not held WHOLE");
+
+        // THE INVERSION. Both used to be `assertEq(held, owed)`.
+        assertEq(held0, 0, "a token0 pot was HELD on a book the fill swept: the ledger goes short");
+        assertEq(held1, 0, "a token1 pot was HELD on a book the fill swept: the ledger goes short");
+
         (uint256 g0, uint256 g1) = hook.growths();
-        assertEq(g0, 0, "the sole seat was paid a premium it withheld from itself");
-        assertEq(g1, 0, "the sole seat was paid a premium it withheld from itself");
+        assertGt(g0, 0, "the sole seat was not paid back the token0 premium it withheld from itself");
+        assertGt(g1, 0, "the sole seat was not paid back the token1 premium it withheld from itself");
+
+        // **AND IT IS A NO-OP, WHICH IS A DIFFERENT CLAIM FROM "IT ACCRUED"** (LAW 3, second
+        // corollary). Settle the seat and its ledger must absorb the WHOLE of what was withheld,
+        // to the per-accrual floor — two token0 accruals and two token1 accruals, one wei each.
+        (uint256 raw0Before, uint256 raw1Before) = hook.rawSeat(0);
+        _withdrawTracked(0, 0, 0);
+        (uint256 raw0After, uint256 raw1After) = hook.rawSeat(0);
+        uint256 got0 = raw0After - raw0Before;
+        uint256 got1 = raw1After - raw1Before;
+        assertLe(got0, owed0, "the sole seat was credited MORE token0 than was ever withheld");
+        assertGe(got0 + 2, owed0, "the sole seat did not get its own token0 pot back");
+        assertLe(got1, owed1, "the sole seat was credited MORE token1 than was ever withheld");
+        assertGe(got1 + 2, owed1, "the sole seat did not get its own token1 pot back");
+
         _check("W1 sole seat");
     }
 
@@ -394,40 +424,45 @@ contract PremiumWitnessTest is PremiumWitnessBase {
 
     // ======================================================= THE EXACT-EXHAUSTION BOUNDARY (case D)
 
-    /// @notice **A FILL THAT EXACTLY EXHAUSTS A SEAT ERASES THE NEXT SEAT'S ACCRUED PREMIUM.**
+    /// @notice **A FILL THAT EXACTLY EXHAUSTS A SEAT NO LONGER ERASES THE NEXT SEAT'S ACCRUED
+    ///         PREMIUM. This test asserted the erasure; it is INVERTED, not deleted, because the
+    ///         scenario it executes is the evidence the fix was needed.**
     ///
-    /// @dev `_allocate` sets `next = take == bal ? i + 1 : i` and then exits, because
-    ///      `st.remaining == 0`. So on an exact exhaustion `next` is one PAST the last rank the walk
-    ///      touched, and that rank was never `_syncBal`'d. `_settlePremium` computes
-    ///      `last = min(next, n-1)` and writes `snap := g` for EVERY rank in `[start, last]` —
-    ///      including the one the walk never reached.
+    /// @dev **THE DEFECT, recorded so the guard below is legible.** `_allocate` sets
+    ///      `next = take == bal ? i + 1 : i` and then exits, because `st.remaining == 0`. `next` is
+    ///      a CURSOR — where the next fill in this direction starts — and on an exact exhaustion it
+    ///      is one PAST the last rank the walk touched. It was handed to `_settlePremium` as the far
+    ///      end of the PAYER set, and `_settlePremium` writes `snap := g` for every rank in that
+    ///      range. So the seat at that rank had its mark advanced having never been `_syncBal`'d.
     ///
     ///      Excluding that seat from THIS pot is harmless and is what the docblock defends. Moving
-    ///      its MARK is not: the mark is what carries its claim on every EARLIER accrual, and
-    ///      advancing it without settling first DESTROYS that claim. The wei stay in `premiumOwed`,
-    ///      so INVARIANT F ties out and conservation sees nothing — PITFALLS 5.124's family, money
-    ///      conserved and claimable by nobody.
+    ///      its MARK is not: the mark carries its claim on every EARLIER accrual, and advancing it
+    ///      without settling first DESTROYS that claim. The wei stayed in `premiumOwed`, so
+    ///      INVARIANT F tied out and conservation saw nothing — PITFALLS 5.124's family, money
+    ///      conserved and claimable by nobody. **Measured on this fixture: 7.17e19 wei, and it was
+    ///      the swapper's own choice, because any router exposes exact-output.**
     ///
-    ///      `_settlePremium`'s docblock says of this exact case: *"the seat is deferred, never
-    ///      overpaid."* **Deferral is what a HELD pot does. This is not one — no `premiumHeld` is
-    ///      set, no accumulator carries it, and no later accrual can return it.**
+    ///      `_allocate` now hoists its loop variable and hands `_settlePremium` the rank one past
+    ///      the last one it actually TOUCHED. So the assertions are the mirror of what they were:
+    ///      rank 1's mark does not move, it keeps what it had earned, and it can go on to COLLECT
+    ///      it — which is a stronger statement than "the mark did not move", and it is the one that
+    ///      would fail if the fix moved the money somewhere else instead of destroying it.
     ///
     ///      **THIS IS A DIRECTED TEST AND IT HAS TO BE.** The boundary needs a swap sized to the wei;
-    ///      a fuzzer will not find it. It is nonetheless the swapper's own choice — any router
-    ///      exposes exact-output — so landing on a seat boundary is a decision, not a coincidence.
-    function test_W6_anExactlyExhaustingFillErasesTheNextSeatsAccruedPremium() public {
+    ///      a fuzzer will not find it.
+    function test_W6_anExactlyExhaustingFillKeepsTheNextSeatsAccruedPremium() public {
         _erasureCase(true, 0xD700);
     }
 
     /// @dev THE MIRROR. `_settlePremium` and `_accruePremium` keep one rule in two branches, and
     ///      this project has been wrong in exactly one of two copies six times (PITFALLS 5.37, 5.50,
     ///      5.52 twice, 5.73, 5.125). Nothing about the token0 case passing says anything about this.
-    function test_W7_theSameErasureInTheOtherDirection() public {
+    function test_W7_theSameBoundaryInTheOtherDirection() public {
         _erasureCase(false, 0xD800);
     }
 
     /// @param zeroForOne the direction of the EXACT-OUTPUT fill. `true` drains the head of token1
-    ///        and accrues a token0 pot, so the erased claim is token0.
+    ///        and accrues a token0 pot, so the claim at risk is token0.
     /// @dev The locals live in a struct because this function is otherwise `Stack too deep` without
     ///      `via_ir`, and the repo builds without it.
     struct Erasure {
@@ -481,26 +516,42 @@ contract PremiumWitnessTest is PremiumWitnessBase {
         emit log_named_uint("witness refErased0                            ", refErased0);
         emit log_named_uint("witness refErased1                            ", refErased1);
 
-        // **THE CLAIM WAS NEITHER PAID NOR KEPT.** Its mark moved, so `_claims` now returns nothing;
-        // its ledger did not move, so it was never credited. The two together are the erasure. And
-        // the wei are still counted as OWED, which is why every conservation assertion in the
-        // project is blind to this: `premiumOwed` only ever falls when a seat is CREDITED.
-        assertEq(e.pendingAfter, 0, "rank 1's mark was NOT advanced: the boundary was not reached");
-        assertLt(e.rawGain, e.pendingBefore, "rank 1 was credited in full: nothing was erased");
+        // **THE INVERSION, IN THREE PARTS.**
+        //
+        // 1. The walk never reached rank 1, so nothing may have been CREDITED to it — the ledger is
+        //    untouched. This is the half that was true before the fix as well, and it is what makes
+        //    part 2 a statement about the MARK rather than about a settlement.
+        assertEq(e.rawGain, 0, "rank 1's ledger moved on a fill that never reached it");
 
-        // **THE TWO NUMBERS AGREE TO WITHIN THE DERIVED BOUND, NOT EXACTLY, AND THE DIFFERENCE IS
-        // THE POINT OF THE WHOLE WITNESS.** The contract's erased amount is what `_claims` reported,
-        // i.e. `floor(L_i * (g - snap) / Q)` off the accumulator. The witness's is the true rational
-        // `floor(total * L_i / w)`. Those are two DIFFERENT arithmetics for the same interval — if
-        // they matched to the wei the witness would be a copy — so they differ by the residual
-        // derived in `_assertPremiumClaim`. Measured here: exactly 1 wei, in both directions, which
-        // is the `-1` structural case (rank 1 is one of only two unexcluded payees).
-        uint256 witnessErased = zeroForOne ? refErased0 : refErased1;
-        assertGt(witnessErased, 0, "nothing was erased: this test proves nothing");
+        // 2. Its mark did NOT advance, so the claim it had already earned is still there. It used
+        //    to read `assertEq(e.pendingAfter, 0)` — an unmarked seat cannot be distinguished from
+        //    an erased one by any conservation assertion in the project, which is why this pair of
+        //    tests exists at all.
+        assertGe(
+            e.pendingAfter, e.pendingBefore, "rank 1's mark was advanced past an accrual it never settled: ERASURE"
+        );
+        // ...and it is strictly MORE, because rank 1 is not a payer on this fill either, so it also
+        // takes a share of the pot the boundary fill withheld.
+        assertGt(e.pendingAfter, e.pendingBefore, "rank 1 took no share of the boundary fill's own pot");
+
+        // 3. Nothing was erased anywhere on the roster, by the WITNESS's own count — an independent
+        //    model of the rule, which is what caught this in the first place.
+        assertEq(refErased0, 0, "the witness counted a token0 erasure: a mark moved without a settle");
+        assertEq(refErased1, 0, "the witness counted a token1 erasure: a mark moved without a settle");
+
+        // **AND IT IS REAL MONEY, WHICH IS A DIFFERENT CLAIM FROM "THE MARK DID NOT MOVE"** (LAW 3,
+        // second corollary). A `withdraw(id, 0, 0)` settles rank 1 without paying anything out; its
+        // raw ledger must absorb the whole pending claim, to the accumulator's floor. Without this
+        // the fix could have left a claim that no settlement can cash and every assertion above
+        // would still be green.
+        uint256 rawPreSettle = _bal(e.nextId, zeroForOne, true);
+        _withdrawTracked(e.nextId, 0, 0);
+        uint256 collected = _bal(e.nextId, zeroForOne, true) - rawPreSettle;
+        emit log_named_uint("rank 1 actually COLLECTED                     ", collected);
         (uint256 lo, uint256 hi) = _refBound(e.nextId, zeroForOne);
-        uint256 contractErased = e.pendingBefore - e.rawGain;
-        assertLe(contractErased, witnessErased + hi, "erased amount ABOVE the derived bound");
-        assertGe(contractErased + lo, witnessErased, "erased amount BELOW the derived bound");
+        assertLe(collected, e.pendingAfter + hi, "rank 1 collected MORE than it was owed");
+        assertGe(collected + lo, e.pendingAfter, "rank 1 could not cash the claim its mark preserved");
+        assertGt(collected, e.pendingBefore, "the preserved claim was not actually payable");
     }
 
     /// @dev One seat, one token. `raw` selects the bare slot; otherwise the SETTLED value, which is

@@ -269,54 +269,85 @@ contract PremiumTest is QueueFixture {
         assertEq(t0 + q0, expT0, "conservation broke across a double settle");
     }
 
-    // ────────────────────────────────────────── 7.7 nobody standing means the pot is HELD, not lost
+    // ─────────────────────────── 7.7 a fill that sweeps the WHOLE BOOK pays the pot to the roster
 
-    /// @dev `_accruePremium` refuses to divide when the standing inventory is smaller than the pot
-    ///      itself. The wei has already left the fill, so it must be somewhere: it is held and
-    ///      folded into the next accrual that has a recipient. Driven by draining the book.
-    function test_7_7_aPotWithNobodyStandingIsHeldAndLaterPaid() public {
+    /// @notice **THIS TEST USED TO ASSERT THE DEFECT AS THE SPECIFICATION, AND THE SCENARIO IT
+    ///         DRIVES IS EXACTLY THE ONE THAT BRICKED THE POOL.** It is inverted rather than
+    ///         deleted: the executed scenario is the evidence the fix was needed.
+    ///
+    /// @dev It was written as "a pot with nobody standing is HELD, and later paid", and it drove
+    ///      that state by draining token1 out of the entire book. On a fill that reaches every
+    ///      standing seat, `_settlePremium` excluded every one of them, `w == standingL - lTouched`
+    ///      was zero to the wei, and `_accruePremium` took its HOLD branch. **A held pot is money
+    ///      the position holds that `standing0`/`standing1` does not count**, so the ledger goes
+    ///      short of what the position can pay and the next fill in the other direction reverts
+    ///      `QueueUnderflow` from inside `_afterSwap` — a bricked pool, not a lost wei
+    ///      (`test_M7f`, `test_M13`).
+    ///
+    ///      The rule now: **"the payer does not pay itself" has no meaning on a fill that swept the
+    ///      whole book**, because there is no seat that did not pay. The pot is divided over the
+    ///      FULL `standingL` — everybody, payers included — and no mark moves, which is the only
+    ///      pairing that conserves (`test_M7d`'s lesson, from the other side).
+    ///
+    ///      Asserted three ways, because "conserved", "distributed" and "claimable" are three
+    ///      different claims: nothing is held, the accumulator moved, and every seat that
+    ///      contributed depth can actually settle a share of it.
+    function test_7_7_aFillThatSweepsTheWholeBookPaysThePotToTheRoster() public {
         _use(onHook, onKey);
 
-        // Drain token1 out of the whole book, so nothing is standing in it.
+        (uint256 g0Before,) = hook.growths();
+        // Sized BEFORE the sweep: the drain drives `expT1` to dust, and `expT1 / 40` taken after it
+        // is zero, which reverts the router rather than testing anything (7.12's lesson).
+        uint256 base1 = expT1;
+
+        // Drain token1 out of the whole book. Every standing seat is a payer, so this is the swept
+        // book and nothing may be withheld from it.
         _swap(true, expT0 * 4);
-        (,, uint256 held0,) = hook.premiums();
-        (, uint256 st1) = hook.standings();
 
-        if (st1 != 0) {
-            emit log_named_uint("book not fully drained; standing1", st1);
-        }
+        (uint256 k0Cur, uint256 k1Cur) = hook.cursors();
+        k0Cur;
+        assertGe(k1Cur, 7, "the fill did not reach the tail: this is not a whole-book sweep");
+
         (uint256 t0,) = hook.totals();
-        (uint256 q0,,,) = hook.premiums();
-        assertEq(t0 + q0, expT0, "a held pot was lost rather than held");
-        assertLe(held0, q0, "held is not a subset of owed");
+        (uint256 q0,, uint256 held0,) = hook.premiums();
+        assertGt(q0, 0, "nothing was withheld: this test proves nothing");
+        assertEq(t0 + q0, expT0, "a swept-book pot was lost rather than distributed");
 
-        // **CONSERVATION CANNOT SEE A DROPPED POT, WHICH IS WHY M87 SURVIVED THE WHOLE SUITE.**
-        // Dropping it still leaves `premiumOwed` counting the wei, so `totals() + premiums()` ties
-        // out perfectly while the money has become permanently unclaimable — accounted, and gone.
-        // The assertion has to be that the pot was actually HELD, and then that it was actually
-        // PAID. A test that only checks the books balance is exactly the green test that proves
-        // nothing (AGENTS.md §2).
-        assertGt(held0, 0, "no pot was held: this test never entered the path it claims to cover");
+        // THE INVERSION. It used to be `assertGt(held0, 0)`.
+        assertEq(held0, 0, "the swept-book pot was HELD: the ledger cannot source the next fill");
+        (uint256 g0After,) = hook.growths();
+        assertGt(g0After, g0Before, "the accumulator did not move: the pot reached nobody");
 
-        // Flow reverses and the book is standing in token1 again: the held pot must now be payable.
-        // token1 is what the book was just drained OF, so the reverse leg is sized in token1
-        // the swapper brings — off `expT0`, which is the side that is now full.
-        _swap(false, expT0 / 40);
-        (uint256 n0,) = hook.totals();
-        (uint256 nq0,,,) = hook.premiums();
-        assertEq(n0 + nq0, expT0, "conservation broke when the held pot was released");
-
-        // **THE HELD POT IS TOKEN0, SO ONLY A TOKEN0 ACCRUAL CAN FOLD IT IN**, and a token0 accrual
-        // is a `zeroForOne` swap. The reverse leg above restored the book's token1 standing; it did
-        // not touch `premiumHeld0`, and asserting otherwise was this test being wrong about which
-        // pot it was watching. One more swap in the original direction is what releases it.
-        _swap(true, expT0 / 40);
-        (,, uint256 heldAfter,) = hook.premiums();
-        assertEq(heldAfter, 0, "the held pot was not folded into the next accrual that had a recipient");
+        // **AND IT IS CLAIMABLE, WHICH IS A DIFFERENT CLAIM FROM "IT WAS ACCRUED"** (LAW 3, second
+        // corollary). A settle with no payout credits the seat its share; the shares must sum to
+        // the pot up to the per-seat floor, and every seat that contributed depth must get some.
+        uint256 credited;
+        uint256 paidSeats;
+        for (uint256 i; i < 8; i++) {
+            (uint256 b0,) = hook.rawSeat(i);
+            vm.prank(hook.ownerOf(i));
+            hook.withdraw(i, 0, 0);
+            (uint256 a0,) = hook.rawSeat(i);
+            if (a0 > b0) {
+                credited += a0 - b0;
+                paidSeats++;
+            }
+        }
+        assertEq(paidSeats, 8, "some seat that contributed depth was paid nothing out of the pot");
+        // The IDENTITY, not a bound: the pot was 8 shares each floored by at most one wei.
+        assertLe(credited, q0, "the seats were credited MORE than was ever withheld");
+        assertGe(credited + 8, q0, "the seats were credited less than the pot minus its floors");
 
         (uint256 f0,) = hook.totals();
         (uint256 fq0,,,) = hook.premiums();
-        assertEq(f0 + fq0, expT0, "conservation broke when the held pot was folded back in");
+        assertEq(f0 + fq0, expT0, "conservation broke across the swept-book distribution");
+
+        // **AND THE POOL STILL TRADES**, which is what the old behaviour destroyed. The reverse leg
+        // is exactly the swap that used to revert `QueueUnderflow` from inside `_afterSwap`.
+        _swap(false, base1 / 40);
+        (uint256 z0,) = hook.totals();
+        (uint256 zq0,,,) = hook.premiums();
+        assertEq(z0 + zq0, expT0, "conservation broke on the swap that used to brick the pool");
     }
 
     // ─────────────────────────────── 7.8 a claim that rounds to nothing still consumes its interval
@@ -477,45 +508,59 @@ contract PremiumTest is QueueFixture {
     /// @notice **A POT WITH NOBODY TO PAY IS HELD, AND THE WHOLE OF IT IS PAID BY THE NEXT ACCRUAL
     ///         THAT HAS A RECIPIENT.** Both directions, separately.
     ///
-    /// @dev **WHAT THESE TWO TESTS USED TO ASSERT, AND WHY IT CHANGED.** They were written against
-    ///      the release rule `give = min(total, w)`, which handed out as much as the book could
-    ///      absorb and retained the rest — so they asserted the closed form
-    ///      `heldAfter == heldBefore + pot − give`. That rule is gone. It existed to bound
-    ///      `mulDiv(total, Q, w)` for a `uint128` accumulator, and bounding a pot in the INCOMING
-    ///      token by a weight in the OUTGOING one is the units error that made the premium inert on
-    ///      the shipped 18/6 pool (PITFALLS 5.126). With a 256-bit X128 accumulator weighted by
-    ///      contributed liquidity there is nothing left to bound: the pot is paid in FULL whenever
-    ///      anybody is standing to receive it, and held in full when nobody is.
+    /// @dev **WHAT THESE TWO TESTS USED TO ASSERT, AND WHY THE STATE THEY DRIVE HAS CHANGED TWICE.**
+    ///      They were first written against the release rule `give = min(total, w)` and asserted the
+    ///      closed form `heldAfter == heldBefore + pot − give`; that rule is gone, because bounding a
+    ///      pot in the INCOMING token by a weight in the OUTGOING one is the units error that made
+    ///      the premium inert on the shipped 18/6 pool (PITFALLS 5.126). They then reached the hold
+    ///      branch by SWEEPING THE WHOLE BOOK, and that is what has changed now: a swept book no
+    ///      longer holds, it distributes over the full denominator, because holding there is
+    ///      precisely what bricked the pool at maturity (`test_M7f`, `test_7_7`).
     ///
-    ///      So the property worth asserting is the one that makes holding safe: a held pot is
-    ///      DEFERRED, never destroyed, and it is paid out whole. The "nothing was held: this test
-    ///      proves nothing" guard is kept in both — it is what caught the state becoming
-    ///      unreachable when the release rule changed underneath these tests.
+    ///      **SO THE HOLD BRANCH IS NOW REACHABLE THROUGH EXACTLY ONE CONDITION — `standingL == 0`,
+    ///      i.e. nobody has contributed depth at all — and these tests drive it there rather than
+    ///      being re-specified away.** `_driveStandingLToZero` gets there with ordinary external
+    ///      calls only (full exits, single-sided deposits that mint zero liquidity, and the
+    ///      permissionless float sweep, which credits nobody); it asserts the state it reached, so a
+    ///      route that stopped working would fail loudly instead of quietly testing something else.
+    ///      **The property under test is unchanged: a held pot is DEFERRED, never destroyed, and it
+    ///      is paid out whole.** The "nothing was held: this test proves nothing" guard is kept in
+    ///      both — it is what caught the state becoming unreachable when the release rule changed
+    ///      underneath these tests, and it is what caught it a second time here.
     function test_7_12_aHeldPotIsPaidInFullByTheNextAccrualWithARecipient() public {
         _use(onHook, onKey);
-        // Sizes are taken BEFORE the sweep: `expT0`/`expT1` are the fixture's running conservation
-        // totals, and the sweep drives one of them to dust — `expT1 / 4` after it is zero, which
-        // reverts the router rather than testing anything.
-        uint256 base0 = expT0;
-        uint256 base1 = expT1;
-        // Sweep the whole book: every seat is a payer, so every seat is excluded, so there is
-        // nobody left to receive and the pot must be held rather than paid or dropped.
-        _swap(true, base0 * 4);
-        (uint256 owedAfterDrain,, uint256 held0,) = hook.premiums();
-        assertGt(held0, 0, "nothing was held: this test proves nothing");
+        _driveStandingLToZero(8, 10e18, 40e18);
+
+        (uint256 owedBefore,,,) = hook.premiums();
         (uint256 g0Held,) = hook.growths();
+
+        // Nobody has contributed depth, so this fill's pot has no recipient and must be HELD.
+        _swap(true, 1e18);
+        (uint256 owedAfterHold,, uint256 held0,) = hook.premiums();
+        assertGt(held0, 0, "nothing was held: this test proves nothing");
+        assertGt(owedAfterHold, owedBefore, "no premium was withheld at all");
+        (uint256 g0AfterHold,) = hook.growths();
+        assertEq(g0AfterHold, g0Held, "the accumulator moved on a pot with no recipient");
         emit log_named_uint("token0 held with nobody standing", held0);
 
-        // The sweep drove the price to the band's edge, so the book has to be walked back before
-        // another token0 pot can exist at all. This one-for-zero swap accrues in the OTHER
-        // direction and restores token1 inventory; it leaves `premiumHeld0` untouched.
-        _swap(false, base1 / 4);
+        // The OTHER direction accrues a token1 pot and must leave `premiumHeld0` alone.
+        _swap(false, 4e18);
         (,, uint256 stillHeld,) = hook.premiums();
         assertEq(stillHeld, held0, "the opposite-direction swap moved the token0 hold: wrong branch");
 
+        // **A RECIPIENT APPEARS.** Rank 7 — the TAIL — re-funds in both tokens, so it contributes
+        // depth while the fill below still stops at the head. The tail is chosen deliberately: if
+        // the only depth-contributing seat were also the seat the fill touches, `lTouched` would
+        // equal `standingL` and the swept-book branch would fire instead of the ordinary one, and
+        // this test would be measuring the branch `test_7_7` already covers.
+        _addTo(hook.ownerOf(7), 7, 1e18, 4e18);
+        (uint256 standingL_,,) = hook.liquidityTotals();
+        assertGt(standingL_, 0, "the recipient contributed no depth: this test proves nothing");
+
         (uint256 g0Before,) = hook.growths();
-        assertEq(g0Before, g0Held, "the restoring swap moved the token0 accumulator: this test proves nothing");
-        _swap(true, base0 / 200);
+        _swap(true, 1e17);
+        (, uint256 c1Cur) = hook.cursors();
+        assertLt(c1Cur, 7, "the fill reached the tail: the swept-book branch fired, not the release");
 
         (uint256 owedAfter,, uint256 heldAfter,) = hook.premiums();
         (uint256 g0After,) = hook.growths();
@@ -524,7 +569,7 @@ contract PremiumTest is QueueFixture {
 
         assertGt(g0After, g0Before, "the held pot was not paid to the seats standing");
         assertEq(heldAfter, 0, "the held pot was not paid IN FULL");
-        assertGt(owedAfter, owedAfterDrain, "no premium was withheld by the second swap");
+        assertGt(owedAfter, owedAfterHold, "no premium was withheld by the releasing swap");
     }
 
     /// @dev The MIRROR. It exists because the same rule living in two branches has been wrong in
@@ -533,19 +578,31 @@ contract PremiumTest is QueueFixture {
     ///      the token1 branch survived the whole suite because only the token0 test existed.
     function test_7_13_aHeldPotIsPaidInFullByTheNextAccrualWithARecipient_token1Branch() public {
         _use(onHook, onKey);
-        uint256 base0 = expT0;
-        uint256 base1 = expT1;
-        _swap(false, base1 * 4);
-        (, uint256 owedAfterDrain,, uint256 held1) = hook.premiums();
+        _driveStandingLToZero(8, 10e18, 40e18);
+
+        (, uint256 owedBefore,,) = hook.premiums();
+        (, uint256 g1Held) = hook.growths();
+
+        _swap(false, 4e18);
+        (, uint256 owedAfterHold,, uint256 held1) = hook.premiums();
         assertGt(held1, 0, "nothing was held: this test proves nothing");
+        assertGt(owedAfterHold, owedBefore, "no premium was withheld at all");
+        (, uint256 g1AfterHold) = hook.growths();
+        assertEq(g1AfterHold, g1Held, "the accumulator moved on a pot with no recipient");
         emit log_named_uint("token1 held with nobody standing", held1);
 
-        _swap(true, base0 / 4);
+        _swap(true, 1e18);
         (,,, uint256 stillHeld) = hook.premiums();
         assertEq(stillHeld, held1, "the opposite-direction swap moved the token1 hold: wrong branch");
 
+        _addTo(hook.ownerOf(7), 7, 1e18, 4e18);
+        (uint256 standingL_,,) = hook.liquidityTotals();
+        assertGt(standingL_, 0, "the recipient contributed no depth: this test proves nothing");
+
         (, uint256 g1Before) = hook.growths();
-        _swap(false, base1 / 200);
+        _swap(false, 4e17);
+        (uint256 c0Cur,) = hook.cursors();
+        assertLt(c0Cur, 7, "the fill reached the tail: the swept-book branch fired, not the release");
 
         (, uint256 owedAfter,, uint256 heldAfter) = hook.premiums();
         (, uint256 g1After) = hook.growths();
@@ -554,7 +611,7 @@ contract PremiumTest is QueueFixture {
 
         assertGt(g1After, g1Before, "the held pot was not paid to the seats standing");
         assertEq(heldAfter, 0, "the held pot was not paid IN FULL");
-        assertGt(owedAfter, owedAfterDrain, "no premium was withheld by the second swap");
+        assertGt(owedAfter, owedAfterHold, "no premium was withheld by the releasing swap");
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════════
@@ -802,13 +859,48 @@ contract PremiumControlsTest is QueueFixture {
         assertGt(moved, 0, "no seat was actually credited: this test proves nothing");
     }
 
+    /// @notice **THE CONTROL THAT PROVES CONSERVATION CAN SEE A DROPPED POT — REBUILT ON THE STATE
+    ///         WHERE A POT IS STILL LEGITIMATELY HELD, BECAUSE ITS OLD ONE STOPPED EXISTING.**
+    ///
+    /// @dev It used to reach the hold branch by sweeping the whole book. That branch no longer
+    ///      holds — a swept book distributes over the full denominator, which is the fix for the
+    ///      maturity brick — so `DroppingPremiumHook`'s mutation became UNREACHABLE and the control
+    ///      read "dropping the pot was invisible: this control proves nothing". A control that
+    ///      cannot fire is worse than no control, because it reads as coverage (the `test_N7`
+    ///      precedent).
+    ///
+    ///      It is rebuilt, not deleted, on the one state where `_accruePremium` still holds:
+    ///      `standingL == 0`, reached through ordinary external calls by `_driveStandingLToZero`.
+    ///      The mutation is unchanged and so is the claim: dropping a held pot leaves
+    ///      `totals() + premiums()` SHORT of what PoolManager custody says went in, by the pot.
+    ///
+    ///      **THE POSITIVE CONTROL IS NOT OPTIONAL** (§3b): the identical sequence on the shipping
+    ///      hook must tie out exactly, or a gap here could be the fixture rather than the mutation.
     function test_N8_droppingAHeldPotBreaksConservation() public {
+        // ---- POSITIVE: production, same sequence, conservation exact.
+        _deployMutant("QueueHarness.sol:QueueHarness", 0xC501);
+        _driveStandingLToZero(8, 10e18, 40e18);
+        _swap(true, 1e18);
+        (uint256 pt0,) = hook.totals();
+        (uint256 pq0,, uint256 pHeld0,) = hook.premiums();
+        assertGt(pHeld0, 0, "the positive control never reached the hold branch: this proves nothing");
+        assertEq(pt0 + pq0, expT0, "production lost a held pot: the negative control below is unreadable");
+
+        // ---- NEGATIVE: the same, with the pot dropped instead of held.
         _deployMutant("Premium.t.sol:DroppingPremiumHook", 0xC500);
-        _swap(true, expT0 * 4); // drain token1 so the pot has nobody standing to receive it
+        _driveStandingLToZero(8, 10e18, 40e18);
+        (uint256 b0,) = hook.totals();
+        (uint256 bq0,,,) = hook.premiums();
+        assertEq(b0 + bq0, expT0, "the mutant was already off the books before the drop");
+
+        _swap(true, 1e18);
         (uint256 t0,) = hook.totals();
-        (uint256 q0,,,) = hook.premiums();
+        (uint256 q0,, uint256 held0,) = hook.premiums();
+        assertEq(held0, 0, "the mutant HELD the pot: it is not dropping anything");
         assertTrue(t0 + q0 != expT0, "dropping the pot was invisible: this control proves nothing");
         assertLt(t0 + q0, expT0, "the dropped pot did not leave the ledger SHORT");
+        // THE SHAPE, not a bound: the gap is exactly the pot production would have held.
+        assertEq(expT0 - (t0 + q0), pHeld0, "the gap is not the dropped pot: conservation broke some other way");
     }
 
     function drive() external {

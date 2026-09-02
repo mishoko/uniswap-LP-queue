@@ -1417,7 +1417,23 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // read — the two meanings coincide, which is why the flag and the value are the same word.
         Curve memory cv;
 
-        for (uint256 i = start; i < n && st.remaining > 0; i++) {
+        // **`i` IS HOISTED OUT OF THE LOOP DELIBERATELY, AND IT COSTS NOTHING.** The premium
+        // needs the last rank this fill ACTUALLY TOUCHED, and `next` is a cursor rather than a
+        // rank: it equals `lastTouched + 1` when the final seat was exactly exhausted, and
+        // `lastTouched` when it was partially filled. Handing the cursor to `_settlePremium`
+        // therefore excluded — and, per that function's own docblock, FORFEIT — the claim of a seat
+        // the walk never visited, on every earlier accrual as well as this one. Measured at
+        // 7.17e19 wei erased in both directions (`test_W6`/`test_W7`).
+        //
+        // On exit `i` is one past the last rank examined, in every path that reaches the code
+        // below: the loop cannot leave with `st.remaining != 0` (the revert underneath sees to
+        // that), and the last rank examined is always one that FILLED, because a `continue`d seat
+        // leaves `remaining` untouched. `_allocate` is unreachable with `amtOut == 0` — the
+        // degenerate fill in `_afterSwap` returns before it — so the body runs at least once and
+        // `i > start` is guaranteed. This buys the exact quantity a new local would have, and
+        // `_allocate` is at the stack limit without `via_ir`.
+        uint256 i = start;
+        for (; i < n && st.remaining > 0; i++) {
             Seat storage seat_ = q[_idAt(ord, i)];
 
             // **SETTLE BEFORE THE EMPTY TEST, NOT AFTER IT.** A settlement credits the token
@@ -1501,7 +1517,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // bitmap of ranks). It did not fit: the first attempt was `Stack too deep`. Passing the
         // range instead and letting the callee re-derive both keeps this function at exactly the
         // locals it had before the premium was excluded from its own payers.
-        _settlePremium(ord, start, next, outIsOne, amtIn - st.amtIn);
+        _settlePremium(ord, start, i, outIsOne, amtIn - st.amtIn);
     }
 
     /// @notice Accrue the fill's premium to everyone EXCEPT the seats that fill just paid.
@@ -1565,16 +1581,48 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      `_afterSwap`. It needs no equivalent because it withholds no premium and never reaches
     ///      `_accruePremium`. Checked in the source, not assumed — that is the shape which has been
     ///      wrong here five times.
-    function _settlePremium(uint256 ord, uint256 start, uint256 next, bool outIsOne, uint256 pot) internal {
-        uint256 n = q.length;
-        uint256 last = next < n ? next : n - 1;
+    function _settlePremium(uint256 ord, uint256 start, uint256 touchedEnd, bool outIsOne, uint256 pot)
+        internal
+        virtual
+    {
+        uint256 last = touchedEnd - 1;
 
         uint256 lTouched;
         for (uint256 i = start; i <= last; i++) {
             lTouched += q[_idAt(ord, i)].liquidity;
         }
 
-        _accruePremium(outIsOne, pot, lTouched);
+        // **THE WHOLE-BOOK FILL, WHICH IS THE CASE THAT BRICKED THE POOL.** Excluding the payers
+        // leaves `w == standingL - lTouched == 0` exactly when the fill reached every seat that is
+        // standing. `_accruePremium` then takes its HOLD branch, and a held pot is money the
+        // position is holding that `standing0`/`standing1` does not count. Hold enough of it and
+        // the ledger is short of what the position can pay, so the next fill in the other direction
+        // cannot be sourced and reverts `QueueUnderflow` — from inside `_afterSwap`, which is a
+        // BRICKED POOL rather than a lost wei. Measured in the terminal state: the position held
+        // 4.9567e16 wei of token0 against 2.573e17 of liquidity it could not trade.
+        //
+        // The remedy is to drop the exclusion, not to widen a gate. **"The payer does not pay
+        // itself" has no meaning on a fill that swept the whole book** — there is no seat that did
+        // not pay, so there is no seat the rule is protecting. Distributing over the full
+        // `standingL` returns every wei to the roster in proportion to contributed liquidity.
+        //
+        // **AND THE MARKS MUST NOT MOVE ON THIS BRANCH.** The two halves of the exclusion have to
+        // agree: removing the weight without moving the marks strands the money one way
+        // (`test_M7d`), moving the marks without removing the weight strands it the other. Here
+        // NEITHER happens — full denominator, and every touched seat keeps the mark `_syncSeat`
+        // already left at the pre-accrual growth, so it collects the share the accrual just gave
+        // it. That is self-consistent, and it is the only pairing that conserves.
+        //
+        // **IT CANNOT BE GAMED INTO `test_7_14`.** That extraction needed exactly ONE unexcluded
+        // seat, so that its share of the denominator was 100%; this branch fires only at ZERO
+        // unexcluded seats. The two conditions are disjoint, and between them the exclusion still
+        // stands.
+        //
+        // `standingL == 0` still holds the pot, and correctly so: there is genuinely nobody to pay.
+        // No seat can be short in that state either, because no seat is funded.
+        bool sweptBook = standingL == lTouched;
+        _accruePremium(outIsOne, pot, sweptBook ? 0 : lTouched);
+        if (sweptBook) return;
 
         // AFTER the accrual, so the mark lands on the growth this fill produced.
         uint256 g = outIsOne ? premGrowth0 : premGrowth1;

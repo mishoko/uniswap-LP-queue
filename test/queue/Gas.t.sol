@@ -110,12 +110,34 @@ contract GasTest is QueueFixture {
     ///      tied to something outside this repo. The budget never was.
 
     /// @dev THE SWEEP SLOPE, PINNED TO ITS MEASUREMENT. See `test_5_3b`.
-    uint256 internal constant SLOPE = 19_280;
+    ///
+    ///      **RE-DERIVED 2026-09-02: 19,280 -> 18,448, and the tolerance was NOT widened.** The
+    ///      whole-book-sweep branch in `_settlePremium` returns before the mark loop — on a fill
+    ///      that reached every standing seat there are no payers to exclude, so there are no marks
+    ///      to move — and a sweep is by definition that fill at every depth this table measures.
+    ///
+    ///      **THE ATTRIBUTION IS PROVED BY A CONTROL, NOT ASSUMED FROM THE DIFF.** `PremiumOffGasTest`
+    ///      runs the identical table at φ = 0, where `_accruePremium` returns on `total == 0` and is
+    ///      therefore byte-identical either side of the change: the ONLY thing the new branch can
+    ///      skip there is the mark loop. It moves by the same amount — 19,280 -> 18,448, and the
+    ///      per-depth totals fall by 361 / 1,194 / 3,693 / 7,858 / 20,353 / 26,184 at depths
+    ///      1/2/4/8/24/32, a slope of -833. At φ = 8,500 the same slope appears on top of a small
+    ///      POSITIVE constant (+1,208 at depth 1), which is the accrual itself changing branch:
+    ///      `premiumHeld0 = total` is no longer paid for and `premGrowth0 += inc` is.
+    ///
+    ///      **WHAT IS NOT PROVED, said plainly: the MAGNITUDE.** A naive opcode count of what the
+    ///      loop skips — one array bounds `SLOAD`, a `keccak`, and one `SSTORE` to a slot `_syncSeat`
+    ///      already wrote in the same call — comes to a few hundred gas, not 833. The attribution is
+    ///      solid (the φ = 0 control isolates it to this loop and nothing else); the accounting for
+    ///      the residual is **UNPROVEN** and is written down as such rather than dressed up.
+    uint256 internal constant SLOPE = 18_448;
 
     /// @dev **THE TOLERANCE IS DERIVED, NOT CHOSEN TO PASS.** Two independent estimators of the
-    ///      slope exist in this suite — `test_5_1` fits 1 -> 32 and reads 19,279; `test_5_3`/
-    ///      `test_5_3b` difference 2 -> 32 and read 19,280 — so the spread attributable to the
-    ///      estimator rather than to the code is **1 gas**. The smallest REAL regression this is
+    ///      slope exist in this suite — `test_5_1` fits 1 -> 32 and reads 18,446; `test_5_3`/
+    ///      `test_5_3b` difference 2 -> 32 and read 18,448 — so the spread attributable to the
+    ///      estimator rather than to the code is **2 gas**. (Before the swept-book branch the same
+    ///      two estimators read 19,279 and 19,280, a spread of 1: the estimator agreement is a
+    ///      property of the table, not of the number.) The smallest REAL regression this is
     ///      meant to catch is one storage slot entering the per-seat walk, which is >= 2,100 gas
     ///      cold. 150 sits an order of magnitude below that floor and two orders above the
     ///      estimator spread.
@@ -363,11 +385,22 @@ contract GasTest is QueueFixture {
         // **THE BASELINE IS DEPTH 2, NOT DEPTH 1, AND THAT IS A BRANCH FACT RATHER THAN A WIDENED
         // TOLERANCE.** Since Phase 8 the premium excludes the seats a fill PAID from the pot they
         // generated. On a ONE-SEAT roster the head is the only seat, so it is the only payer, the
-        // denominator `standingL - lTouched` is zero, and the pot is HELD — one `premiumHeld` write
+        // denominator `standingL - lTouched` is zero, and the pot was HELD — one `premiumHeld` write
         // and no accumulator write. From two seats up there is somebody to pay and `premGrowth` is
         // written instead. That is a one-off STEP of ~20,349 gas between depth 1 and depth 2, not a
-        // slope, and the property this assertion exists to defend is unharmed: measured at φ = 8500,
-        // depths 2 through 32 come in at 221,315 / 221,316 / 221,316 / 221,317 / 221,318 — **three
+        // slope.
+        //
+        // **THAT ATTRIBUTION IS STALE AS OF 2026-09-02 AND IS FLAGGED RATHER THAN REWRITTEN.** A
+        // one-seat roster is the whole book, so the fill now takes `_settlePremium`'s swept-book
+        // branch and `premGrowth` is written at EVERY depth including 1 — the premise of the
+        // paragraph above no longer holds. **The step nevertheless survived, at 20,918 gas
+        // (200,627 -> 221,545), against 1,018 at φ = 0** — so it is still premium-shaped and still
+        // one-off, and the assertion below is unaffected because it starts at depth 2 either way.
+        // Its cause is **UNPROVEN**: nobody has re-derived what the depth-2 path writes that the
+        // depth-1 path does not. Do not quote the explanation above as if it were current.
+        //
+        // The property this assertion exists to defend is unharmed: measured at φ = 8500,
+        // depths 2 through 32 come in at 221,545 / 221,546 / 221,546 / 221,547 / 221,548 — **three
         // gas across a sixteen-fold change in depth.** At φ = 0 no pot exists, so there is no step
         // and all six depths agree to 21 gas.
         //
@@ -475,6 +508,18 @@ contract GasTest is QueueFixture {
         //       gas per seat walked          14,778 -> 19,280   (+30.5%)
         //       full 32-seat sweep, phi=0   996,805 -> 1,143,352 (+14.7%)
         //       full 32-seat sweep, phi=8500 1,039,700 -> 1,188,462 (+14.3%)
+        //
+        // **AND THEN PARTLY BACK, 2026-09-02, when `_settlePremium` gained its whole-book-sweep
+        // branch.** A sweep is by definition a fill that reached every standing seat, so it now
+        // returns before the mark loop and every row of this table that WALKS falls:
+        //
+        //       gas per seat walked          19,280 -> 18,448   (-4.3%)
+        //       full 32-seat sweep, phi=0   1,143,352 -> 1,097,562 (-4.0%)
+        //       full 32-seat sweep, phi=8500 1,188,462 -> 1,162,300 (-2.2%)
+        //
+        // The φ = 0 column is the CONTROL that attributes it: at φ = 0 `_accruePremium` returns on
+        // `total == 0` and cannot be what changed, so the whole per-seat saving is the skipped
+        // loop. See the note on `SLOPE`.
         //       pure-rank transfer (cold)    28,719 -> 34,238   (+19.2%)
         //       head-only swap, phi=8500    162,766 -> 152,947   (-6.0%)
         //       steady state, phi=8500      183,998 -> 174,179   (-5.3%)
@@ -488,8 +533,8 @@ contract GasTest is QueueFixture {
         // read "has blown the budget MAX_SEATS was chosen against"; that budget was fiction and is
         // gone. The queue-attributable cost at the structural extreme is kept under observation
         // here so a regression is loud, but the claim that MATTERS is absolute and lives in
-        // `test_5_3c` (32 seats, 1,188,462 = 4.0% of a 30M block) and `test_5_3d` (the roster we
-        // actually ship, 667,947 = 2.2%). Those are measured against a real block. This is not.
+        // `test_5_3c` (32 seats, 1,162,300 = 3.9% of a 30M block) and `test_5_3d` (the roster we
+        // actually ship, 664,276 = 2.2%). Those are measured against a real block. This is not.
         assertLt(queueCost, 700_000, "the queue-attributable cost at the structural extreme has regressed");
     }
 
@@ -528,17 +573,19 @@ contract GasTest is QueueFixture {
     ///      up, so it carries every cold cost a real first transaction pays — and at the depth
     ///      `QueueDeployBase` actually constructs (`SHIPPING_SEATS`).
     ///
-    ///      **Measured: 667,969 gas, 2.2% of a 30M block.** For scale, on the identical fixture a
-    ///      ONE-seat sweep is ~566,600 (545,350 in `test_5_1`'s warmed table, plus the ~21,200 of
+    ///      **Measured: 664,276 gas, 2.2% of a 30M block.** For scale, on the identical fixture a
+    ///      ONE-seat sweep is ~566,200 (545,011 in `test_5_1`'s table, plus the ~21,200 of
     ///      cold-account access `_warmUp` exists to factor out) — so the entire cost of having a
-    ///      five-deep queue rather than no queue at all is ~101,000 gas, and the head-only swap
-    ///      that almost every trade actually is stays FLAT in depth (221,316 at 5 seats against
-    ///      221,318 at 32; `test_5_1`).
+    ///      five-deep queue rather than no queue at all is ~98,000 gas, and the head-only swap
+    ///      that almost every trade actually is stays FLAT in depth (221,546 at 5 seats against
+    ///      221,548 at 32; `test_5_1`).
     ///
     ///      **THE LAST TWO DIGITS DRIFT, AND THAT IS RECORDED RATHER THAN SMOOTHED.** Across the
     ///      Phase 8/9 session this figure was measured three times at 667,947, 668,013 and 667,969
     ///      as seat-transfer and INVARIANT-L work landed in `QueueHook` beside it — a spread of 66
-    ///      gas, 0.01%, moving identically on the 32-seat sweep. **Quote ~668,000, not a six-digit
+    ///      gas, 0.01%, moving identically on the 32-seat sweep. It then moved by 3,693 when the
+    ///      whole-book-sweep branch landed, which is a REAL change and not drift: five marks no
+    ///      longer written. **Quote ~664,000, not a six-digit
     ///      number implying a precision this does not have**, and re-measure at the commit you are
     ///      publishing from. The value above is the reading on a tree verified free of any live
     ///      mutation (no `mutate.py` process, no `.forge-snapshots/MUTATION_IN_PROGRESS` marker),
@@ -647,7 +694,7 @@ contract GasTest is QueueFixture {
         // its attribution written down. It is NOT a tolerance widened until a mutation stopped being
         // caught: the behaviour that costs the gas is the behaviour under test in
         // `Premium.t.sol::test_7_10-7_12`, and those go red without it.
-        // 1,100,000 -> 1,250,000 in Phase 8. Measured 1,188,462 = 4.0% of a 30M block, so the
+        // 1,100,000 -> 1,250,000 in Phase 8. Measured 1,162,300 = 3.9% of a 30M block, so the
         // claim this test defends — a sweeping trade is priced like a trade, not like an event —
         // still holds. Attribution is in `test_5_3`'s note.
         assertLt(g, 1_250_000, "a full sweep has stopped being an ordinary transaction");
