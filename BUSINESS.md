@@ -25,6 +25,45 @@ carry, and it supersedes §0.5 and every per-seat table below it.** The earlier 
 the product description was wrong. It was wrong about what the product IS. Everything here is derived
 or measured, and the derivation is reproducible: `python3 docs/research/seat-economics/frontier.py`.
 
+### 0.05 EXPLAIN IT TO ME LIKE I AM TEN
+
+```
+  A Uniswap pool is a shared pot of money that traders trade against.
+  Normally everyone who put money in is treated IDENTICALLY: every trade
+  takes a little bit from every single person, in proportion. You cannot
+  opt out of that. It is not a setting — it is the only thing Uniswap does.
+
+  QUEUE puts the funders in a LINE.
+  Trades hit the person at the FRONT first, then the next, then the next.
+
+        trade ──►  [ 1st ] [ 2nd ] [ 3rd ] ........ [ last ]
+                     ▲                                  ▲
+             gets hit by EVERY trade            almost never gets hit
+
+  THE SURPRISE, AND IT IS THE WHOLE PRODUCT:
+  BEING FIRST IS BAD.
+
+  When the price is falling, the person at the front buys the whole way
+  down — starting at the highest, worst prices. Everyone behind them buys
+  later and cheaper. We measured this carefully and it is not close.
+
+  So standing at the front is VOLUNTEERING TO TAKE THE PAIN,
+  and everybody behind you does measurably better because you did.
+```
+
+**Why that is worth something.** Companies today rent liquidity by **printing tokens** and handing
+them out. It dilutes their holders, the money leaves the moment the printing stops, and the promise
+is just a governance vote that can be undone.
+
+**QUEUE lets a company rent liquidity by standing at the front of the line instead.** It prints
+nothing, dilutes nobody, and keeps its capital — it simply earns less on it, on purpose, so that
+outside investors in the same pool earn more. **And it is not a promise: it is the order the contract
+fills people in.**
+
+**The honest part, which we say first, not last:** this does not create money. Every point the back
+gains, the front loses. It is a subsidy, deliberately paid, and the only novel thing is that the
+subsidy is *mechanical* rather than *printed*.
+
 ### 0.1 What QUEUE is, in one sentence
 
 > **A fixed-term Uniswap position whose funders are RANKED — rank 1 is filled first by every trade,

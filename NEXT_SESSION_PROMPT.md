@@ -23,6 +23,91 @@ instead of 346) because the orchestrator took the toolchain while a teammate sti
 
 ---
 
+## 0b. THE STRATEGY — WHAT WE SHIP AND HOW WE FRAME IT. THIS IS DECIDED; EXECUTE IT.
+
+**Do not re-open the value question. Do not hunt for a better story. Build the four deliverables in
+§0c and say the words in §0d.** Four theses were killed with pre-registered criteria (§4). Exactly
+one claim survived, it is measured, and it is enough.
+
+### THE ONE CLAIM WE MAKE
+
+> **QUEUE is subordination for Uniswap liquidity. It is the first mechanism that lets one LP inside a
+> single position take structurally worse fills so that another LP gets structurally better ones —
+> enforced by the contract, not by a promise.**
+
+### THE ONE APPLICATION WE LEAD WITH
+
+> **Emissions-free liquidity incentives.** A protocol posts its own capital at the FRONT of the queue
+> and accepts the worse fills. External LPs fund the BACK and provably out-earn passive LPing. No
+> tokens printed, no dilution, no vesting, no forum post that can be reversed — the subsidy is fill
+> order and rent routing, and it is mechanical.
+
+### THE NUMBERS WE QUOTE, AND ONLY THESE
+
+`results-tranche.txt` §12, φ = 8500, per-path excess over a pro-rata LP on the SAME seed:
+
+| regime | LP itself | rank 28 excess (p5) | beat LP | rank 32 excess (p5) | beat LP |
+|---|---|---|---|---|---|
+| BENIGN ±10% | +3.36% | +2.14% (+1.37%) | **100%** | +3.29% (+1.74%) | **100%** |
+| NORMAL ±10% | −0.26% | +1.98% (+1.50%) | **100%** | +3.24% (+2.46%) | **100%** |
+| TOXIC ±10% | −2.23% | +1.80% (+1.68%) | **100%** | +3.01% (+2.63%) | **100%** |
+| TOXIC ±30% | −5.74% | +4.37% (+4.26%) | **100%** | +6.86% (+6.57%) | **100%** |
+
+**The 5th-percentile excess is POSITIVE in every regime** — this is not a mean effect with a bad tail.
+Capital-weighted mean excess across all 32 ranks is `−0.00%`: it is a transfer, and we say so.
+
+### WHAT WE MUST NEVER CLAIM — each of these is disproven in this repo
+
+* ❌ "LPs earn more here." The capital-weighted average IS the passive LP return, by identity.
+* ❌ "Better execution / priority is valuable to the holder." Priority costs ~476 bps (5.160).
+* ❌ "A senior tranche with protected downside." Downdev ratio 0.0–1.6× and the TAIL IS WORSE (5.174).
+* ❌ Any per-seat number without naming its roster. Three are in play (5.163); four retractions came
+  from mixing them.
+
+### THE HONEST CAVEATS WE STATE OURSELVES, BEFORE ANYONE ASKS
+
+1. **It is a transfer, not creation.** The front pays for the back, exactly.
+2. **Simulation only.** No live-pool data. 120 paths, four seed ranges, one pair.
+3. **The subsidiser must post real capital** — roughly comparable to what it subsidises. This is not
+   leverage on a marketing budget.
+4. **+119% gas** for every trader on the pool (152,947 vs 69,970).
+5. **The front seat is a bad investment and we will say so on camera.** That is the point: somebody
+   has to volunteer, and the volunteer is the protocol, not a yield-seeker.
+
+### WHY THIS EARNS RESPECT RATHER THAN RIDICULE
+
+The Uniswap Foundation funds research concluding LPs lose money. This audience rewards measurement.
+**Lead with the mechanism and the application; use the four killed theses as the credibility layer,
+never as the headline.** "We tried to kill our own value proposition with pre-registered criteria and
+succeeded four times, and here is the one claim that survived" is a strong position. "We found
+nothing" is not the same sentence and must not be said.
+
+## 0c. THE FOUR DELIVERABLES — nothing else
+
+1. **The hook.** DONE. 311 tests, 85/85 mutations RED, four evacuation doors closed.
+2. **A live demo on Unichain Sepolia** (funded `PRIVATE_KEY`, chain 1301) showing the subordination
+   beat by beat: a protocol seat at the FRONT, external seats at the BACK, a swap, and the resulting
+   split. `Deploy.t.sol` and `DeployFork.t.sol` already execute this path.
+3. **A one-page results sheet**: the surviving claim with the §12 table, the four killed theses each
+   with the number that killed it, and the five caveats above.
+4. **The video, under 5 minutes, human voice.** Structure in §0d.
+
+## 0d. THE SCRIPT — say it in this order
+
+1. **The problem (30s).** Protocols print tokens to rent liquidity. It dilutes holders, the capital
+   leaves when emissions stop, and the promise is a governance decision that can be reversed.
+2. **The mechanism (60s).** Uniswap fills every LP in a position pro-rata — that is not a choice,
+   it is the only option. QUEUE gives each funder a RANK and fills them in order. **Being first is
+   BAD: you absorb the adverse selection first. We measured it.** So the front seat is a first-loss
+   position, and everyone behind it does better.
+3. **The application (60s).** The protocol stands at the front. External LPs stand behind. Show the
+   §12 table. **State the transfer out loud.**
+4. **The evidence (60s).** 311 tests, 85 mutations zero survivors, four evacuation exploits found and
+   closed, and four business theses we killed ourselves with criteria written down in advance.
+5. **The caveats (30s).** All five. Say them yourself.
+
+---
+
 ## 1. THE ASSESSMENT — IS THIS HOOK STILL INTERESTING?
 
 **The engineering is excellent and the mechanism is now sound. The investment thesis is DEAD, and as
