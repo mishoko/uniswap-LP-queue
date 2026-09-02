@@ -2,39 +2,62 @@
 
 **A Uniswap v4 hook that lets the people putting up the money buy and sell their place in line — so whoever wants to be filled first pays whoever is willing to go last.**
 
-> ## ⚠ CORRECTED 2026-09-02 — READ THIS BEFORE THE BODY
+> ## ⚠ CORRECTED 2026-09-02 (Phase 9) — READ THIS BEFORE THE BODY
 >
-> Everything below is the mechanism, and the mechanism is accurate. **The product description is
-> not**, and three numbers in it are wrong. Corrected here rather than quietly edited, so a reader
-> can check.
+> The mechanism below is accurate. **The product description is not**, and it has now been corrected
+> twice. This version is derived rather than asserted, and the derivation is reproducible:
+> `python3 docs/research/seat-economics/frontier.py`.
 >
-> **1. It ships FIVE seats, not 32.** `MAX_SEATS = 32` is structural — one byte per rank in a
-> 32-byte word — and it is a cap, never a recommendation. `QueueDeployBase` deploys `SEATS = 5`, and
-> measurement says that is right: at five seats **all five are reached in every regime** and the top
-> two take 87–99.9% of turnover, where 32 equal seats leave one to two ranks with literally zero
-> flow. Every "32 desks" in the text below should read "five".
+> **0. RETRACTION, SAME DAY, POINT 1 BELOW IS WRONG IN OUR OWN FAVOUR.** The formula stands. The
+> number I put in it does not. `B₁` was measured against a keeper forced to convert **against its own
+> pool** — 88% of that keeper's modelled cost is that one term. Let it route through an aggregator at
+> 5 bps and it scores **+6.20% against the passive LP's +5.02%**, i.e. `LP − B₁` is NEGATIVE and
+> **no φ clears in any regime, by identity.** The exact figure is being measured. **Do not quote
+> "1.1%/yr".** This is correction #4 in the same direction; see PITFALLS 5.136 and 5.140.
 >
-> **2. The book is not a ladder of 32 differentiated positions. It is rank 1 plus a pool.** On the
-> shipped roster, adjacent-rank separation is **2.37 between seats 1 and 2 and 0.01–0.09 everywhere
-> else** — ranks 2–5 are indistinguishable to a holder. At φ = 0 they turn over 0.04–1.03× across
-> the band's *entire life*; rank 1 collects **528× rank 2**. Their whole economic content is the
-> premium, and the premium is shared by inventory weight, not by rank. **So the ordering among seats
-> 2–5 is decoration.** The honest sentence is: *rank 1 is a market maker doing 122–543× turnover;
-> seats 2–5 are a premium-sharing pool in which rank does nothing.*
+> **1. THE VALUE OF THIS MECHANISM IS A FORMULA, AND IT IS SMALL.** With `c₁` = rank 1's share of the
+> capital, `LP` = what a passive LP earns and `B₁` = what rank 1 would earn doing its next best
+> thing, the surplus the whole roster can share is
 >
-> **3. The gas figure has now been wrong twice, both times in our favour.** "+48%" compared against
-> a pool that had never traded. "+133%" was right until today's fix, which made the hot path
-> *cheaper*. **It is +119%** — 152,947 against 69,970, same swap, same storage state.
+> ```
+>            SURPLUS  =  c₁ × ( LP − B₁ )
+> ```
 >
-> **4. "Desk 32 is worth funding" rested on a mechanism that did not run.** On the 18/6 pool this
-> script actually deploys, the token0-direction premium reached the roster **0 wei, 0 of 4
-> accruals**, against an 18/18 control stranding 0%. Fixed today; see `PITFALLS.md` §5.124.
+> Rank 1's own return **cancels** — and so do the roster size, the ordering rule, the premium's
+> weighting and φ. Confirmed to 2.4e-16. On the shipped roster that is **0.19 pp of book over the
+> band's life, about 1.1%/yr.** See [`FRONTIER.md`](docs/research/seat-economics/FRONTIER.md).
 >
-> **What survives, and it is the whole product: the FRONT seat.** Rank 0 is a two-sided claim on flow
-> that re-anchors to spot on every swap, in both directions, at zero cost — and it beats an
-> *optimistically modelled* keeper-managed ATM range by **30 to 758 points**. Replicating that
-> property costs 80–123%/yr at the widths that compete. **What is NOT established is what a buyer
-> will pay for it** — see `BUSINESS.md` §0.
+> **2. SO IT ONLY WORKS FOR CAPITAL THAT CANNOT SIMPLY BE AN LP.** Set `B₁ = LP` — a yield seeker's
+> alternative — and the surplus is **exactly zero**, at any φ. QUEUE is for *constrained* capital: a
+> desk that must hold at-the-money inventory, a treasury working a position, an issuer distributing
+> supply. **The size of the product is the size of the constraint.**
+>
+> **3. THE PREVIOUS HEADLINE WAS MEASURED AGAINST A HANDICAPPED COMPETITOR.** "Rank 1 beats a keeper
+> bot by 30–758 points" was computed with the keeper swept only to 5% width. At the band's own 10%
+> the keeper does **zero re-mints**, pays ~0 conversion cost, and beats every narrower setting —
+> against which **every published φ window was empty, including the shipped φ = 7,900.** See
+> PITFALLS 5.136.
+>
+> **4. IT SHIPS FIVE SEATS, NOT 32, AND `c₁` IS WHY.** Surplus is *linear* in the head's capital
+> share: shipped 5-seat (`c₁ = 0.333`) → 0.19 pp; 32 EQUAL seats (`c₁ = 0.031`) → 0.018 pp, i.e.
+> nothing. `MAX_SEATS = 32` is structural — one byte per rank in a 32-byte word — and was never an
+> economic recommendation. Every "32 desks" below should read "five".
+>
+> **5. RANKS 2–5 ARE A POOL, NOT A LADDER.** Adjacent-rank separation is 2.37 between seats 1 and 2
+> and 0.01–0.09 everywhere else. The premium is shared by depth contributed, not by rank.
+>
+> **6. IT IS A FIXED-TERM INSTRUMENT AND THAT IS THE PRODUCT.** The band never moves; expected life
+> is 61 days benign / 19 normal / 1.4 toxic. Rolling it would require holding both tokens while
+> holding one — a trade at market, which is exactly the cost rank 1 is here to avoid. **The term is
+> the boundary of the property being sold.** Band width is a deploy parameter: life scales as
+> `width²`, depth as `1/width`.
+>
+> **7. GAS: +119%** — 152,947 against 69,970, same swap, same storage state. The figure has been
+> wrong twice before, both times in our favour.
+>
+> **WHAT IS STILL NOT ESTABLISHED:** what a buyer will actually PAY for first fill. We measured what
+> the property costs to replicate; we did not measure demand, and no simulator can. That question
+> decides whether this product exists.
 
 Think of a shop with a **paid counter** and a **public warehouse**.
 

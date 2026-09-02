@@ -20,57 +20,161 @@ Nothing in this document is a revenue, TVL, or adoption forecast. There is no ba
 
 ## 0. THE VERDICT A DECISION-MAKER CAN ACT ON
 
-**What you are buying:** a 32-desk paid counter around today's price, plus ordinary Uniswap liquidity anyone can add further out with Uniswap's own tools. Cash providers at the counter buy and sell *place in line*. The customer still trades through ordinary Uniswap, at the ordinary price, at the ordinary trading fee. The hook does not replace Uniswap's curve. It orders the people who are already at that price, and it gets out of the way everywhere else.
+**Rewritten 2026-09-02 (Phase 9). This section replaces the 2026-09-02 correction banner it used to
+carry, and it supersedes §0.5 and every per-seat table below it.** The earlier banner was right that
+the product description was wrong. It was wrong about what the product IS. Everything here is derived
+or measured, and the derivation is reproducible: `python3 docs/research/seat-economics/frontier.py`.
 
-**What you are not buying:** sandwich protection, lower LP losses in total, cheaper execution, or a better deal for the shopper. The shopper pays **~119% extra network compute** [MEASURED 2026-09-02: 152,947 against 69,970 on an identical hookless pool in the same storage state] and gets the same trade. The **desks** are the customer of this product.
+### 0.1 What QUEUE is, in one sentence
 
-> **⛔ THIS SECTION IS SUPERSEDED IN ITS PRODUCT DESCRIPTION, 2026-09-02.** The costs below are
-> corrected in place. The *product* is not what this section says it is, and the replacement is
-> shorter and truer:
->
-> **QUEUE sells ONE thing: the front seat.** Rank 0 is a two-sided claim on flow that re-anchors
-> itself to spot on every swap, in both directions, at zero cost — and `beforeAddLiquidity` refusing
-> in-band liquidity is what forces an always-optional player (a JIT bot) to hold an always-on
-> position and pay for it. Measured against a keeper-managed narrow ATM range — modelled
-> **optimistically**, with instant re-mint and no latency, no missed blocks and no MEV on its own
-> conversion trade — rank 1 wins by **30 to 758 points** at φ = 0. Replicating the property costs
-> **80–123%/yr** in conversion fee and price impact at the widths that actually compete.
->
-> **The seats behind it are not an instrument. They are the depth that buys the flow.** On the
-> shipped 5-seat roster at φ = 0 they turn over 0.04–1.03× across the band's *entire life* and
-> realise about zero; their entire economic content is the premium. Rank 1 collects **528× rank 2**.
-> So the honest description is: *rank 1, a market maker doing 122–543× turnover, plus a four-member
-> premium-sharing pool in which rank does nothing.* Not "32 desks".
->
-> **And no φ can make every seat beat an ordinary LP — by identity.** The capital-weighted mean of
-> the seats' returns **is** the pro-rata LP's return, measured to 1.4e-12. φ does not create value;
-> it chooses who is paid to lose. §0.5's "two products" framing and every per-seat table below it
-> are superseded by `docs/research/seat-economics/results-shipping.txt`.
+> **A fixed-term Uniswap position whose funders are RANKED — rank 1 is filled first by every trade,
+> and pays for that automatically, out of the fees being first earns it, to the people it jumped.**
 
-| If you wanted… | You got… | Decision |
-|---|---|---|
-| Anyone with $50 can LP | 32 paid seats, always for sale | **Reject.** Ordinary Uniswap. |
-| Stop sandwiches / MEV | Unchanged. Same prices, same attacks. | **Reject.** Different product. |
-| LPs lose less overall | Total pool P&L identical to the cent [ESTIMATE, §7]. Redistribution, not reduction. | **Reject** if that was the KPI. |
-| Professional desks that want first fill without posting more capital, and passive capital that wants to be paid to wait | That instrument, which Uniswap cannot express today | **Consider**, in the cases in §2. |
-| A public, on-chain number for "what is being first worth?" | The head seat's self-posted price. Both "near zero" and "high" are results. | **Consider**, as an experiment. The market that would produce that number **does not exist yet**. |
+```
+   A TRADER — any router, never sees the queue
+        │   same price · same 0.30% fee · +119% gas
+        ▼
+   ┌────────────────────────────────────────────┐
+   │  AN ORDINARY UNISWAP POOL                  │
+   └───────────────────┬────────────────────────┘
+                       │  the 0.30% fee
+                       ▼
+              ┌──────────────────┐
+              │  RANK 1          │  filled FIRST by every trade, both directions
+              │  1/3 of the book │  inventory recycles 122–543× over the band's life
+              └────────┬─────────┘
+         keeps ~21% ───┤
+                       │  hands ~79% (φ) to the seats it jumped,
+                       ▼  in proportion to the DEPTH each contributed
+        ┌──────────┬──────────┬──────────┬──────────┐
+        │  RANK 2  │  RANK 3  │  RANK 4  │  RANK 5  │
+        └──────────┴──────────┴──────────┴──────────┘
+           rarely filled. They ARE the depth that
+           makes the pool worth trading against.
 
-**Do the benefits outweigh the costs?** Only in a professional venue where (a) the front can hedge, (b) rent actually flows to the back, and (c) the extra network cost is acceptable because the desks already chose this book. In a retail ETH/USDC pool the answer is **no**: you paid **+119%** extra compute [MEASURED 2026-09-02] for a reshuffle of LP P&L that the shopper cannot see.
+   PLUS: rank 1 posts its own price and pays rent on it.
+         Anyone may buy the seat at that price, at any time.
+```
 
-> **THE ONE UNMEASURED THING THE WHOLE PRODUCT RESTS ON, stated here rather than buried.** Rank 1 can
-> rationally accept a *below-LP* return, because it is buying costless re-anchoring that no LP can
-> sell it. That is what makes the shipping φ window non-empty. **Hold rank 1 to the passive-LP bar
-> instead and the window is EMPTY at any φ** — it falls below that bar at φ = 6,397 in the benign
-> regime, while the seats behind it need φ ≥ 7,455 to beat passive LPing at all. We have measured
-> what the re-anchoring property **costs to replicate** (80–123%/yr at competing widths). We have
-> **not** measured what a buyer will **pay** for it, and no simulator can tell us. **That single
-> question decides whether this product exists.** Ordinary Uniswap liquidity *outside* the desks restores permissionless depth away from the money; it does not make the paid counter as deep per dollar as a tight market-maker range.
+### 0.2 The one constraint that governs everything
 
-**The founding 32 names are an endowment**, not a purchase. Whoever deploys picks them. After one transaction they belong to whoever values them — every founding seat starts unpriced, and an unpriced seat is free to take. There is no admin to undo that.
+The seats share **one** Uniswap position. So, as an identity rather than a result:
+
+```
+      capital-weighted average of all seats' returns  ==  what ONE ordinary LP earns
+```
+
+Measured to **3e-14, and INVARIANT TO φ.** The mechanism creates nothing. **It decides who is paid to
+lose.** Any pitch of the form *"LPs earn more here"* is false. This project has made that claim twice
+and both times it was wrong.
+
+### 0.25 🚨 RETRACTION, SAME DAY — READ BEFORE §0.3
+
+**The formula in §0.3 stands. The number I put in it does not, and it was wrong in this project's own
+favour for the fourth time.** I set `B₁` from the best keeper over the WIDTH axis (w = 10%, +4.45%)
+and reported a surplus of +0.19 pp of book ≈ 1.1%/yr. That keeper is modelled converting **against its
+own pool**, and that single term is 61.60 of its 70.23 points of cost — 88%. A real keeper routes
+through an aggregator. **At 5 bps off-venue it scores +6.20%, ABOVE the passive LP's +5.02%** — so
+`LP − B₁ < 0`, `SLACK < 0`, and **no φ clears in any regime, by identity.**
+
+**Every "thin but real" statement in §0.3–§0.5 is suspended pending the exact measurement.** Treat the
+tables as UPPER BOUNDS that are probably negative. The `c₁` and constrained-capital arguments are
+unaffected in structure — what is unresolved is whether any modelled alternative puts `B₁` below `LP`
+at all, and so far none does.
+
+### 0.3 Therefore the value is a formula, not a story
+
+Let `c₁` be rank 1's share of the capital, `LP` what a passive LP earns, and `B₁` what rank 1 would
+earn doing its **next best thing**.
+
+```
+        ┌──────────────────────────────────────────────────────────────┐
+        │                                                              │
+        │            SURPLUS   =   c₁  ×  ( LP  −  B₁ )                │
+        │                                                              │
+        │   the head's            how much WORSE the head's            │
+        │   capital share         alternative is than simply LPing     │
+        │                                                              │
+        └──────────────────────────────────────────────────────────────┘
+```
+
+Rank 1's own return **cancels**. So do `N`, the capital schedule beyond `c₁`, the ordering rule, the
+premium's weighting, the rent, and φ. Confirmed to 2.4e-16 against an independent long-form
+computation. Full derivation and the conditions under which it is exact:
+[`docs/research/seat-economics/FRONTIER.md`](docs/research/seat-economics/FRONTIER.md).
+
+**Read it as the go/no-go it is:**
+
+| if rank 1's real alternative is… | `LP − B₁` | surplus (shipped roster) | verdict |
+|---|---|---|---|
+| **a passive LP** | 0 | **exactly 0.0000** | **no product, at any φ, ever** |
+| a keeper bot at its best width | +0.57 pp | **0.19 pp of book ≈ 1.1%/yr** | thin, real |
+| a keeper bot at 1% width | +74 pp | 24.7 pp | nobody rational runs that |
+
+### 0.4 Which means: QUEUE only works for CONSTRAINED capital
+
+**Unconstrained capital — anyone chasing yield — can simply be a passive LP.** For them `B₁ ≥ LP`,
+the surplus is zero or negative, and there is no reason to be here. **Do not sell to them.**
+
+**Constrained capital cannot take that option without abandoning its mandate**: a desk that must hold
+at-the-money inventory, a treasury working a position, an issuer distributing supply. Its `B₁` is the
+best *constrained* alternative — a keeper bot re-minting a narrow range — and that is measurably
+below `LP`. **The size of this product is the size of that constraint.** That is the sharpest true
+statement available about who this is for.
+
+### 0.5 What each side actually gets
+
+| party | gets | gives up | walks away when |
+|---|---|---|---|
+| **Rank 1** | First fill, both directions, every trade, **with no rebalancing trade ever** | A below-LP return | its unconstrained alternative becomes available |
+| **Ranks 2–5** | LP + ~0.25 pp, funded by rank 1 | Their place in line; **they underperform a plain LP in a crash** | the coupon stops clearing |
+| **Trader** | Nothing | **+119% gas** (152,947 vs 69,970) | their router optimises for gas |
+| **Wing LPs** | Ordinary Uniswap outside the band | Nothing | never — they are unaffected |
+| **Deployer** | A public, on-chain price for *"what is being first worth in this pair?"* | Picks band, φ, τ, roster | — |
+
+**Ranks 2–5 are not a ladder.** Adjacent-rank separation is 2.37 between seats 1 and 2 and 0.01–0.09
+everywhere else. Say *"rank 1 plus a four-member premium-sharing pool"*, never *"32 desks"*.
+
+### 0.6 It is a FIXED-TERM instrument, and that is the product, not a limitation
+
+The band is set once at deployment and **never moves**. When price leaves it, the position stops
+earning and holders withdraw. Expected life on the shipped band: **61 days benign, 19 normal, 1.4
+toxic.**
+
+That cannot be engineered away, and the reason is an identity: liquidity quoting *across* spot needs
+**both** tokens, a position the price has left holds exactly **one**, and acquiring the other is a
+trade at market — **which is precisely the conversion cost rank 1 is here to avoid.** Rank 1's
+re-anchoring is free *because it happens inside a band and is paid for by the flow itself*. Crossing
+bands is not re-anchoring; it is the keeper's trade at the keeper's price.
+
+**So the term is the boundary of the property being sold.** Band width is a deployment parameter, and
+expected life scales as `width²` while depth scales as `1/width` — doubling the band quadruples the
+term and only halves the depth.
+
+### 0.7 What is NOT established, stated first rather than buried
+
+**What a buyer will actually PAY for first fill.** We have measured what the property costs to
+replicate. We have not measured demand, and no simulator can. **That single question decides whether
+this product exists.** It is a go-to-market question, not an engineering one.
+
+### 0.8 What to say, and what never to say
+
+**SAY:** *"a fixed-term priority book where the front seat pays the depth behind it, automatically."*
+**SAY:** *"the surplus is `c₁·(LP − B₁)`, about 1%/yr, and here is the derivation."*
+**NEVER SAY:** "LPs earn more." "Cheaper or safer trades." "Sandwich protection." "32 desks."
 
 ---
 
-## 0.5 WHO BUYS WHICH SEAT, AND WHEN THEY LOSE
+
+## 0.9 SUPERSEDED — WHO BUYS WHICH SEAT, AND WHEN THEY LOSE
+
+> **⛔ SUPERSEDED 2026-09-02 by §0.3. Kept because this project records what was refuted, not just
+> what survived.** Every per-seat table below prices seats against a bar that the closed form makes
+> irrelevant: the surplus available to the whole roster is `c₁·(LP − B₁)` regardless of how it is
+> split, so a per-seat window computed without naming `B₁` is not a decision rule. The specific
+> defect is 5.136 — the keeper bar these tables lean on was swept only to 5% width and never to the
+> band's own 10%, where the keeper does zero re-mints and beats every narrower setting.
+
 
 The product is the seats. If no seat pays, there is no product. This section is the arithmetic, per
 seat, with the conditions written next to it — and it is deliberately the least flattering section

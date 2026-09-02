@@ -25,6 +25,91 @@ Newest entry first. Never delete an entry — supersede it.
 
 ---
 
+## PHASE 9 — 2026-09-02. THE VALUE QUESTION, ANSWERED IN CLOSED FORM. AND FOUR RETRACTIONS, ALL IN OUR OWN FAVOUR.
+
+**Status: IN PROGRESS at time of writing. Read `PITFALLS.md` 5.136-5.143 before anything else.**
+
+### What was proven
+
+**`SLACK = c₁ · (LP − B₁)`** — the entire surplus this mechanism can deliver, in closed form.
+`c₁` is the head's capital share, `LP` the pro-rata LP return, `B₁` rank 1's best outside
+alternative. Derivation substitutes the identity `Σ c_i r_i == LP` into
+`Σ_{i≥2} c_i(LP − r_i)`; **rank 1's own return CANCELS**, and so do `N`, the capital schedule
+beyond `c₁`, the ordering rule, the premium's weighting, the rent and φ. Long form against closed
+form agree to **2.4e-16 / 5.2e-18 / 4.8e-17** over 120 paths. The identity itself was re-verified
+independently: 36 cells, worst residual **2.98e-14**, and invariant to φ.
+
+Three consequences, each of which redirected work: **(a)** set `B₁ = LP` and the slack is exactly
+zero, so QUEUE clears only for capital that CANNOT take the passive-LP option; **(b)** depth was
+never the economic variable, `c₁` was, linearly — which answers 5.129 from the economics rather than
+the gas; **(c)** no re-weighting of the premium can create value, only stop destroying it.
+
+The closed form is **optimistic once any back seat already sits above `LP`** (5.138) — the exact
+form is `Σ c_i·max(0, LP − r_i)`, because φ cannot claw back from a seat above the bar. The two
+disagree by 0.47 pp in TOXIC.
+
+### What was RETRACTED — four numbers, every one wrong in this project's favour
+
+1. **"Rank 1 beats a keeper by 30–758 points"** — measured on a **32-equal book with a $31,250
+   head**, then multiplied by the SHIPPED $333,333 head, across two configurations
+   `report_shipping.py`'s own docblock calls not interchangeable. Shipped-roster truth: **−1.1 to
+   +9.7 points**. It also silently dropped the two TOXIC rows in the same table (5.141).
+2. **"Replicating the property costs 80–123%/yr"** — cited at `QueueDeployBase.sol:87` and
+   **appears nowhere on disk**. Annualising all 30 published and measured cells produces neither
+   number. UNPROVEN (5.141).
+3. **The φ window [7455, 8312], and therefore φ = 7,900** — `results-shipping.txt` was produced with
+   `sim.PREM_WEIGHT = 'inventory'`, the PRE-Phase-8 rule, because `report_shipping.py` never sets the
+   flag. **The rule we ship has never been swept.** `results-addendum.txt` §E says so in as many
+   words, in the same commit (5.142).
+4. **"Surplus ≈ 1.1%/yr, thin but real"** — MY number, published to four documents and a memo, then
+   retracted the same day. `B₁` was taken from a keeper modelled converting **against its own pool**,
+   which is 88% of that keeper's entire cost. Off-venue at 5 bps the keeper scores **+6.20% against
+   the LP's +5.02%**, so `LP − B₁ < 0` and no φ clears in any regime (5.140).
+
+**The pattern, and it is the session's most useful output: I caught the handicap on the WIDTH axis,
+published the corrected number, and it was still handicapped on the CONVERSION-VENUE axis I never
+thought to enumerate. "I swept the parameter that was wrong" is not "the benchmark is now allowed
+its best move."**
+
+### Defects found — none of which existed on a baseline of 248 green, 80 mutations RED, 0 survivors
+
+| | defect | evidence |
+|---|---|---|
+| 1 | **A THIRD evacuation door: the sybil buyout.** +267 bps, rank kept, rent 0, gas 516,741. Kills every "a PAID takeover keeps its rank" remedy | `Evacuation.t.sol` `test_8_11` |
+| 2 | **`buySeat` has no rank guard.** A seller front-runs a buyout with `withdraw(all)`; the buyer pays the rank-0 price for a tail seat | traced, test pending |
+| 3 | **INVARIANT L breaks by 20% of the position on an ordinary buyout, IN BAND, on committed HEAD.** `_onSeatTransfer` handles one direction of the burn comparison; the mirror deletes contributed depth that stays in the position. `standingL` is the premium's denominator | `Maturity.t.sol` `test_M12`/`M12b` RED, `M12c` names the fix |
+| 4 | **INVARIANT L is not in the invariant campaign at all**, though the handler already calls `buySeat`. That is why (3) survived six phases | `Invariant.t.sol` has I1–I8e, no L |
+| 5 | **The pool BRICKS at maturity.** Position holds 4.9567e16 wei of token0 and quotes 2.573e17 of liquidity **it cannot trade**; every one-for-zero swap reverts `QueueUnderflow` | `Maturity.t.sol` `test_M7f` |
+| 6 | **`QueueUnderflow` IS reachable through an ordinary swap**, and `Adversarial.t.sol` `test_6_15` says in capitals that it is not — its argument was true when written and **Phase 7 falsified it** by adding `premiumOwed` to the identity it rests on | executed |
+| 7 | **One wei of currency0 captures 100% of a rent pot above the band.** `_distributeRent` has a `w == 0` branch and no `w == 1` branch — the same shape `_settlePremium` was given an exclusion to close | `Maturity.t.sol` `test_M9b` |
+| 8 | **`_settlePremium` advances a mark on a seat it never settled**, erasing that seat's claim on every earlier accrual. Attacker-chooseable by swap size | traced independently by two agents |
+
+### Instruments corrected
+
+* **The 300k gas budget does not exist.** `Gas.t.sol:122` is `BUDGET = 550_000` while the log label
+  says "the 300k budget"; a real 300k supports 14. The number was back-formed to make `MAX_SEATS = 32`
+  look comfortable and then 32 was "derived" from it — circular, ratcheted 300k → 400k → 550k every
+  time it was about to bind. **Resolution: keep 32 as a pure structural cap, DELETE the budget.**
+  New number for the docs: the **shipped 5-seat sweep is 667,947 gas, 2.2% of a block**, 18% above a
+  1-seat sweep. The actually-binding cost is `addToSeat` at 2,667,423, which 5.129 never mentioned.
+* **"Seats are fixed at deployment" is NOT the defence against roster-walk griefing.** `_fundSeat`
+  must rewind both cursors, and seats are Harberger-purchasable, so a buyer of low ranks can re-dust
+  before each victim swap. **Harberger rent is the defence; the fixed roster only caps the damage.**
+* **The premium bound in the Phase 8 handoff was wrong on the lower side.** It is
+  `−1 ≤ C − W ≤ k−1`: two floors, not one. The `−1` is STRUCTURAL — it fires whenever a seat is the
+  sole unexcluded payee, which a head-only swap on a 2-seat roster hits every accrual.
+
+### A proposal of mine, killed by measurement
+
+I proposed pro-rating the boundary seat's premium weight, claiming it was "strictly between excluded
+and full weight and therefore cannot overpay". **False, and measured:** seat 2's share reads
+excluded 0.0%, pro-rated **25.0%**, full-L 20.0% — it pays MORE than the rule it was supposedly
+bounded by, because shrinking one weight renormalises every other share upward. It also reproduced
+`test_7_14` at **100% of the pot**. Withdrawn (5.143). Recorded with attribution because it was made
+in the same hour I was telling three other agents to apply LAW 5 to their own proposals.
+
+---
+
 ## HANDOFF — the top item for the next session, with the hard part already done
 
 **Teach `QueueFixture._refAllocate` the premium.** The independent witness has never modelled φ, so
