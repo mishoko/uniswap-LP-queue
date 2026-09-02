@@ -80,6 +80,17 @@ contract InvariantTest is QueueFixture {
     ///      1,000 ppb — one part per million — which is stable rather than barely-passing.
     uint256 constant SHORTFALL_PPB = 1_000;
 
+    /// @dev **THE CAMPAIGN HAS NEVER RUN AT φ > 0, AND THAT IS A COVERAGE HOLE RATHER THAN A
+    ///      CHOICE.** `QueueFixture._premiumBps()` returns 0, this file never overrode it, and the
+    ///      premium landed in Phase 7 — so every invariant here has only ever been checked against a
+    ///      contract with the priority premium switched off. On this project the campaign has found
+    ///      a real defect every time it was pointed somewhere new, and it has never been pointed
+    ///      here. It now runs at the SHIPPING φ, which is also the only configuration that exercises
+    ///      `_settlePremium`, the payer exclusion, and the premium's half of `_syncSeat`.
+    function _premiumBps() internal view virtual override returns (uint256) {
+        return 8_500; // QueueDeployBase.PREMIUM_BPS
+    }
+
     function setUp() public {
         deployArtifactsAndLabel();
         vm.roll(100);
@@ -142,8 +153,20 @@ contract InvariantTest is QueueFixture {
     function invariant_I1_ledgerEqualsTheGhost() public view {
         (uint256 t0, uint256 t1) = hook.totals();
         (uint256 w0, uint256 w1) = hook.pendingTotals();
-        assertEq(t0 + w0, handler.gIn0() - handler.gOut0(), "I1: token0 ledger != ghost");
-        assertEq(t1 + w1, handler.gIn1() - handler.gOut1(), "I1: token1 ledger != ghost");
+        // **`premiumOwed` IS ON THE LEDGER SIDE, AND ITS ABSENCE HERE WAS A COVERAGE HOLE RATHER
+        // THAN A BUG IN THE HOOK.** A premium is withheld from a fill and credited to a seat only
+        // when that seat is next touched, so between those two moments the wei have entered the
+        // queue — the ghost counts them — while no seat's RAW balance claims them. `totals()` is
+        // deliberately the raw slot sum. `QueueFixture._checkInvariantF` was amended for exactly
+        // this in Phase 7; this file's copy of the same identity was not, and nothing noticed
+        // because the campaign had never been run at φ > 0. One rule, two places, right in one:
+        // the sixth instance on this project (PITFALLS 5.37, 5.50, 5.52 twice, 5.73, 5.125).
+        //
+        // The residue is real but tiny — each claim is a FLOORED share, so sub-wei remainders stay
+        // in `premiumOwed` for good. Measured on the first φ > 0 campaign: 3 wei on a 7.4e20 ledger.
+        (uint256 q0, uint256 q1,,) = hook.premiums();
+        assertEq(t0 + w0 + q0, handler.gIn0() - handler.gOut0(), "I1: token0 ledger != ghost");
+        assertEq(t1 + w1 + q1, handler.gIn1() - handler.gOut1(), "I1: token1 ledger != ghost");
     }
 
     /// @notice I2 — SOLVENCY. Everything the queue is owed is backed by the position plus the float.
@@ -156,8 +179,13 @@ contract InvariantTest is QueueFixture {
         (uint256 w0, uint256 w1) = hook.pendingTotals();
         (uint256 f0, uint256 f1) = hook.floats();
         (uint256 p0, uint256 p1) = _positionValue();
-        _solvent("I2 token0", t0 + w0, p0 + f0, handler.gIn0());
-        _solvent("I2 token1", t1 + w1, p1 + f1, handler.gIn1());
+        // Same omission as I1, same reason, and here it presented as the position being
+        // OVER-BACKED by exactly the unsettled premium — which reads like a solvency defect and is
+        // the instrument. PITFALLS 5.75: a broken measurement that looks like a broken mechanism
+        // has cost this project more time than any real bug.
+        (uint256 q0, uint256 q1,,) = hook.premiums();
+        _solvent("I2 token0", t0 + w0 + q0, p0 + f0, handler.gIn0());
+        _solvent("I2 token1", t1 + w1 + q1, p1 + f1, handler.gIn1());
     }
 
     /// @dev The witness is the handler's ghost, built from its own inputs and from token flows
@@ -330,8 +358,13 @@ contract InvariantTest is QueueFixture {
         // Face value is an UPPER BOUND, not a promise (dust policy F1). Same two-sided bound as I2,
         // but measured by REALLY BURNING the position rather than by valuing it — which is the one
         // instrument the hook cannot be wrong about, and the one §E.4's residual is defined against.
-        _solvent("I2b token0", t0 + w0, g0 + f0, handler.gIn0());
-        _solvent("I2b token1", t1 + w1, g1 + f1, handler.gIn1());
+        // The premium terms belong on the ledger side here for the same reason as in I1 and I2 —
+        // this is the REDEEMABILITY half of the same identity (LAW 3, second corollary), so it has
+        // the same shape. It is a THIRD copy of INVARIANT F in this file alone, which is why the
+        // Phase 7 amendment could be missing from all three and go unnoticed at φ = 0.
+        (uint256 q0, uint256 q1,,) = hook.premiums();
+        _solvent("I2b token0", t0 + w0 + q0, g0 + f0, handler.gIn0());
+        _solvent("I2b token1", t1 + w1 + q1, g1 + f1, handler.gIn1());
 
         vm.revertToState(snap);
     }

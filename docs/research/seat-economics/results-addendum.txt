@@ -1,0 +1,399 @@
+====================================================================================================
+ADDENDUM -- basis-independent controls, plus tau. Companion to results-tranche.txt.
+====================================================================================================
+  Nothing here re-runs the phi sweep. Sections A-C do not depend on the premium's weight
+  at all; section D is derived from numbers already published in results-tranche.txt;
+  section E is the readiness gate for the L-weighting re-run.
+
+====================================================================================================
+A.  REACH AT THE SHIPPED CONFIGURATION -- the deploy ships SEATS = 5, funded 5:4:3:2:1
+====================================================================================================
+  `QueueDeployBase.sol:100` sets SEATS = 5 and `DeployQueue.s.sol:101` funds them with
+  `mul = SEATS - i`, i.e. capital weights 5:4:3:2:1 and a head that is 33.3% of the book.
+  The documentation's '32 desks' is not what runs. Deepest rank touched per swap:
+
+            config                    shape   p50   p90   p99   max |  arb p50  arb p90  arb p99 |  top-2 turnover  ranks w/ flow
+     BENIGN +/-10%    shipped 5 (5:4:3:2:1)     1     1     2     5 |        1        1        3 |           99.1%          5/5  
+                                    5 equal     1     1     3     5 |        1        1        4 |           98.1%          5/5  
+                                   32 equal     1     2    14    32 |        1        7       24 |           87.2%         32/32 
+                      32 uneven (600k head)     1     1     1    32 |        1        1       12 |           99.2%         32/32 
+
+     BENIGN +/-30%    shipped 5 (5:4:3:2:1)     1     1     1     5 |        1        1        1 |           99.9%          5/5  
+                                    5 equal     1     1     1     5 |        1        1        1 |           99.8%          5/5  
+                                   32 equal     1     2     4    31 |        1        2        4 |           97.8%         31/32 
+                      32 uneven (600k head)     1     1     1    28 |        1        1        1 |           99.9%         28/32 
+
+     NORMAL +/-10%    shipped 5 (5:4:3:2:1)     1     1     2     5 |        1        1        4 |           97.9%          5/5  
+                                    5 equal     1     1     3     5 |        1        2        5 |           95.8%          5/5  
+                                   32 equal     1     3    19    32 |        2       11       27 |           74.6%         32/32 
+                      32 uneven (600k head)     1     1     1    32 |        1        1       20 |           98.1%         32/32 
+
+     NORMAL +/-30%    shipped 5 (5:4:3:2:1)     1     1     1     5 |        1        1        2 |           99.7%          5/5  
+                                    5 equal     1     1     2     5 |        1        1        3 |           99.3%          5/5  
+                                   32 equal     1     3     9    32 |        2        4       15 |           76.4%         32/32 
+                      32 uneven (600k head)     1     1     1    31 |        1        1        1 |           99.7%         31/32 
+
+      TOXIC +/-10%    shipped 5 (5:4:3:2:1)     1     1     4     5 |        1        3        5 |           87.5%          5/5  
+                                    5 equal     1     1     5     5 |        1        4        5 |           79.6%          5/5  
+                                   32 equal     1     6    28    32 |        4       25       31 |           54.8%         32/32 
+                      32 uneven (600k head)     1     1    21    31 |        1       14       28 |           88.1%         31/32 
+
+      TOXIC +/-30%    shipped 5 (5:4:3:2:1)     1     1     4     5 |        1        3        5 |           91.2%          5/5  
+                                    5 equal     1     1     5     5 |        1        4        5 |           86.5%          5/5  
+                                   32 equal     1     4    29    32 |        2       24       31 |           77.1%         32/32 
+                      32 uneven (600k head)     1     1    24    32 |        1       13       30 |           91.5%         32/32 
+
+====================================================================================================
+B.  FILL SPANS UNDER THE REAL FUNDING DISTRIBUTIONS -- does rank become a tick span?
+====================================================================================================
+  The claim to test: under uneven funding the cumulative funded fraction jumps from ~0.6
+  at rank 1 to ~1.0 across the rest, so ranks 2..N collapse onto approximately ONE price
+  region, which is exactly where a free static wing is the exact substitute.
+  Measured: fraction of the band's sqrt-price width each rank was EVER filled over.
+
+     BENIGN +/-10%    shipped 5 (5:4:3:2:1)  r1:102% r2:100% r3:100% r4:100% r5:102%
+                                    5 equal  r1:102% r2:100% r3:100% r4:100% r5:102%
+                                   32 equal  r1:102% r2:100% r3:100% r4:100% r5:100% r8:100% r16:100% r24:100% r32:102%
+                      32 uneven (600k head)  r1:102% r2:100% r3:100% r4:100% r5:100% r8:100% r16:100% r24:100% r32:102%
+
+     BENIGN +/-30%    shipped 5 (5:4:3:2:1)  r1:102% r2:102% r3:102% r4:102% r5:0%
+                                    5 equal  r1:102% r2:102% r3:102% r4:102% r5:102%
+                                   32 equal  r1:102% r2:102% r3:102% r4:102% r5:102% r8:102% r16:102% r24:102% r32:0%
+                      32 uneven (600k head)  r1:102% r2:102% r3:102% r4:102% r5:102% r8:102% r16:102% r24:101% r32:0%
+
+     NORMAL +/-10%    shipped 5 (5:4:3:2:1)  r1:101% r2:100% r3:100% r4:100% r5:101%
+                                    5 equal  r1:101% r2:100% r3:100% r4:100% r5:101%
+                                   32 equal  r1:101% r2:100% r3:100% r4:100% r5:100% r8:100% r16:100% r24:100% r32:101%
+                      32 uneven (600k head)  r1:101% r2:100% r3:100% r4:100% r5:100% r8:100% r16:100% r24:100% r32:100%
+
+     NORMAL +/-30%    shipped 5 (5:4:3:2:1)  r1:103% r2:103% r3:103% r4:102% r5:102%
+                                    5 equal  r1:103% r2:102% r3:103% r4:103% r5:102%
+                                   32 equal  r1:103% r2:103% r3:102% r4:102% r5:102% r8:102% r16:102% r24:101% r32:102%
+                      32 uneven (600k head)  r1:103% r2:103% r3:103% r4:103% r5:103% r8:101% r16:101% r24:101% r32:0%
+
+      TOXIC +/-10%    shipped 5 (5:4:3:2:1)  r1:82% r2:81% r3:81% r4:8% r5:2%
+                                    5 equal  r1:82% r2:81% r3:81% r4:81% r5:9%
+                                   32 equal  r1:82% r2:81% r3:81% r4:81% r5:81% r8:81% r16:81% r24:13% r32:1%
+                      32 uneven (600k head)  r1:82% r2:81% r3:81% r4:81% r5:81% r8:15% r16:9% r24:4% r32:0%
+
+      TOXIC +/-30%    shipped 5 (5:4:3:2:1)  r1:58% r2:32% r3:20% r4:10% r5:4%
+                                    5 equal  r1:58% r2:58% r3:29% r4:20% r5:10%
+                                   32 equal  r1:58% r2:58% r3:58% r4:58% r5:58% r8:37% r16:26% r24:14% r32:2%
+                      32 uneven (600k head)  r1:58% r2:20% r3:20% r4:19% r5:18% r8:16% r16:11% r24:6% r32:1%
+
+====================================================================================================
+C.  THE WING LADDER, A PRIORI, PER RANK  (phi = 8500)
+====================================================================================================
+  Each rank's substitute is TWO plain positions -- one per direction -- over the price
+  slices the funding geometry says that rank occupies, funded with the same capital and
+  split in proportion to the seat's own two-sided exposure. Sized from FUNDING, never
+  from observed fills: a wing sized from hindsight is a tautological witness.
+
+  A TIE IS A LOSS. The wing is free, cancellable in any block, uncapped, needs no
+  roster seat and lets the holder choose their own ticks. Matching it while charging
+  rent and adding contract risk is losing, so 'seat > wing' is reported STRICTLY.
+
+  NOTE ON THE NULL: these per-rank wings do NOT tile the band (they are sized to
+  slices that overlap at the head and leave gaps), so there is no built-in zero-sum
+  identity for the LADDER. The identity that IS enforced is the one that has one:
+  sum(seats) == the pro-rata position, checked at 1e-15 in results-tranche.txt section 11,
+  and the full-band wing null, re-checked here.
+
+  full-band wing null over 2160 runs: worst fee 6.81e-03, worst markout 9.45e-04
+
+  ---------------- shipped 5 (5:4:3:2:1) ----------------
+            config  rank    capital       seat       wing   seat-wing  seat>wing  p5 of diff
+     BENIGN +/-10%     1    333,333     +1.70%     +2.39%      -0.68%        49%      -7.85%
+                       2    266,667     +5.73%     +1.57%      +4.17%        88%      -0.60%
+                       3    200,000     +6.59%     +1.05%      +5.54%        89%      -0.62%
+                       4    133,333     +7.78%     +0.43%      +7.35%        98%      +1.21%
+                       5     66,667     +8.57%     +0.15%      +8.42%       100%      +2.39%
+                     ALL                                                   4/5 ranks beat their own wing on the mean
+
+     BENIGN +/-30%     1    333,333    +28.28%    +23.13%      +5.14%        64%     -15.55%
+                       2    266,667    +25.37%    +13.42%     +11.94%        78%      -9.01%
+                       3    200,000    +28.80%     +7.31%     +21.50%        94%      -1.94%
+                       4    133,333    +31.54%     +2.93%     +28.61%       100%      +6.63%
+                       5     66,667    +31.95%     +0.86%     +31.09%       100%     +11.18%
+                     ALL                                                   5/5 ranks beat their own wing on the mean
+
+     NORMAL +/-10%     1    333,333     -3.18%     -1.43%      -1.76%        40%      -7.45%
+                       2    266,667     +1.59%     -1.13%      +2.72%        85%      -0.29%
+                       3    200,000     +2.40%     -0.80%      +3.20%        97%      +0.10%
+                       4    133,333     +2.92%     -0.37%      +3.29%       100%      +0.49%
+                       5     66,667     +3.80%     -0.01%      +3.80%       100%      +1.03%
+                     ALL                                                   4/5 ranks beat their own wing on the mean
+
+     NORMAL +/-30%     1    333,333     +1.56%     +6.02%      -4.46%        55%     -30.27%
+                       2    266,667    +17.30%     +3.47%     +13.83%        91%      -0.66%
+                       3    200,000    +19.00%     +2.26%     +16.74%        91%      -0.86%
+                       4    133,333    +20.55%     +1.44%     +19.11%        98%      +1.91%
+                       5     66,667    +21.47%     +0.32%     +21.14%       100%      +5.40%
+                     ALL                                                   4/5 ranks beat their own wing on the mean
+
+      TOXIC +/-10%     1    333,333     -3.81%     -3.83%      +0.02%        61%      -0.09%
+                       2    266,667     -2.45%     -2.57%      +0.11%        73%      -0.08%
+                       3    200,000     -1.31%     -1.50%      +0.20%        92%      -0.04%
+                       4    133,333     -0.24%     -0.62%      +0.39%        98%      +0.09%
+                       5     66,667     +0.67%     -0.03%      +0.70%       100%      +0.42%
+                     ALL                                                   5/5 ranks beat their own wing on the mean
+
+      TOXIC +/-30%     1    333,333     -9.49%     -9.67%      +0.18%        88%      -0.03%
+                       2    266,667     -6.46%     -6.56%      +0.10%        84%      -0.14%
+                       3    200,000     -3.57%     -3.84%      +0.26%        89%      -0.07%
+                       4    133,333     -1.21%     -1.75%      +0.54%        98%      +0.25%
+                       5     66,667     +0.70%     -0.33%      +1.03%       100%      +0.66%
+                     ALL                                                   5/5 ranks beat their own wing on the mean
+
+  ---------------- 32 equal ----------------
+            config  rank    capital       seat       wing   seat-wing  seat>wing  p5 of diff
+     BENIGN +/-10%     1     31,250    -12.66%     +2.63%     -15.29%         8%     -46.44%
+                       2     31,250     -5.16%     +2.29%      -7.44%        29%     -29.68%
+                       3     31,250     +1.29%     +2.17%      -0.88%        55%     -12.50%
+                       4     31,250     +3.14%     +2.03%      +1.11%        64%      -8.30%
+                       5     31,250     +3.77%     +1.88%      +1.89%        69%      -5.77%
+                       8     31,250     +4.62%     +1.71%      +2.92%        78%      -3.31%
+                      16     31,250     +5.66%     +1.36%      +4.30%        79%      -1.70%
+                      24     31,250     +6.92%     +0.93%      +5.99%        90%      -0.38%
+                      32     31,250     +8.66%     +0.05%      +8.61%       100%      +2.61%
+                     ALL                                                  29/32 ranks beat their own wing on the mean
+
+     BENIGN +/-30%     1     31,250    -67.89%    +25.96%     -93.85%         2%    -184.13%
+                       2     31,250   +116.39%    +24.75%     +91.64%       100%     +21.88%
+                       3     31,250    +39.22%    +24.43%     +14.79%        73%     -32.77%
+                       4     31,250    +32.77%    +23.08%      +9.69%        72%     -27.73%
+                       5     31,250    +30.14%    +22.33%      +7.81%        72%     -33.41%
+                       8     31,250    +25.68%    +18.74%      +6.94%        76%     -18.30%
+                      16     31,250    +25.06%    +12.56%     +12.50%        76%     -16.43%
+                      24     31,250    +29.29%     +5.73%     +23.56%        95%      +0.25%
+                      32     31,250    +31.95%     +0.42%     +31.54%       100%     +12.60%
+                     ALL                                                  31/32 ranks beat their own wing on the mean
+
+     NORMAL +/-10%     1     31,250    -20.09%     -1.79%     -18.30%         2%     -51.05%
+                       2     31,250    -11.53%     -1.82%      -9.71%        13%     -32.39%
+                       3     31,250     -5.48%     -1.61%      -3.87%        34%     -19.40%
+                       4     31,250     -2.44%     -1.67%      -0.77%        50%      -8.45%
+                       5     31,250     -0.74%     -1.65%      +0.91%        62%      -4.53%
+                       8     31,250     +1.32%     -1.63%      +2.95%        78%      -2.43%
+                      16     31,250     +1.23%     -1.14%      +2.38%        82%      -0.72%
+                      24     31,250     +2.40%     -0.75%      +3.15%        96%      +0.13%
+                      32     31,250     +3.81%     +0.01%      +3.80%       100%      +1.08%
+                     ALL                                                  28/32 ranks beat their own wing on the mean
+
+     NORMAL +/-30%     1     31,250    -76.57%     +5.11%     -81.68%         0%    -144.70%
+                       2     31,250    -35.19%     +4.88%     -40.07%        44%    -145.00%
+                       3     31,250     -3.42%     +4.59%      -8.01%        65%    -113.97%
+                       4     31,250    +16.01%     +4.85%     +11.15%        78%     -22.82%
+                       5     31,250    +14.90%     +4.85%     +10.06%        79%     -14.70%
+                       8     31,250    +18.44%     +4.40%     +14.04%        79%     -14.63%
+                      16     31,250    +16.72%     +2.59%     +14.13%        86%      -3.00%
+                      24     31,250    +19.27%     +1.52%     +17.75%        92%      -0.65%
+                      32     31,250    +21.50%     +0.28%     +21.22%       100%      +5.33%
+                     ALL                                                  29/32 ranks beat their own wing on the mean
+
+      TOXIC +/-10%     1     31,250     -6.16%     -4.32%      -1.83%        18%      -6.29%
+                       2     31,250     -4.63%     -4.30%      -0.32%        50%      -2.83%
+                       3     31,250     -3.90%     -4.21%      +0.31%        68%      -1.68%
+                       4     31,250     -3.64%     -4.10%      +0.46%        71%      -0.42%
+                       5     31,250     -3.58%     -3.99%      +0.40%        71%      -0.27%
+                       8     31,250     -3.35%     -3.61%      +0.26%        69%      -0.24%
+                      16     31,250     -2.40%     -2.51%      +0.11%        80%      -0.13%
+                      24     31,250     -1.14%     -1.36%      +0.22%        88%      -0.10%
+                      32     31,250     +0.75%     +0.00%      +0.75%       100%      +0.42%
+                     ALL                                                  30/32 ranks beat their own wing on the mean
+
+      TOXIC +/-30%     1     31,250    -12.76%    -10.91%      -1.86%        21%      -6.68%
+                       2     31,250     -8.84%    -10.83%      +1.99%        96%      +0.06%
+                       3     31,250     -9.45%    -10.61%      +1.16%        78%      -0.35%
+                       4     31,250     -9.77%    -10.31%      +0.54%        68%      -0.39%
+                       5     31,250     -9.83%     -9.99%      +0.16%        62%      -0.41%
+                       8     31,250     -9.04%     -9.06%      +0.02%        60%      -0.47%
+                      16     31,250     -6.27%     -6.37%      +0.10%        74%      -0.35%
+                      24     31,250     -3.13%     -3.42%      +0.30%        86%      -0.26%
+                      32     31,250     +1.13%     -0.08%      +1.21%       100%      +0.81%
+                     ALL                                                  31/32 ranks beat their own wing on the mean
+
+  ---------------- 32 uneven (600k head) ----------------
+            config  rank    capital       seat       wing   seat-wing  seat>wing  p5 of diff
+     BENIGN +/-10%     1    600,000     +3.49%     +2.51%      +0.99%        85%      -0.96%
+                       2     12,903     +5.52%     +0.87%      +4.66%        92%      -0.38%
+                       3     12,903     +5.60%     +1.02%      +4.57%        91%      -0.50%
+                       4     12,903     +5.76%     +1.04%      +4.72%        90%      -1.07%
+                       5     12,903     +5.96%     +1.07%      +4.89%        86%      -0.99%
+                       8     12,903     +6.43%     +0.94%      +5.49%        87%      -1.12%
+                      16     12,903     +7.67%     +0.71%      +6.97%        95%      +0.06%
+                      24     12,903     +7.80%     +0.28%      +7.52%        99%      +0.98%
+                      32     12,903     +8.67%     +0.03%      +8.65%       100%      +2.74%
+                     ALL                                                  32/32 ranks beat their own wing on the mean
+
+     BENIGN +/-30%     1    600,000    +26.98%    +21.03%      +5.95%       100%      +2.02%
+                       2     12,903    +27.27%    +10.00%     +17.27%        83%      -9.96%
+                       3     12,903    +27.59%     +9.50%     +18.09%        86%     -12.15%
+                       4     12,903    +27.80%     +9.13%     +18.67%        86%      -8.76%
+                       5     12,903    +27.90%     +8.63%     +19.28%        92%      -5.53%
+                       8     12,903    +28.29%     +7.03%     +21.26%        90%      -2.54%
+                      16     12,903    +30.60%     +4.28%     +26.32%        97%      +1.19%
+                      24     12,903    +31.79%     +2.11%     +29.68%       100%      +9.40%
+                      32     12,903    +31.95%     +0.23%     +31.73%       100%     +13.43%
+                     ALL                                                  32/32 ranks beat their own wing on the mean
+
+     NORMAL +/-10%     1    600,000     -1.06%     -1.08%      +0.02%        79%      -1.94%
+                       2     12,903     +2.39%     -1.04%      +3.43%        90%      -0.34%
+                       3     12,903     +2.39%     -0.96%      +3.35%        89%      -0.60%
+                       4     12,903     +2.32%     -0.98%      +3.30%        90%      -0.29%
+                       5     12,903     +2.32%     -0.95%      +3.27%        90%      -0.35%
+                       8     12,903     +2.44%     -0.93%      +3.37%        91%      -0.16%
+                      16     12,903     +2.51%     -0.63%      +3.15%        97%      +0.05%
+                      24     12,903     +3.13%     -0.31%      +3.43%        98%      +0.58%
+                      32     12,903     +3.80%     +0.00%      +3.80%       100%      +1.08%
+                     ALL                                                  32/32 ranks beat their own wing on the mean
+
+     NORMAL +/-30%     1    600,000     +8.55%     +6.23%      +2.32%        87%      -5.32%
+                       2     12,903    +17.76%     +1.90%     +15.86%        92%      -2.01%
+                       3     12,903    +17.80%     +2.10%     +15.70%        90%      -2.25%
+                       4     12,903    +18.34%     +2.32%     +16.02%        87%      -4.07%
+                       5     12,903    +18.76%     +2.42%     +16.34%        85%      -3.64%
+                       8     12,903    +19.00%     +2.07%     +16.93%        89%      -1.84%
+                      16     12,903    +19.79%     +1.79%     +18.00%        95%      +0.36%
+                      24     12,903    +20.92%     +1.07%     +19.85%        96%      +1.61%
+                      32     12,903    +21.51%     +0.21%     +21.30%       100%      +5.26%
+                     ALL                                                  32/32 ranks beat their own wing on the mean
+
+      TOXIC +/-10%     1    600,000     -3.21%     -3.25%      +0.04%        70%      -0.02%
+                       2     12,903     -1.76%     -1.95%      +0.19%        78%      -0.24%
+                       3     12,903     -1.70%     -1.89%      +0.19%        82%      -0.20%
+                       4     12,903     -1.63%     -1.83%      +0.21%        78%      -0.12%
+                       5     12,903     -1.56%     -1.76%      +0.20%        81%      -0.18%
+                       8     12,903     -1.41%     -1.59%      +0.17%        83%      -0.11%
+                      16     12,903     -0.85%     -1.09%      +0.25%        88%      -0.17%
+                      24     12,903     -0.05%     -0.49%      +0.44%        96%      +0.07%
+                      32     12,903     +0.75%     +0.00%      +0.75%       100%      +0.42%
+                     ALL                                                  32/32 ranks beat their own wing on the mean
+
+      TOXIC +/-30%     1    600,000     -8.14%     -8.26%      +0.12%        98%      +0.02%
+                       2     12,903     -4.79%     -4.98%      +0.20%        85%      -0.38%
+                       3     12,903     -4.63%     -4.84%      +0.21%        84%      -0.28%
+                       4     12,903     -4.46%     -4.67%      +0.20%        82%      -0.44%
+                       5     12,903     -4.30%     -4.51%      +0.21%        78%      -0.38%
+                       8     12,903     -3.80%     -4.08%      +0.28%        87%      -0.15%
+                      16     12,903     -2.41%     -2.76%      +0.36%        86%      -0.28%
+                      24     12,903     -0.86%     -1.48%      +0.62%        97%      +0.05%
+                      32     12,903     +1.29%     +0.00%      +1.29%       100%      +0.82%
+                     ALL                                                  32/32 ranks beat their own wing on the mean
+
+====================================================================================================
+D.  THE TAU SURFACE -- tau as the PRICE OF THE PRODUCT, jointly with phi
+====================================================================================================
+  Inputs are PARSED from results-tranche.txt, not re-run and not re-typed. Echoed here
+  so they can be diffed against the source file:
+
+            config    life         LP   best managed wing  rank1 @phi=0      @5000      @8500
+     BENIGN +/-10%   61.0d     +5.02%             +21.84%      +153.80%    +52.95%    -12.66%
+     BENIGN +/-30%  283.1d    +28.29%            +130.58%      +888.38%   +397.59%    -67.89%
+     NORMAL +/-10%   19.1d     +0.49%              +0.72%       +32.17%     -0.04%    -20.09%
+     NORMAL +/-30%  160.4d    +13.10%             +36.39%      +384.14%    +74.63%    -76.57%
+      TOXIC +/-10%    1.4d     -2.17%              -2.12%        -1.79%     -4.37%     -6.16%
+      TOXIC +/-30%    3.9d     -5.71%              -6.33%        -2.09%     -8.39%    -12.76%
+
+  THE ARITHMETIC, AND WHICH PARTS ASSUME ANYTHING.
+
+   A(phi) = rank1 realised  -  max(pro-rata LP, best managed wing)   [ALL MEASURED]
+            the front's advantage per dollar over the best thing it could do instead.
+
+   Participation, no assumption:  a holder pays rent tau*P over the life and will not
+   pay more than the advantage is worth, so
+        P_max = A(phi) * C * (1yr/life) / tau        and
+        rent collected over the life = tau * P * (life/1yr)  <=  A(phi) * C.
+
+   ****  THE RENT THE BOOK CAN COLLECT IS BOUNDED BY A(phi) AND IS INDEPENDENT OF tau.
+         tau sets the PRICE LEVEL of a seat, not the REVENUE. Raising tau lowers the
+         self-price by exactly the same factor.  ****
+
+   Only the SPLIT of that bound between holder and book depends on an assumption. With
+   the Harberger equilibrium the project's README already flags as unestablished,
+   P* = A/(tau+k), the book gets A * tau/(tau+k) -- a fraction, never more than A.
+
+            config    phi  A(phi) realised  binding outside option  rent bound $ (life)           $/yr  tail coupon realised        /yr
+     BENIGN +/-10%      0         +131.96%            managed wing              439,867      2,633,068               +65.98%   +394.96%
+                     5000          +31.11%                                      103,700        620,754               +15.55%    +93.11%
+                     8500          -34.50%                                     -115,000       -688,397          NONE -- A<=0         --
+
+     BENIGN +/-30%      0         +757.80%            managed wing            2,526,000      3,257,340              +378.90%   +488.60%
+                     5000         +267.01%                                      890,033      1,147,720              +133.50%   +172.16%
+                     8500         -198.47%                                     -661,567       -853,107          NONE -- A<=0         --
+
+     NORMAL +/-10%      0          +31.45%            managed wing              104,833      2,005,985               +15.72%   +300.90%
+                     5000           -0.76%                                       -2,533        -48,475          NONE -- A<=0         --
+                     8500          -20.81%                                      -69,367     -1,327,331          NONE -- A<=0         --
+
+     NORMAL +/-30%      0         +347.75%            managed wing            1,159,167      2,636,933              +173.87%   +395.54%
+                     5000          +38.24%                                      127,467        289,968               +19.12%    +43.50%
+                     8500         -112.96%                                     -376,533       -856,558          NONE -- A<=0         --
+
+      TOXIC +/-10%      0           +0.33%            managed wing                1,100        281,754                +0.17%    +42.26%
+                     5000           -2.25%                                       -7,500     -1,921,053          NONE -- A<=0         --
+                     8500           -4.04%                                      -13,467     -3,449,357          NONE -- A<=0         --
+
+      TOXIC +/-30%      0           +3.62%             pro-rata LP               12,067      1,143,983                +1.81%   +171.60%
+                     5000           -2.68%                                       -8,933       -846,926          NONE -- A<=0         --
+                     8500           -7.05%                                      -23,500     -2,227,922          NONE -- A<=0         --
+
+  'rent bound' uses the SHIPPED head (5/15 of a $1M book = $333,333). REALISED first, then
+  the same number annualised -- the annualiser is 365/life and reaches 94x in TOXIC, which
+  is exactly the distortion this report refuses to print on its own. 'tail coupon' spreads
+  it over the remaining $666,667. All four columns are CEILINGS at any tau, not forecasts.
+
+                   With the ASSUMED equilibrium P* = A/(tau+k), the book's share of that ceiling:
+               tau        k=10%       k=20%       k=40%
+               5%         33%         20%         11% 
+              10%         50%         33%         20% 
+              25%         71%         56%         38% 
+              50%         83%         71%         56% 
+             100%         91%         83%         71% 
+
+  Read the table above as: at tau = 10% and k = 20% the book captures 33% of A(phi), and
+  the holder keeps 67%. NOTHING in it can lift revenue above A(phi).
+
+====================================================================================================
+E.  L-WEIGHTING READINESS -- the gate before the re-run is launched
+====================================================================================================
+  sim.PREM_WEIGHT = 'liquidity' is implemented and unit-checked. It is NOT the default
+  and no grid has been run on it. Checks, all executed:
+
+   n=5   one swap draining the head exactly:
+        inventory  head 0.000e+00 (expect 0)   others 0.0338801269 (expect pot/4 = 0.0338801269)
+        liquidity  head 0.0271041015 (expect pot/5 = 0.0271041015)
+        EFFECTIVE phi at the head = 6800.0   expected 6800   MATCH
+   n=32  one swap draining the head exactly:
+        inventory  head 4.209e-18 (expect 0)   others 0.0006771424 (expect pot/31 = 0.0006771424)
+        liquidity  head 0.0006559817 (expect pot/32 = 0.0006559817)
+        EFFECTIVE phi at the head = 8234.4   expected 8234   MATCH
+
+   LAW 2 negative control (the mutant that pays the pot to the HEAD) under both weights:
+        inventory  correct  1/32 losing, rank32    +28.55%   mutant 16/32, rank32     +0.00%   -> DETECTED
+        liquidity  correct  1/32 losing, rank32    +26.74%   mutant 16/32, rank32     +0.00%   -> DETECTED
+
+   WEIGHT DRIFT AT ACCRUAL TIME -- the corrected instant. A drained seat is at maximum
+   divergence from proportionality one line after being drained, so measuring at path
+   end measures the wrong moment. drift = max_i |a_i/L_i - mean| / mean, per accrual:
+
+            config                    shape   accruals    median       p90       min  frac > 0.5
+     BENIGN +/-10%    shipped 5 (5:4:3:2:1)     60,294     0.492     1.696   0.00001       49.0%
+                                   32 equal     60,294     1.000     3.091   0.00325       91.2%
+
+     BENIGN +/-30%    shipped 5 (5:4:3:2:1)    540,816     0.450     0.996   0.00000       45.6%
+                                   32 equal    540,816     1.017     2.582   0.00210       97.0%
+
+     NORMAL +/-10%    shipped 5 (5:4:3:2:1)     23,568     0.428     1.606   0.00012       42.9%
+                                   32 equal     23,568     1.000     2.347   0.00667       92.2%
+
+     NORMAL +/-30%    shipped 5 (5:4:3:2:1)    261,511     0.609     1.483   0.00002       58.9%
+                                   32 equal    261,511     1.066     2.940   0.00739       97.8%
+
+      TOXIC +/-10%    shipped 5 (5:4:3:2:1)      3,172     0.384     2.298   0.00013       32.1%
+                                   32 equal      3,172     1.000     3.483   0.00201       75.9%
+
+      TOXIC +/-30%    shipped 5 (5:4:3:2:1)      6,953     0.360     2.273   0.00008       36.3%
+                                   32 equal      6,953     0.937     2.659   0.00130       67.1%
+
+====================================================================================================

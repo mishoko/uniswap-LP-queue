@@ -1,210 +1,220 @@
-# NEXT SESSION — find the buyer, or say the project has none. Everything you need is here.
+# NEXT SESSION — QUEUE. The value question is ANSWERED. Read this file, then `AGENTS.md`.
 
-**Read this file, then `docs/research/seat-economics/VALUE.md` (short, and it is the whole problem),
-then `AGENTS.md`. `PLAN.md` / `PROGRESS.md` / `PITFALLS.md` are the technical record and can wait
-until you start writing code.**
-
----
-
-## 0. THE ONE THING THIS SESSION IS FOR
-
-**The contract works. The product has no reason to exist yet. Your job is to find one — or to
-establish, honestly and with evidence, that there is none.**
-
-Do not design a tenth ordering rule. Nine have been tried (`VALUE.md` §3) and they all fail the same
-way, because they are all redistribution.
-
-### The constraint, and it is an identity rather than a measurement
-
-The 32 seats share **one** Uniswap position. Their returns sum to what one ordinary LP would have
-earned in the same range. The hook decides the split and cannot create a dollar.
-
-```
-   sum of all 32 seats  ==  one ordinary Uniswap LP position
-   => the CEILING for all 32 together is to TIE with not using the hook
-   => minus lock, contract risk, closed roster, unrollable band
-   => a seat is currently STRICTLY WORSE than just LPing
-```
-
-The priority premium shipped last session fixed the *distribution* — 29 of 32 seats used to lose
-money, now 0 of 32 do. It did **not** create a reason to participate: it equalised everyone to the
-pool average, which is what they would earn anyway.
-
-### Therefore the only thing that can work
-
-**Money entering the pool from outside, paid by somebody who wants first fill for a reason that is
-not the seat's own trading P&L.** Then the seats behind them earn *pool return + rent*, which is
-strictly better than an ordinary LP, and every seat is motivated. `VALUE.md` FLOW C draws it.
+**Read order: this file → `AGENTS.md` (how to work here — LAWS 1 and 5 were amended on 2026-09-02
+and the amendments are load-bearing) → `PITFALLS.md` §5.124–5.135 → `PLAN.md` only when you write
+code.** `BUSINESS.md` §0 and `README.md` both open with correction banners dated 2026-09-02; those
+banners are current, the bodies beneath them are being rewritten.
 
 ---
 
-## 1. THE BRAINSTORM — run this before touching code. Two rounds minimum.
+## 0. THE ASSESSMENT, OPENING AND CLOSING
 
-Convene the `AGENTS.md` §5 panel. **Scope each agent narrowly and demand a written return** — an
-earlier open-ended panel returned nothing in 50 minutes; a tightly-scoped one returned four strong
-reports in under 10.
+**Yes, this hook is worth shipping — and the reason is one sentence, narrower and better evidenced
+than anything the project claimed before 2026-09-02.**
 
-### ROUND 1 — attack each hypothesis on its own terms
+> **QUEUE sells the front seat: costlessly re-anchoring at-the-money exposure that no LP can buy any
+> other way — and the people it jumps in front of are paid for it, automatically, out of the fees it
+> earns by being first.**
 
-One hypothesis per agent. All four are in `VALUE.md` §4.
+Measured against a keeper-managed narrow ATM range — modelled **optimistically**, with instant
+re-mints, no latency, no missed blocks and no MEV on its own conversion trade — **rank 1 wins by 30
+to 758 points** at φ = 0. Replicating the property costs **80–123%/yr** in conversion fee and price
+impact at the widths that actually compete.
 
-* **H1 — the protocol / DAO replacing emissions.** Protocols burn large budgets on token emissions
-  for mercenary liquidity and everyone calls it wasteful. Could a protocol pay *rent into a QUEUE
-  pool* instead, for committed priority-ranked depth? **Strongest candidate: named buyer, existing
-  budget, acknowledged problem.** Attack it: is priority what the protocol actually wants, or do they
-  want depth and TVL (which QUEUE does not add)? What would they pay per dollar of committed
-  liquidity versus what emissions cost them today? Does the closed 32-seat roster help them (a
-  curated LP set) or block them?
-* **H2 — a treasury or issuer working inventory.** Wants its own inventory traded first when
-  accumulating or distributing. Is head position genuinely better execution than simply trading, or
-  is it a worse TWAP? Be specific about what they save.
-* **H3 — a market maker buying deterministic turnover.** The classic reason queue position is worth
-  microwave towers everywhere else. Does that motive survive translation to an AMM, where you cannot
-  choose *not* to be filled?
-* **H4 — depth sold to the pair / the swapper.** Only real if H1–H3 work. Quantify: how much extra
-  committed capital would make the swapper's price improvement exceed their +133% gas?
-
-**Required output per agent:** who signs the cheque, what budget line it comes from, what they get
-that they cannot buy elsewhere, roughly what they would pay, and **the single strongest reason they
-would walk away.**
-
-### ROUND 2 — kill the survivors, then design against the winner
-
-Take whatever survives Round 1 and run the adversarial lenses at it:
-
-* **Economic incentives / free lane** — is there a state where the outside payer is better off *not*
-  paying, or where a seat holder captures the rent without providing the service?
-* **Devil's advocate** — what is the buyer's real alternative, and is it cheaper? (For H1: keep
-  paying emissions. For H2: just trade. Both are strong.)
-* **Skeptic / real-world feasibility** — has anyone actually done this, and if not, why not?
-* **First principles** — is there a *fifth* source of outside money nobody listed? Unexamined
-  candidates: charging takers for something, selling the pool's ordering as data, an issuer
-  subsidising its own pair's spread, a fund wanting a legibly-ranked LP position for reporting.
-
-**Stop condition:** a named payer, a budget line, a number they would plausibly pay, and a reason
-they cannot get the same thing more cheaply. **If two full rounds do not produce that, write it down
-as a negative result** — a legitimate and valuable outcome. `VALUE.md` §6 says what to do with it.
-
-### What NOT to do in the brainstorm
-
-* Do not re-open rotation. Its three headline numbers are refuted with counter-measurements in the
-  banner on `ROTATION.md`.
-* Do not propose reducing LVR or detecting toxic flow. Both are proven impossible for a v4 hook and
-  are hard rules in `AGENTS.md` §6.
-* Do not accept "the seats are equal now, so it is fair" as a value proposition. Fair and pointless
-  are compatible, and that is exactly where the product sits.
+**And the one thing that is NOT established, stated first rather than buried.** Rank 1 accepts a
+**below-LP return** in exchange for that property. Hold it to the passive-LP bar instead and it falls
+below at φ = 6,397, while the seats behind need φ ≥ 7,455 to beat passive LPing at all — **both
+windows empty, no shipping constant exists.** We measured what the property COSTS to replicate. We
+did not measure what a buyer will PAY for it, and no simulator can. **That single question decides
+whether this product exists.** It is a go-to-market question, not an engineering one.
 
 ---
 
-## 2. TECHNICAL STATE — what you are inheriting
+## 1. THE BUSINESS CASE, IN PLAIN LANGUAGE
 
-**`forge test` -> 224 passed, 0 failed, 1 skipped. `forge lint src/` clean, `forge fmt` clean.**
-
-### First two commands, before anything else
-
-```bash
-sh script/install-hooks.sh     # see section 4 — this is not optional
-python3 script/mutate.py       # THE FULL CAMPAIGN HAS NOT BEEN RUN AGAINST THIS TREE
-```
-
-The campaign was started and interrupted at 14/86 (all RED, no survivors, no BAD-PATTERNs). Phase 7
-edited lines that **existing** mutations target — `_allocate`'s loop body, the seat-balance writes,
-the degenerate fill — so a stale pattern reports `BAD-PATTERN` in a column nobody reads while the
-summary still says "0 SURVIVED" (PITFALLS 5.111). **Run it and read the BAD-PATTERN count.**
-
-### What shipped last session — the priority premium (`PREMIUM_BPS`, phi)
-
-A filled seat keeps `(10000-phi)/10000` of the fee it earned; the rest goes to the seats still
-standing in the line it jumped, weighted by the **opposite** token — you are paid, in the token the
-swapper brought, for the token you did not get to sell. A seat drained to zero carries no weight and
-collects nothing from the pot it generated.
-
-phi = 0 reduces **exactly** to the pre-Phase-7 contract, and is the null control every suite except
-the gas one runs at. Shipping value 8,500. New mutations M81–M87, all RED, 0 survivors.
+### The money flow
 
 ```
-   measured, one head-only swap, 8-seat book, phi = 8500 vs a live phi = 0 control pool
-   ------------------------------------------------------------------------------------
-   head credit, phi = 0        220,870,896,257,107,547
-   head credit, phi = 8500     220,376,980,583,426,340   <- head keeps less
-   each standing seat gains         70,559,381,954,457   <- x 7 seats = the pot, exactly
+                    ┌──────────────────────────────────────────┐
+   A TRADER  ──────▶│  ORDINARY UNISWAP POOL                   │
+   (any router,     │  same price · same 0.30% fee             │
+    never sees      │  +119% network compute                   │
+    the queue)      └───────────────────┬──────────────────────┘
+                                        │  the 0.30% fee
+                                        ▼
+                         ┌──────────────────────────┐
+                         │  SEAT 1 — filled FIRST   │
+                         │  by every single trade   │
+                         └───────┬──────────────────┘
+                 keeps ~21% ─────┤
+                                 │  hands 79% (φ) to the seats it
+                                 │  jumped, in proportion to the
+                                 ▼  DEPTH each of them contributed
+              ┌──────────┬──────────┬──────────┬──────────┐
+              │  SEAT 2  │  SEAT 3  │  SEAT 4  │  SEAT 5  │
+              └──────────┴──────────┴──────────┴──────────┘
+                 rarely filled · they ARE the depth that
+                 makes the pool worth trading against
+
+     PLUS: seat 1 posts its own price and pays RENT on it.
+           Anyone may buy the seat at that price, any time.
 ```
 
-### The measurement that justifies it, and that you should not re-derive
-
-Per rank, 30 price paths, benign flow, +-10% band, no premium:
+### Worked example — $1m book, ±10% band, benign market, 61-day band life
 
 ```
-      rank    fee %/yr   inventory   net %/yr   turnover %/yr
-         0    +1240.1%    -328.3%    +911.8%       +411,877%
-         1      +66.9%     -54.8%     +12.0%        +22,186%
-         7       +5.7%     -26.2%     -20.5%         +1,903%
-        31       +0.1%      -0.0%      +0.1%            +34%
+   seat   capital     role                        realised over the band
+   ─────────────────────────────────────────────────────────────────────
+    1     $333,333    filled by EVERY trade            +2.7%   ◀ below LP
+    2     $266,667    rarely filled                    +5.3%
+    3     $200,000    rarely filled                    +6.1%
+    4     $133,333    rarely filled                    +7.2%
+    5     $ 66,667    almost never filled              +7.9%
+   ─────────────────────────────────────────────────────────────────────
+   an ordinary Uniswap LP, same money, same range     +5.02%
+
+   capital-weighted mean of the five seats  ==  +5.02%   ← EXACTLY the LP
 ```
 
-**The head's advantage is a QUANTITY, not a price.** Marginal pricing already makes it fill at the
-stalest end of every move. That is why a price tweak and a rent on an assessed value both fail, and
-why the instrument had to be a share of fee flow.
+**That last line is an IDENTITY, measured to 1.4e-12.** The five seats share one Uniswap position, so
+their returns must average to what one ordinary LP earns. **φ creates nothing. It decides who is paid
+to lose.** Any pitch implying otherwise is false and this project has made that mistake twice.
 
-### The costs, measured steady-state on both sides
+### Why each party is there
+
+| party | what they get | what they pay | when they walk |
+|---|---|---|---|
+| **Seat 1** | First fill in BOTH directions, always, free. Inventory recycles **122–543×** over the band's life; it collects **528× seat 2's** fees. This is a market-maker position. | φ of every fee it earns, plus rent on its own posted price. Eats every adverse move first. | If φ > 8,312 — the keeper bot becomes cheaper |
+| **Seats 2–5** | A share of seat 1's fee flow, proportional to depth contributed. **+5.3% to +7.9% against the LP's +5.02%.** | Their capital is rarely traded (turnover 0.04–1.03× over the whole band life) | If φ < 7,455 — they stop beating passive LPing |
+| **Trader** | Nothing. Same price, same fee. | **+119% compute.** Cents on an L2, but a cost with no benefit and we do not dress it up | Always, if their router optimises gas |
+| **Router** | Only reason to route here is DEPTH | Worse gas for the same price | A gas-optimising router **should skip this pool.** Real adoption risk |
+| **Wing LPs** | Ordinary Uniswap outside the band. No rent, no roster, cancel any block | Nothing | Never — they are unaffected |
+| **Deployer** | A **public price for "what is being first worth in my pair?"** — a number that exists nowhere else in DeFi | Picks band, φ, τ, roster, founders | — |
+
+### The bootstrapping circle, stated honestly
 
 ```
-   plain v4 pool                  69,970
-   QUEUE, premium off            131,821    +88%
-   QUEUE as shipped (phi=8500)   162,766   +133%
-   per extra seat walked          14,777
+   seat 1 worth holding ──▶ seats fund the book ──▶ pool is deep
+            ▲                                             │
+            └────────────── flow arrives ◀────────────────┘
+
+   The deployer breaks the circle by seeding the founding roster.
+   This is the same circle every new venue has. It is not solved by the mechanism.
 ```
 
-The "+48%" this project published for months was an artifact — it compared against a plain pool that
-had never traded, so the control paid its own one-time storage writes. Corrected everywhere.
+### Seats 2–5 are a POOL, not a ladder
 
-### Outstanding engineering (do this only after section 1 produces a reason to)
-
-1. **Teach the reference allocator the premium.** `QueueFixture._refAllocate` is the independent
-   witness and does not model it, so at phi > 0 the per-seat split rests on `Premium.t.sol`'s
-   controls rather than on the witness. Keep it independent: the contract distributes **lazily**
-   through an accumulator, so make the witness distribute **immediately and exactly**, O(n) per swap,
-   from the spec. Two different shapes cannot be wrong the same way. **Do not widen a tolerance to
-   absorb the rounding difference** (PITFALLS 5.53).
-2. **Run the invariant campaign at phi > 0.** It has only ever run at phi = 0. On this project the
-   campaign found three real bugs in code that had already passed 135 tests and 61 mutations.
-3. **The band/term constructor guard** — approved by the owner, unbuilt. Rule:
-   `half-width(ticks) x 1e-4 >= sigma * sqrt(T)`, with sigma and T stated by the deployer. **Blocked
-   on converting the constructor to a parameter struct** — it is at eleven arguments and the ABI
-   decoder ran out of stack at twelve.
-4. **Broadcast to Unichain Sepolia.** Fork-asserted; needs a funded key. No deployed address exists.
-5. **The video, under five minutes, human voice.**
+Adjacent-rank separation on the shipped roster is **2.37 between seats 1 and 2 and 0.01–0.09
+everywhere else.** The premium is shared by inventory weight, not by rank. **So the ordering among
+seats 2–5 is decoration.** Say "rank 1 plus a four-member premium-sharing pool", never "five ranked
+desks".
 
 ---
 
-## 3. WHAT THE DOCUMENTS SAY, AND WHICH TO TRUST
+## 2. PROVEN IMPOSSIBLE — DO NOT RE-OPEN ANY OF THESE
 
-| File | What it is | Trust |
+Each cost a session. They are closed with evidence, not opinion.
+
+1. **A senior/junior tranche.** In a single pro-rata position the loss ordering and the cash ordering
+   are the SAME ordering, because getting out of token0 IS getting into token1. One queue necessarily
+   governs both legs. Seniority needs two independent orderings, and the moment you have two you have
+   doubled the auction, not created a tranche. **SEARCH CLOSED.**
+2. **LIFO / "unwind backward" to fix the Ratchet.** Measured: it flattens the head/middle turnover
+   ratio from 35–7,704 to 1.0–4.2 — *it abolishes the queue*. Also: "unwind" is not observable to the
+   contract (a seat receiving token0 for token1 has ROTATED, not acquired), so it needs a direction
+   flag, which is a two-transaction free lane. `sim_lifo.py` is a headstone with the four kill
+   reasons.
+3. **`sponsor()` / a DAO paying rent instead of emissions.** Weighted by inventory, so "ranked" does
+   no work and Merkl/gauges already do it uncapped and permissionless. It pays MOST to capital that is
+   never filled — the emissions pathology it claims to cure. It capitalises into the seat price and is
+   captured once, at announcement, by incumbents. **The outside payer already exists and is the
+   queue-jumper, paying via τ and buyout.**
+4. **The Ratchet itself.** Real and measured (recycling holds to ~rank 8, dead from ~24) and **not
+   fixable by any rule that touches fill order**, because turnover concentration IS the priced object.
+5. **Making every seat beat an ordinary LP.** Identity, measured to 1.4e-12. See §1.
+6. **Reducing LVR, and detecting toxic flow.** Closed before this session; still closed.
+
+---
+
+## 3. TECHNICAL STATE
+
+```
+forge test        →  248 passed, 0 failed, 1 skipped (the fork suite; needs QUEUE_FORK=true)
+mutation campaign →  80 RED, 0 SURVIVED, 0 NO-COMPILE, 0 BAD-PATTERN after repairs
+invariant campaign→  13/13 green at φ > 0 for the first time (but see PITFALLS 5.133)
+```
+
+**Run the campaign as `python3 script/mutate.py > /tmp/c.log 2>&1; echo $?` — NEVER pipe it.** A
+pipeline's status is the last command's, so a pipe masks the exit code, which is the only
+machine-readable signal it has (PITFALLS 5.134).
+
+### What Phase 8 fixed — five defects, all measured
+
+| | defect | evidence |
 |---|---|---|
-| `docs/research/seat-economics/VALUE.md` | **The business analysis. Start here.** Why there is no value proposition today and where one could come from | Current |
-| `docs/research/seat-economics/ROTATION.md` | A rejected direction, preserved with a banner carrying the three counter-measurements that killed it | **Superseded — read the banner, not the body** |
-| `README.md` | The 15-minute read. Now says what a seat behind the head is paid and why. **Still overstates the case: it does not yet say a seat TIES with an ordinary LP** | Partly stale |
-| `BUSINESS.md` | The commercial document. Gas figures corrected; the value proposition needs rewriting once section 1 lands | Partly stale |
-| `PITFALLS.md` | The standing hazard ledger, 5.115–5.121 new | Current |
-| `PROGRESS.md` | Narrative, newest first | Current |
+| 1 | **The premium was INERT on the shipped 18/6 pool.** 0 wei of token0 premium reached the roster, 0 of 4 accruals, against an 18/18 control stranding 0%. The guard compared incoming-token wei against outgoing-token wei | `PremiumDecimals.t.sol`, PITFALLS 5.124 |
+| 2 | **A dust seat took the whole pot.** 1 wei of standing inventory claimed 100% of a 2.667e17 pot; front-first makes the tail systematically last-standing | PITFALLS 5.127 |
+| 3 | **A single-token deposit minted ZERO liquidity**, added no depth, and collected the full premium | PITFALLS 5.128 |
+| 4 | **The front could evacuate atomically**, dodge the adverse fill and keep its rank — **+267 bps in one transaction** | `Evacuation.t.sol` |
+| 5 | **The hold branch was a ratchet** — held pots added, so release got strictly harder forever | PITFALLS 5.126 |
 
-**Both `README.md` and `BUSINESS.md` still read as though seat holders make money. They tie. Fix
-that when section 1 gives you something true to put in its place.**
+The fix for 1–3 was one change: **weight the premium by stored contributed liquidity, exclude the
+seats a fill paid over `[start, next]` INCLUSIVE.** The interval looks like an off-by-one and is not —
+`_settlePremium`'s docblock at `QueueHook.sol` carries the cursor-semantics argument and the
+`w=(1,100), S=1.5 → D₂=+0.985` counterexample. **A mutation to the exclusive form goes red in 16
+tests.** Fix for 4 is demote-on-withdraw, refined: taking depth out costs the rank, taking earnings
+does not.
+
+**Gas: the hot path got CHEAPER.** Head-only swap 162,766 → 152,947 (−6.0%); full 32-seat sweep
++14.3%; the 300k budget now supports 27 seats, not 35 (PITFALLS 5.129, OPEN).
+
+### φ = 7,900, solved rather than swept
+
+Window **[7455, 8312]** on the shipped 5-seat roster. Derivation is in
+`script/QueueDeployBase.sol`'s docblock and reproducible via
+`python3 docs/research/seat-economics/report_shipping.py`. **The old 8,500 was chosen against "0 of
+32 seats negative" — a sign test, on a roster we do not deploy.**
 
 ---
 
-## 4. DO NOT
+## 4. WHAT TO DO NEXT, IN ORDER
 
-* **Do not run `forge test`, `forge fmt` or `git commit` while `script/mutate.py` is running.** The
-  commit case is not hypothetical: it happened twice in one session, snapshotting a mutant into
-  `src/` under a message saying "no production code changed" (PITFALLS 5.121). **Run
-  `sh script/install-hooks.sh` once in your clone** — the pre-commit hook refuses while the campaign
-  marker is present. A mutant compiles and the suite passes, so nothing else can catch it.
-* Do not quote "+0.0000%" as evidence about the split. It is a conservation identity and a
-  deliberately corrupt allocator scores the same.
-* Do not trust a number from `docs/research/seat-economics/` checked on only one seed range. That is
-  how the previous decision went wrong (PITFALLS 5.119).
-* Do not add a `PREMIUM_BPS == 0` fast path to flatter the gas suite. `Gas.t.sol` runs at the
-  shipping phi with `PremiumOffGasTest` as its control, deliberately.
-* Do not add a seventh writer of a seat balance without routing it through `_syncSeat` first.
-* Do not claim the swapper benefits. They pay +133% gas for the same price and the same fee.
+1. **Teach `QueueFixture._refAllocate` the premium** — the independent witness has NEVER modelled φ,
+   so at φ > 0 the per-seat split rests only on `Premium.t.sol`'s own controls. **The hard part is
+   already solved:** the derived bound is `0 ≤ contractClaim − witnessClaim ≤ k − 1` wei, where k is
+   the number of accruals since the seat was last settled (the contract takes ONE floor over the
+   interval, an immediate witness takes k; the accumulator's own quantisation is `< L_i/Q` and
+   vanishes at Q = 2^128). **Do not widen a tolerance** — print k, L_i, w_j and Q in the assertion.
+   The witness must compute its OWN contributed liquidity rather than reading `seatLiquidity()`.
+2. **Close PITFALLS 5.133 in the same pass** — `QueueHandler` is premium-blind, so "13/13 green" is
+   not the coverage it looks like. Needs settle-a-seat, settle-ahead, and a swap sized to land the
+   fill boundary on a chosen rank. Same model as (1).
+3. **Resolve PITFALLS 5.129** — `MAX_SEATS = 32` against a 300k budget that pays for 27. Lower the
+   cap, raise the stated budget, or accept it. `test_5_3b` pins the real number (`assertEq(supported,
+   27)`) so a regression is caught either way.
+4. **Rewrite `README.md` and `BUSINESS.md` bodies** beneath their correction banners, around §1 above.
+5. **Broadcast to Unichain Sepolia** — needs a funded `PRIVATE_KEY` (chain 1301). Everything else is
+   fork-asserted.
+6. **The video** — under five minutes, human voice.
+
+---
+
+## 5. HOW TO WORK HERE — the two amendments that matter most
+
+**LAW 1 gained a decimals clause and it cost a shipped feature to learn.** `18/18 is to decimals what
+1:1 is to price.` The one suite testing the premium ran at `dec0 == dec1 == 18`, and the control was
+green *because it is the fixture the law forbids*.
+
+**LAW 5 gained the test that actually catches tautological controls.** Five surfaced in one session:
+**ask what would have to be true for this control to read FAIL. If the answer is "nothing I could
+plausibly do wrong", it is not a control.** Two corollaries: an instrument that AGREES with the
+artifact it models is not thereby validated (they can share a defect); and **a tautology is most
+likely to be introduced by a FIX** — four of the five were added while tightening something, one by
+somebody actively hunting for that exact failure mode. **The defence is a case whose answer is known
+in advance, not a careful look at the metric.**
+
+**Never run `forge`, `git commit` or anything else against the repo while `script/mutate.py` is
+running — including from a teammate.** The interlock guards `forge test` and `git commit`, but
+nothing stops a concurrent agent writing to `src/`, and in a multi-agent session the orchestrator can
+start a campaign while a teammate is mid-write. That happened this session and the campaign had to be
+killed with **SIGINT** (never SIGKILL — the `finally` restores on INT) and restarted.

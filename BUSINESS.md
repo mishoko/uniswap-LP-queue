@@ -22,7 +22,30 @@ Nothing in this document is a revenue, TVL, or adoption forecast. There is no ba
 
 **What you are buying:** a 32-desk paid counter around today's price, plus ordinary Uniswap liquidity anyone can add further out with Uniswap's own tools. Cash providers at the counter buy and sell *place in line*. The customer still trades through ordinary Uniswap, at the ordinary price, at the ordinary trading fee. The hook does not replace Uniswap's curve. It orders the people who are already at that price, and it gets out of the way everywhere else.
 
-**What you are not buying:** sandwich protection, lower LP losses in total, cheaper execution, or a better deal for the shopper. The shopper pays ~48% extra network compute and gets the same trade. The **desks** are the customer of this product.
+**What you are not buying:** sandwich protection, lower LP losses in total, cheaper execution, or a better deal for the shopper. The shopper pays **~119% extra network compute** [MEASURED 2026-09-02: 152,947 against 69,970 on an identical hookless pool in the same storage state] and gets the same trade. The **desks** are the customer of this product.
+
+> **⛔ THIS SECTION IS SUPERSEDED IN ITS PRODUCT DESCRIPTION, 2026-09-02.** The costs below are
+> corrected in place. The *product* is not what this section says it is, and the replacement is
+> shorter and truer:
+>
+> **QUEUE sells ONE thing: the front seat.** Rank 0 is a two-sided claim on flow that re-anchors
+> itself to spot on every swap, in both directions, at zero cost — and `beforeAddLiquidity` refusing
+> in-band liquidity is what forces an always-optional player (a JIT bot) to hold an always-on
+> position and pay for it. Measured against a keeper-managed narrow ATM range — modelled
+> **optimistically**, with instant re-mint and no latency, no missed blocks and no MEV on its own
+> conversion trade — rank 1 wins by **30 to 758 points** at φ = 0. Replicating the property costs
+> **80–123%/yr** in conversion fee and price impact at the widths that actually compete.
+>
+> **The seats behind it are not an instrument. They are the depth that buys the flow.** On the
+> shipped 5-seat roster at φ = 0 they turn over 0.04–1.03× across the band's *entire life* and
+> realise about zero; their entire economic content is the premium. Rank 1 collects **528× rank 2**.
+> So the honest description is: *rank 1, a market maker doing 122–543× turnover, plus a four-member
+> premium-sharing pool in which rank does nothing.* Not "32 desks".
+>
+> **And no φ can make every seat beat an ordinary LP — by identity.** The capital-weighted mean of
+> the seats' returns **is** the pro-rata LP's return, measured to 1.4e-12. φ does not create value;
+> it chooses who is paid to lose. §0.5's "two products" framing and every per-seat table below it
+> are superseded by `docs/research/seat-economics/results-shipping.txt`.
 
 | If you wanted… | You got… | Decision |
 |---|---|---|
@@ -32,7 +55,16 @@ Nothing in this document is a revenue, TVL, or adoption forecast. There is no ba
 | Professional desks that want first fill without posting more capital, and passive capital that wants to be paid to wait | That instrument, which Uniswap cannot express today | **Consider**, in the cases in §2. |
 | A public, on-chain number for "what is being first worth?" | The head seat's self-posted price. Both "near zero" and "high" are results. | **Consider**, as an experiment. The market that would produce that number **does not exist yet**. |
 
-**Do the benefits outweigh the costs?** Only in a professional venue where (a) the front can hedge, (b) rent actually flows to the back, and (c) the extra network cost is acceptable because the desks already chose this book. In a retail ETH/USDC pool the answer is **no**: you paid +48% extra compute [MEASURED] for a reshuffle of LP P&L that the shopper cannot see. Ordinary Uniswap liquidity *outside* the desks restores permissionless depth away from the money; it does not make the paid counter as deep per dollar as a tight market-maker range.
+**Do the benefits outweigh the costs?** Only in a professional venue where (a) the front can hedge, (b) rent actually flows to the back, and (c) the extra network cost is acceptable because the desks already chose this book. In a retail ETH/USDC pool the answer is **no**: you paid **+119%** extra compute [MEASURED 2026-09-02] for a reshuffle of LP P&L that the shopper cannot see.
+
+> **THE ONE UNMEASURED THING THE WHOLE PRODUCT RESTS ON, stated here rather than buried.** Rank 1 can
+> rationally accept a *below-LP* return, because it is buying costless re-anchoring that no LP can
+> sell it. That is what makes the shipping φ window non-empty. **Hold rank 1 to the passive-LP bar
+> instead and the window is EMPTY at any φ** — it falls below that bar at φ = 6,397 in the benign
+> regime, while the seats behind it need φ ≥ 7,455 to beat passive LPing at all. We have measured
+> what the re-anchoring property **costs to replicate** (80–123%/yr at competing widths). We have
+> **not** measured what a buyer will **pay** for it, and no simulator can tell us. **That single
+> question decides whether this product exists.** Ordinary Uniswap liquidity *outside* the desks restores permissionless depth away from the money; it does not make the paid counter as deep per dollar as a tight market-maker range.
 
 **The founding 32 names are an endowment**, not a purchase. Whoever deploys picks them. After one transaction they belong to whoever values them — every founding seat starts unpriced, and an unpriced seat is free to take. There is no admin to undo that.
 

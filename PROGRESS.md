@@ -18,9 +18,312 @@ Newest entry first. Never delete an entry — supersede it.
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
+| 8 | Evacuation attack + premium hold branch | **CODE COMPLETE 2026-09-02** | **PARTLY** — 242 tests. `withdraw` now demotes; `_accruePremium` releases incrementally. **TWO EVACUATION DOORS REMAIN OPEN — PITFALLS 5.123.** |
 | 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-02** | **PARTLY** — 224 tests. **THE MECHANISM IS SOUND AND THE BUSINESS CASE IS MISSING** — the 32 seats share one LP position, so they can at best TIE with not using the hook; the priority premium fixed the distribution (29/32 losing → 0/32) but creates no reason to participate. Next session is a BRAINSTORM for an outside payer, not a build. See `docs/research/seat-economics/VALUE.md`. Earlier note: 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## HANDOFF — the top item for the next session, with the hard part already done
+
+**Teach `QueueFixture._refAllocate` the premium.** The independent witness has never modelled φ, so
+at φ > 0 the per-seat split has only ever rested on `Premium.t.sol`'s own controls. This was
+deliberately NOT started at the tail of a long session: it is shared fixture code that twenty suites
+depend on, and **half-built it is worse than absent, because a witness that silently models the
+wrong rule turns every `_check` green for the wrong reason.**
+
+**The bound is derived, not chosen: `0 ≤ contractClaim − witnessClaim ≤ k − 1` wei**, where `k` is
+the number of accruals since the seat was last settled.
+
+* The contract is LAZY: `inc_j = floor(pot_j·Q / w_j)`, and a claim is `floor(L_i · Σ_j inc_j / Q)` —
+  **one** floor over the whole interval.
+* The witness must be IMMEDIATE and O(n): `Σ_j floor(pot_j·L_i / w_j)` — **k** floors. Two shapes
+  cannot be wrong the same way; that is the point of it.
+* Writing `inc_j = (pot_j·Q − r_j)/w_j` with `0 ≤ r_j < w_j`, the accumulator's own quantisation
+  costs `L_i·r_j/(Q·w_j) < L_i/Q` per accrual — at `Q = 2^128` and any realistic `L_i` that is under
+  `1e-15` and vanishes under the floor.
+* What remains is purely the floor count:
+  `Σ floor(x_j) ≤ floor(Σ x_j) ≤ Σ floor(x_j) + (k − 1)`.
+
+So the difference is one-sided and bounded by `k − 1`. **Do not widen a tolerance to absorb it** —
+assert that bound and print `k`, `L_i`, `w_j` and `Q` in the message.
+
+**Three design constraints, each paid for:**
+
+1. The witness must compute its OWN per-seat contributed liquidity — mirroring `_fundSeat`'s minted
+   `dl` and the burn — not read `hook.seatLiquidity()`, or it is not independent. Calling v4's
+   `SqrtPriceMath` for the primitive is precedented and documented in `_refCurve`.
+2. It must reproduce the payer exclusion over **`[start, next]` INCLUSIVE**, from §B.5's prose. That
+   is the line a re-derivation is most likely to get wrong: it looks like an off-by-one and is not
+   (see `_settlePremium`'s docblock and PITFALLS 5.127).
+3. `QueueHandler` is premium-blind, so the φ > 0 campaign exercises the premium incidentally rather
+   than attacking it (PITFALLS 5.133, OPEN). Closing that needs the same model, so do both together.
+
+---
+
+## 2026-09-02 (later) — the premium was inert on the pool we ship, and the fix needed the weight changed, not the constant tuned.
+
+**`forge test` → 245 passed, 0 failed, 1 skipped.** `src/queue/QueueHook.sol` is still the only
+production file changed.
+
+### The three defects, in the order they were found
+
+1. **The premium was INERT in one direction on the shipped 18/6 pool (PITFALLS 5.126).** Executed at
+   18/6 against an 18/18 control with identical human economics: **0 of 4 accruals moved the
+   accumulator, 100% stranded, 0 wei of token0 premium ever reached the roster** — against 0%
+   stranded on the control. `Premium.t.sol` ran at equal decimals, which is why nothing saw it.
+   Root cause: `premGrowth` is *incoming-token wei per OUTGOING-token wei standing*, so the ratio's
+   magnitude moves by `10^(dec_in − dec_out)` and **no single `Q` can serve both directions.**
+2. **Removing the guard exposed a free lane (5.127).** The same guard was also capping payout
+   concentration. Without it the whole pot goes to whoever holds the last wei of standing — and
+   front-first drains the tail LAST, so the tail seat is systematically that holder. Measured:
+   `standing1` = **1 wei** on seat 7, claiming **100% of a 2.667e17 pot** having paid an eighth.
+3. **The bound and the decimals bug are the same units error seen from two sides.** "Don't pay more
+   premium than there is inventory standing" compares a pot in the incoming token against a weight
+   in the outgoing one. That is why fixing one exposed the other.
+
+### What was built
+
+* `premGrowth`/`Seat.snap` widened to **`uint256` X128**, `unchecked` on both the accumulation and
+  the difference (Uniswap's `feeGrowthGlobal` pattern, with the wrap argument written out). No
+  arithmetic condition remains; the only guard is the economic one, `w == 0`.
+* The premium's weight is now **`liquidityContributed`** — one unit shared by both directions, and
+  dust-resistant because it survives conversion. The 18/6 pool now delivers
+  **10,199,999,999,999,996 wei, bit-identical to the 18/18 control.**
+* `_settlePremium` **excludes the seats a fill PAID from the pot they generated**, restoring "the
+  payer does not pay itself" that inventory weighting gave for free. O(k), k = 1 for a head-only
+  swap; the slots were already dirtied by `_syncSeat` in the same call.
+* **Demotion refined**: a withdrawal that reduces the seat's contributed liquidity demotes; one that
+  takes earnings does not. Taking profit no longer costs the front seat its rank.
+* **INVARIANT L, exact**: `standingL + liquidityUnattributed == positionLiquidity + shortfall`.
+  Sweep-minted depth is credited to **nobody** and the reason is written down.
+
+### What this cost, measured end to end against pristine HEAD
+
+|  | before | after |
+|---|---|---|
+| gas per seat walked | 14,778 | **19,280 (+30.5%)** |
+| full 32-seat sweep, φ=8500 | 1,039,700 | **1,188,462 (+14.3%)** |
+| **head-only swap, φ=8500** | 162,766 | **152,947 (−6.0%)** |
+| **steady state, φ=8500** | 183,998 | **174,179 (−5.3%)** |
+| seats the 300k budget supports | 35 | **27** |
+
+The hot path got cheaper and the deep walk dearer — the per-swap constant fell while the per-seat
+cost rose by a slot. **`MAX_SEATS = 32` no longer fits the budget it was derived from (5.129, OPEN).**
+
+### Instrument and test defects found in this session's own work
+
+* `seed()` did not apportion `liquidity`, so every suite built on it silently tested a pool with the
+  premium switched off. Caught by `test_7_3` failing with "the premium did not move".
+* `_backLedger` counted the attacker's own seat once the demotion moved it to a back rank — caught by
+  the trader-vs-queue mirror, which is what that check exists for.
+* `test_N7`'s replacement first measured the credit on `seat()`, which is claim-inclusive
+  (PITFALLS 5.117), so it read identically either side of a settlement. Its own "this test proves
+  nothing" guard caught it.
+* **A mutation caught by exactly one test, incidentally, is a rule nobody asserted (5.130).**
+  Restoring the blanket demotion rule was caught only by the cursor fuzz's order witness;
+  `test_8_9` now asserts it directly.
+* `CompoundingPremiumHook` became an **equivalent mutant** — the hazard is unexpressible once one
+  weight serves both directions — and was retired rather than left reading as coverage.
+
+### Stage 5 (partial) — campaign at φ > 0, and the mutation gate
+
+**Item 2, the invariant campaign at φ > 0 — DONE, and it found an instrument defect.** It had never
+run at φ > 0. Pointed at the shipping φ it failed on I1 and on I2/I2b ("the position is OVER-backed").
+All three are the SAME omission: Phase 7's INVARIANT F amendment (count `premiumOwed` on the ledger
+side) reached `QueueFixture._checkInvariantF` and none of this file's THREE copies. With the terms
+added, **13/13 green with no change to `src/`** — the mechanism was right and the campaign had never
+been allowed to look at it. PITFALLS 5.132.
+
+**Item 3, mutations on every rule added today — 10 run, 10 caught, 0 survived, 0 BAD-PATTERN.**
+The payer interval was mutated in BOTH directions as required: exclusive (`[start, next)`) is caught
+by 16 tests, over-wide (`[start, next+1]`) by 2.
+
+**One mutation survived on the first pass and is a finding: `sweepFloatIntoPosition` not recording
+`liquidityUnattributed`.** Every test asserting INVARIANT L reached a sweep only through `_build`,
+where the seats are funded near on-ratio — so `_liquidityForAmounts(float0, float1)` returns zero,
+the function early-returns, and the line never executes. A rule whose only exercise is a no-op call
+is visited, not covered (PITFALLS 5.54). `test_8_10` creates real float through an imbalanced
+withdrawal and now kills it.
+
+**Item 1, teaching `_refAllocate` the premium — NOT STARTED, deliberately.** See the report; the
+quantisation bound is derived and the design is written down so it can start cold.
+
+### Mutations (manual, not `script/mutate.py`)
+
+Four on the new rules, **4/4 caught**: payers left in the denominator (7 tests), marks not moved
+(4, including an underflow), liquidity not recorded on deposit (INVARIANT L + the demotion tests),
+and the blanket demotion rule (1 → now 2, after `test_8_9`).
+
+---
+
+## 2026-09-02 — the evacuation attack: subordination was never enforced, and the premium's hold branch destroyed money.
+
+**`forge test` → 242 passed, 0 failed, 1 skipped (was 224). `src/queue/QueueHook.sol` is the only
+production file changed: `withdraw` and `_accruePremium`.**
+
+### What was found
+
+**1. The evacuation attack (PITFALLS 5.122).** QUEUE sells subordination — the front seat absorbs
+adverse selection first, and is paid for it. Nothing enforced that. `withdraw` was instant, took no
+lock, imposed no cooldown and did not touch the order word, so
+
+    withdraw(head) -> adverse swap -> addToSeat(head)
+
+ran in one transaction, handed the fill to the seats behind, and returned to the front. Measured on
+two live pools identical but for the evacuation (8 seats, 18/6 decimals, 1:4 price, a 5.8% adverse
+move SIZED TO A COMMON TARGET PRICE so both runs are marked in the same numeraire):
+
+| | control | attack |
+|---|---|---|
+| head P&L, raw token1 | −6.4963e18 (−267 bps of seat value) | **0** |
+| token1 rank 0 gave up | 125.00e18 (all of it) | **0** |
+| token1 ranks 1–7 gave up | 471.83e18 | **522.23e18 (+10.7%)** |
+| ranks 1–7 P&L | −9.4096e18 (−55 bps) | **−13.9177e18 (−82 bps)** |
+
+Round trip 403,485 gas and **0 wei** of dust; the whole strike including the swap fits one external
+call at 556,535 gas. The priority premium makes it WORSE, not better: it is skimmed from the fill the
+head is receiving, so standing still costs ~12.5 bps extra.
+
+**2. Why Harberger did not catch it, which is the part that matters (PITFALLS 5.9 re-scoped).**
+`test_4_7` recorded rank-then-run as CLOSED. Every arm of it carries `vm.warp(30 days)`. Rent is a
+time integral — `Rent.owed(price, elapsed, ...)`, and `_settleSeat` returns on `elapsed == 0` — so
+the bill it measures is proportional to a duration this attack does not have. Same seat, same
+100e18 self-price, funded meter: **8.219e17 wei over thirty days, EXACTLY ZERO atomically.** The
+lease could not see the attack because the attack has no duration.
+
+**3. The premium's hold branch (PITFALLS 5.124).** Two defects in `_accruePremium`, found by a peer
+and confirmed here. Held pots ADD into the next `total`, so every hold made the next release
+strictly harder — monotone the wrong way. And `premGrowth += mulDiv(total, 2^64, w)` FLOORS while the
+release branch wrote `premiumHeld = 0` on the same line, so **any pot below `w / 2^64` left the fill,
+entered `premiumOwed`, and became claimable by nobody, ever.** No attacker required.
+
+### What was built
+
+* **`withdraw` demotes to the tail** via the existing `_demoteToTail`, whenever it PAID something.
+  The guard is on what was paid, never on what was asked: the dust policy can clamp a request to
+  zero, and `withdraw(id, 0, 0)` must not cost a rank.
+* **`_accruePremium` releases incrementally**: `give = min(total, w)`, retain `total - give`, hold
+  everything when `w == 0` or `inc == 0`. A pot that cannot be paid is now always DELAYED and never
+  destroyed, and `give <= w` gives `inc <= 2^64` directly — a tighter overflow argument than before.
+
+### What the remedy does NOT do — stated plainly, because it would be easy to overclaim
+
+**It does not refund the dodge.** The one-shot edge is unchanged at +267 bps: capital that is not in
+the pool cannot be filled, and no rule can claw back a loss the attacker never took. What it charges
+is the FUTURE — rank 0 versus rank 7 is ~932 pp/yr on `Premium.t.sol`'s own static-rank table, so
+breakeven is ~1.05 days of front-seat tenure. And **two doors remain open (PITFALLS 5.123, OPEN)**:
+`transfer` to a second address evacuates a seat and KEEPS its rank, and a promoted seat carries a
+stale price and was bought at a 10× discount in a directed test. Any real remedy belongs in
+`_onSeatTransfer`/`_payOut`, the one funnel — not in `withdraw`. Not built: it changes who can take
+a seat and at what price, which is an owner decision.
+
+### Instrument defects found in this session's own work — three, all by controls
+
+* `leaseOf` returns five values and a test destructured four, reading `lastSettled` as `firmUntil`.
+  It PASSED, because a never-settled seat has `lastSettled == 0` too. Found when the identical
+  mistake failed in a second test.
+* The trader-vs-queue mirror check does not pin the price exponent: any valuation linear in `a0`
+  conserves it. Executed — a `_value1` applying the price once instead of squaring it kept the
+  mirror green. `test_8_0c` pins the exponent against v4's own `SQRT_PRICE_1_4` instead.
+* **The mutation campaign caught the author covering one branch of two (PITFALLS 5.125).** With only
+  the token0 ratchet test written, the token1 ratchet mutation SURVIVED THE WHOLE SUITE — the fifth
+  instance of one-rule-two-branches here. And both ratchet tests asserted a DIRECTION
+  (`heldAfter < heldBefore`), which a mutation that zeroed the remainder sailed through; they now
+  assert the closed form.
+
+### Gas
+
+`Gas.t.sol`'s absolute full-sweep budget was re-baselined 1,050,000 → 1,100,000, with the
+attribution measured and written into the test: +20,958 on a φ = 8500 sweep (one zero-to-nonzero
+`SSTORE` on `premGrowth`, now written where it used to be skipped), +0 at φ = 0, and **+273 in
+steady state**, which is the number that says it is a once-per-pool cost rather than a per-swap one.
+
+### Mutations run (manual, not `script/mutate.py`)
+
+8 built, 8 informative, **8/8 caught after the gaps were closed** — 1 equivalent mutant discarded.
+`withdraw`: deleting the demotion → red in 5 tests across 3 suites; dropping the paid-nothing guard
+→ red in 3. `_accruePremium`: the ratchet and the destroy-the-remainder mutations, **run separately
+per branch**, each caught by its own branch's test.
+
+### Tests updated because the behaviour legitimately changed — none weakened
+
+`test_4_7` arm 1 asserted, as correct behaviour, that a holder keeps rank 0 across an abandonment —
+i.e. it had the attack written down as an expectation. It now asserts the rank is lost, and its
+money assertions are unchanged and still pass. `test_3_7` and `test_4_13b` reach "empty seat" through
+`buySeat` instead of `withdraw`, because their claims are about TRANSFER and FORECLOSURE and a
+demoting withdrawal would have moved the rank before the thing under test ever ran — in `test_4_13b`
+that would also have made the mutant arm's demotion assertion vacuous. The fixture and the
+interleaving fuzz teach the witness the demotion rule, written from the rule rather than from `src/`.
+
+---
+
+## 2026-09-02 (second) — PHASE 8. The value question ANSWERED, and five defects found on the way.
+
+**`forge test` → 248 passed, 0 failed, 1 skipped. Mutation campaign: 80 RED, 0 SURVIVED, 0 BAD-PATTERN
+after repairs. Invariant campaign green at φ > 0 for the first time.**
+
+### The answer, which reverses the entry below it
+
+The session before this one concluded there was no value proposition, reasoning from a correct
+identity to a false conclusion: *the sum is zero-sum, therefore there is no value.* Insurance,
+credit tranching and options are all zero-sum in dollars and all real, because value comes from
+allocating risk, not from creating dollars. **But the specific rescue that inference suggested — a
+senior/junior tranche — turned out to be PROVEN IMPOSSIBLE, so the conclusion survived its own bad
+argument.** What replaced it is narrower and measured:
+
+> **QUEUE sells the front seat: costlessly re-anchoring at-the-money exposure no LP can buy any other
+> way.** Against an OPTIMISTICALLY modelled keeper-managed ATM range — instant re-mints, no latency,
+> no MEV on its own conversion trade — rank 1 wins by **30 to 758 points** at φ = 0. Replicating the
+> property costs **80–123%/yr** at competing widths.
+
+**And the thing that is NOT established, recorded here so nobody rediscovers it as good news:** rank 1
+accepts a below-LP return for that property. Hold it to the passive-LP bar and it falls below at
+φ = 6,397 while the back needs φ ≥ 7,455 — **both windows empty.** What the property costs to
+replicate is measured; what a buyer will PAY is not, and no simulator can say.
+
+**Also settled: no φ makes every seat beat an ordinary LP.** The capital-weighted mean of the seats'
+returns IS the pro-rata LP's return, measured to 1.4e-12. φ creates nothing; it chooses who is paid
+to lose. And seats 2–5 are a POOL, not a ladder — adjacent-rank separation is 2.37 between seats 1
+and 2 and **0.01–0.09 everywhere else**, so the ordering among them is decoration.
+
+### Five defects, all measured, all fixed
+
+1. **The premium was INERT on the shipped 18/6 pool** — 0 wei of token0 premium reached the roster,
+   0 of 4 accruals, against an 18/18 control stranding 0%. LAW 1 in the decimals dimension (5.124).
+2. **A dust seat took the whole pot** — 1 wei of standing inventory claimed 100% of a 2.667e17 pot,
+   and front-first makes the tail systematically last-standing (5.127).
+3. **A single-token deposit minted ZERO liquidity**, added no depth, collected the full premium (5.128).
+4. **The front could evacuate atomically** — dodge the adverse fill, keep its rank, **+267 bps in one
+   transaction**, and the premium made it MORE attractive.
+5. **The hold branch was a ratchet** — held pots added, so release got strictly harder forever (5.126).
+
+Defects 1–3 were one change: weight the premium by stored contributed liquidity, exclude the seats a
+fill paid over `[start, next]` **inclusive**. Defect 4 is demote-on-withdraw, refined so taking depth
+out costs the rank while taking earnings does not. **The hot path got CHEAPER**: head-only swap
+162,766 → 152,947 (−6.0%).
+
+### φ moved 8,500 → 7,900, and the old value was never measured
+
+`PROGRESS.md` claimed φ = 8,500 was *"measured, not chosen"* with *"the sweep checked in"*. **The
+sweep did not exist** — `grep -li "premium\|phi"` over `docs/research/seat-economics/*.py` returned
+nothing and every number in `results-seats.txt` was a φ = 0 measurement. That claim is retracted in
+place above. 7,900 is solved from a stated participation constraint on the roster we actually deploy,
+window [7455, 8312], reproducible via `report_shipping.py`.
+
+### What the method caught, and what it cost
+
+**Five tautological controls surfaced in one session** — the rotation identity, the seat-32 `a − o`
+identity, an aggregate-P&L check that no ordering rule can fail, a zero-sum check passing on float
+dust, and one narrowly avoided. Three were caught by whoever wrote them. LAW 5 now carries the test
+that finds them: *ask what would have to be true for this control to read FAIL.* **Four were
+introduced by a FIX** — the defence is a case whose answer is known in advance, not vigilance.
+
+Four directions were closed with evidence and must not be re-opened: the tranche (impossible — one
+position has one ordering governing both loss and cash), LIFO unwind (abolishes the queue), `sponsor()`
+(pays most to capital that is never filled), and the Ratchet (real, and unfixable by any rule touching
+fill order). See `NEXT_SESSION_PROMPT.md` §2.
 
 ---
 
@@ -134,6 +437,32 @@ gas one runs at.
 is the only setting giving 0/32 negative on **all four**, spread 10–15 points. Honest limit: on a
 45%-vol pair it leaves 0–4 negative depending on the draw, and the best φ per configuration ranges
 0.55–0.90 — which is why φ is per-deployment and the sweep is checked in rather than a constant.
+
+> **⛔ RETRACTED 2026-09-02. EVERY SENTENCE IN THE PARAGRAPH ABOVE IS FALSE, AND IT IS THE WORST
+> CLAIM THIS PROJECT HAS PUBLISHED ABOUT ITSELF.** Kept rather than deleted, because a retraction a
+> reader can check is worth more than a quiet edit.
+>
+> * **"the sweep is checked in" — it was not, and it did not exist.** `grep -li "premium\|phi"` over
+>   the six `.py` files in `docs/research/seat-economics/` returned nothing. Every number in
+>   `results-seats.txt` was a **φ = 0** measurement while the deploy script shipped φ = 8,500 citing
+>   a sweep in that directory. The sweep exists now (`report_tranche.py`, `results-tranche.txt`);
+>   before today it did not.
+> * **"measured, not chosen" — it was chosen.** And the objective it was chosen against is wrong:
+>   "0/32 negative" is a SIGN TEST, not a benchmark, and AGENTS.md §3b says it in terms — *a bound in
+>   the right direction is not a correctness assertion.* A seat returning +2% realised is "not
+>   negative" and is dominated by a pro-rata LP measured at **+28.29%** realised on the same seeds.
+> * **The number itself is wrong, and wrong in the direction that matters.** Swept properly, at
+>   φ = 8,500 **rank 1 loses on 100% of paths in all six configurations** (realised −66% to −68% on
+>   the ±30% band). At φ = 5,000 the same seat is +42.2% / +379.2% / +63.8% realised with **0% losing
+>   paths and 100% beat-LP** in four of six. The front's economics live entirely between 5,000 and
+>   8,500, and 8,500 was tuned by annihilating the head.
+> * **φ is genuinely per-deployment, but not for the reason given.** φ\* solved from a stated
+>   participation constraint is stable to **under 1% across four disjoint seed ranges within a
+>   config**, and ranges **2,870 to 7,970 across** configs. So it is a parameter derived from the
+>   pair's regime, with a derivation — not a constant with a story.
+> * **And the whole paragraph described a mechanism that did not run.** On the 18/6 pool the deploy
+>   script ships, the token0-direction premium reached the roster **0 wei, 0 of 4 accruals**, against
+>   an 18/18 control stranding 0% (`test/queue/PremiumDecimals.t.sol`, PITFALLS 5.124).
 
 ### Three defects found on the way, all fixed
 

@@ -1,0 +1,606 @@
+================================================================================================================
+CONTROLS -- the execution-price instrument is NEW, so it is the thing on trial here
+================================================================================================================
+
+NOTE ON WHAT IS *NOT* A CONTROL. An aggregate 'total P&L is unchanged' check is
+arithmetic, not evidence: availability is order-invariant and the remainder line forces
+sum(give) == amtIn, so it passes for EVERY allocator including a maximally corrupt one
+(ROTATION.md banner). The instrument's conservation is therefore checked per FILL below.
+
+E0. sim_exec.py MUST reproduce sim.py exactly. It is a copy plus instruments; if the
+    instruments perturbed the mechanism, every number below is about a different model.
+    32 configs, worst relative per-seat P&L difference = 0.000e+00   PASS (bit-identical)
+
+E1. PER-FILL RECONSTRUCTION. The seats' own legs must sum to the swap's legs, on every
+    fill. A per-seat price can be wrong in a way no aggregate would ever reveal.
+E2. PER-FILL ZERO-SUM. Edge is a SPLIT of one swap: every dollar one rank gains, another
+    loses on the SAME fill. This is the property that can fail, and it is checked per
+    fill rather than in aggregate.
+E3. SOLO NULL. On a fill touching ONE seat, that seat IS the pool, so its edge must be
+    EXACTLY zero at every rank. Built in, and it is a null that can go wrong.
+
+    over 438,211 seat-fills:
+    E1 max relative leg error   = 8.320e-16   PASS
+    E2 max zero-sum residual    = 8.661e-16 of fill notional  PASS
+    E3 max |solo edge|          = 0.000e+00 bps  PASS
+
+E4. NEGATIVE CONTROL -- AVERAGE PRICING. `marginal=False` gives every seat in a fill the
+    SAME price by construction. So the edge must collapse to EXACTLY zero at every rank
+    while the TURNOVER gradient is untouched. This is what separates the two effects:
+    it proves the edge measures marginal pricing and not merely 'being early'.
+
+              regime                max|edge| bps            turnover rank 1
+                          marginal        average     marginal       average
+              BENIGN        8.0825         0.0000      2,001.6       2,003.0
+              NORMAL       26.1391         0.0000        834.6         840.3
+               TOXIC       47.1723         0.0000         13.7          13.7
+    PASS -- average pricing leaves <1e-6 bps (float residue of the remainder line)
+    against 8-26 bps under marginal pricing: >6 orders of magnitude of separation,
+    with turnover unchanged. The edge measures MARGINAL PRICING and nothing else.
+
+E5. tie_out() raises. Called on every grid run below, not just here.
+    PASS -- corrupting one seat's fee accumulator makes tie_out() RAISE.
+
+E6. WHAT THIS MODEL CANNOT SEE (stated, not tested away):
+    * pure float, ONE pool, no decimals. It cannot see a token0/token1 unit-mixing bug,
+      which is exactly the class LAW 1 (as amended 2026-09-02) was hardened for. Read
+      every number below as ECONOMICS, never as a test of the contract's arithmetic.
+    * one band, minted once. Nothing here speaks to re-minting or to seat evacuation.
+
+================================================================================================================
+QUEUE -- THE SHIPPED RULE CHARACTERISED: is the head/tail trade-off symmetric?
+================================================================================================================
+  32 equal seats of $31,250 on $1,000,000. marginal pricing. retail 15/hr. 365d cap. FIFO (the shipped rule) ONLY.
+  FOUR DISJOINT SEED RANGES: A r0-29, B r100-129, C r200-229, D r1000-1029   (30 paths each; 120 paths / 3,840 cells per config)
+  Every figure is per (path, rank) and REALISED over the band's actual life.
+
+  EDGE = how the rank's own execution price compared with THAT SWAP's average price,
+  i.e. with what one undivided pro-rata LP would have realised on the same trade.
+  POSITIVE = better than pro-rata, in BOTH directions. It is exactly zero-sum per fill.
+  It is reported over MULTI-SEAT fills, because on a solo fill the seat IS the pool and
+  its edge is identically zero -- including those would dilute the head toward 0 while
+  saying nothing about ordering.
+
+================================================================================================================
+0.  BAND LIFE AND THE PRO-RATA BENCHMARK
+================================================================================================================
+         regime/band              A r0-29           B r100-129           C r200-229         D r1000-1029
+       BENIGN +/-10%   life   58.3d LP   +4.79%   life   47.8d LP   +3.36%   life   67.3d LP   +5.73%   life   70.5d LP   +6.22%
+       BENIGN +/-30%   life  274.1d LP  +27.37%   life  287.7d LP  +28.90%   life  295.7d LP  +30.55%   life  274.7d LP  +26.32%
+       NORMAL +/-10%   life   19.5d LP   +0.55%   life   14.7d LP   -0.26%   life   21.8d LP   +0.92%   life   20.3d LP   +0.73%
+       NORMAL +/-30%   life  156.7d LP  +12.66%   life  128.5d LP   +9.12%   life  198.5d LP  +18.60%   life  158.1d LP  +12.03%
+        TOXIC +/-10%   life    1.2d LP   -2.14%   life    1.6d LP   -2.15%   life    1.4d LP   -2.23%   life    1.5d LP   -2.17%
+        TOXIC +/-30%   life    3.7d LP   -5.74%   life    3.8d LP   -5.77%   life    3.8d LP   -5.73%   life    4.1d LP   -5.62%
+
+================================================================================================================
+A.  IS THE HEAD'S EXECUTION ACTUALLY WORSE?  (edge in bps, MULTI-seat fills, phi=0)
+================================================================================================================
+  phi=0 isolates the ORDERING. The premium is a deliberate transfer laid on top of it
+  and would otherwise be read as a property of the ordering, which it is not.
+  'u' is where in the move the rank landed: 0 = executed at the PRE-swap price (the
+  stalest end), 1 = at the POST-swap price. Geometry; edge is the money.
+
+  BENIGN +/-10%
+              rank       1       2       3       4       6       8      12      16      20      24      28      32
+     edge BUY  bps   -5.73    3.92    4.39    4.56    4.41    3.85    4.27    4.56    3.05    4.28    3.68    1.12
+     edge SELL bps   -5.56    4.15    3.86    3.98    3.86    3.73    3.57    3.67    3.39    4.02    4.35    2.28
+           u   BUY    0.31    0.63    0.64    0.64    0.64    0.63    0.64    0.65    0.63    0.64    0.64    0.68
+          u   SELL    0.31    0.64    0.63    0.63    0.63    0.63    0.64    0.63    0.62    0.64    0.65    0.67
+
+  BENIGN +/-30%
+              rank       1       2       3       4       6       8      12      16      20      24      28      32
+     edge BUY  bps   -6.13    6.45    6.47    6.33    6.15    6.77    7.12    7.30    6.70    6.98    5.30     nan
+     edge SELL bps   -5.96    6.40    6.03    6.16    6.38    6.40    5.19    5.51    6.33    5.41    5.69     nan
+           u   BUY    0.35    0.66    0.66    0.66    0.66    0.67    0.67    0.67    0.66    0.66    0.62     nan
+          u   SELL    0.35    0.66    0.66    0.66    0.67    0.66    0.64    0.66    0.66    0.65    0.67     nan
+
+  NORMAL +/-10%
+              rank       1       2       3       4       6       8      12      16      20      24      28      32
+     edge BUY  bps  -11.58    5.86    5.44    6.52    6.11    6.80    4.55    4.62    4.14    5.08    7.34    1.02
+     edge SELL bps  -11.35    5.29    6.15    6.80    5.24    5.23    5.54    8.46    3.51    8.81    7.10    0.55
+           u   BUY    0.29    0.61    0.61    0.61    0.61    0.63    0.59    0.61    0.60    0.61    0.62    0.67
+          u   SELL    0.29    0.61    0.61    0.62    0.61    0.60    0.60    0.62    0.59    0.64    0.63    0.65
+
+  NORMAL +/-30%
+              rank       1       2       3       4       6       8      12      16      20      24      28      32
+     edge BUY  bps  -10.52   10.07   10.27   10.33    9.45    9.23    9.78    8.73   10.08   10.14   14.39    6.40
+     edge SELL bps  -10.22    9.71    9.59    9.78    8.86    9.75    8.36    9.95    9.22    7.61    8.21   13.61
+           u   BUY    0.34    0.66    0.66    0.66    0.65    0.65    0.67    0.66    0.66    0.67    0.69    0.74
+          u   SELL    0.33    0.65    0.66    0.66    0.65    0.66    0.64    0.65    0.65    0.65    0.67    0.88
+
+  TOXIC +/-10%
+              rank       1       2       3       4       6       8      12      16      20      24      28      32
+     edge BUY  bps  -16.86    7.41   12.31   13.30   10.32   31.41   -0.26   31.12    8.63     nan     nan     nan
+     edge SELL bps  -26.65   -2.09    0.26    4.82    6.24    6.36    6.42    8.80    5.81    3.71   14.62    1.73
+           u   BUY    0.29    0.63    0.65    0.67    0.60    0.75    0.55    0.67    0.57     nan     nan     nan
+          u   SELL    0.22    0.53    0.54    0.55    0.55    0.55    0.57    0.58    0.56    0.55    0.62    0.66
+
+  TOXIC +/-30%
+              rank       1       2       3       4       6       8      12      16      20      24      28      32
+     edge BUY  bps  -14.85   15.99   14.61   15.58   17.93     nan     nan     nan     nan     nan     nan     nan
+     edge SELL bps  -25.53   11.15   13.31   12.49   14.83   13.08   11.18   10.73   13.00   10.52   11.36   24.55
+           u   BUY    0.33    0.68    0.70    0.70    0.57     nan     nan     nan     nan     nan     nan     nan
+          u   SELL    0.28    0.60    0.61    0.61    0.63    0.62    0.60    0.60    0.61    0.60    0.61    0.77
+
+================================================================================================================
+B.  FILL COUNT AND TURNOVER BY RANK (phi=0)
+================================================================================================================
+  'fills' = seat-fills over the band's life. 'multi' = those on 2+ seat fills, the only
+  ones where ordering does anything. 'turnover' = numeraire drained / capital.
+
+  BENIGN +/-10%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+           fills  21,773.2     511.6     274.9     169.2      89.0      58.2      33.2      20.2      14.6      12.8       8.6       0.3
+           multi     804.7     278.0     148.8      92.6      48.7      32.6      18.3      11.5       8.2       7.0       5.1       0.1
+        turnover     714.6      30.0      16.2      10.2       5.2       3.4       1.9       1.2       0.8       0.7       0.5       0.0
+
+  BENIGN +/-30%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+           fills 105,262.1     386.1     169.4     106.7      54.1      37.0      19.0      12.0       8.1       5.4       1.5       0.0
+           multi     547.6     213.5      93.2      59.6      29.7      20.8      10.6       6.8       4.8       3.1       1.0       0.0
+        turnover   3,450.2      15.2       6.7       4.2       2.1       1.4       0.7       0.4       0.3       0.2       0.1       0.0
+
+  NORMAL +/-10%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+           fills   6,657.5     294.2     168.1     110.1      60.5      36.7      18.6      11.1       8.3       7.0       5.4       0.3
+           multi     464.9     166.0      95.9      62.1      33.9      20.9      10.4       6.6       5.0       4.3       3.3       0.1
+        turnover     239.8      28.6      16.3      10.7       5.8       3.5       1.7       1.1       0.9       0.6       0.5       0.0
+
+  NORMAL +/-30%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+           fills  59,327.4     686.3     327.8     197.1     104.7      65.8      31.5      22.5      15.3      10.4       6.0       0.1
+           multi     989.7     373.7     179.3     108.0      56.3      36.8      17.4      12.6       8.7       6.0       3.6       0.1
+        turnover   2,100.0      33.5      15.9       9.5       5.1       3.2       1.5       1.1       0.7       0.5       0.3       0.0
+
+  TOXIC +/-10%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+           fills     471.2      22.5      15.5       9.7       4.8       3.8       2.9       3.6       3.5       2.8       2.9       0.0
+           multi      48.7      14.3       9.5       6.0       3.2       2.4       2.1       2.4       2.3       1.9       1.9       0.0
+        turnover      18.2       3.9       2.4       1.6       0.9       0.7       0.5       0.5       0.5       0.5       0.4       0.0
+
+  TOXIC +/-30%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+           fills   1,337.3      50.9      16.1       8.1       5.9       6.3       6.0       5.4       5.4       6.6       6.5       2.1
+           multi     102.5      28.6       9.3       4.9       3.7       3.7       3.7       3.5       3.3       4.0       3.8       1.3
+        turnover      46.1       3.7       1.3       0.7       0.5       0.5       0.5       0.5       0.5       0.5       0.5       0.1
+
+================================================================================================================
+C.  RECYCLING, AND HOW FAR BACK IT REACHES
+================================================================================================================
+  'recycle' = volatile SOLD / volatile BOUGHT over the life. 1.0 = it gave back
+  everything it was handed; well under 1.0 is the one-way accumulator of A.2c.
+  'startshare' = share of all fills that BEGAN at this rank. The cursor pull-back
+  (`if (start < cursor0) cursor0 = start`) rewinds to the START of the sweep, NOT to
+  rank 0 unconditionally -- so this is how far back the recycling actually extends.
+  'firstshare' = share of fills where this rank was the first seat actually filled.
+
+  BENIGN +/-10%
+             rank       1       2       3       4       6       8      12      16      20      24      28      32
+          recycle    1.00    1.00    1.00    1.02    0.99    1.01    0.93    0.66    0.45    0.32    0.08    0.00
+       startshare   96.4%    1.1%    0.6%    0.4%    0.2%    0.1%    0.1%    0.0%    0.0%    0.0%    0.0%    0.0%
+       firstshare   96.4%    1.1%    0.6%    0.4%    0.2%    0.1%    0.1%    0.0%    0.0%    0.0%    0.0%    0.0%
+
+  BENIGN +/-30%
+             rank       1       2       3       4       6       8      12      16      20      24      28      32
+          recycle    1.00    1.00    1.03    1.07    0.98    0.81    0.40    0.07    0.00    0.00    0.00     nan
+       startshare   99.5%    0.2%    0.1%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%
+       firstshare   99.5%    0.2%    0.1%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%
+
+  NORMAL +/-10%
+             rank       1       2       3       4       6       8      12      16      20      24      28      32
+          recycle    1.00    1.00    1.01    1.00    0.97    1.00    0.73    0.93    0.53    0.40    0.07    0.00
+       startshare   93.4%    1.9%    1.1%    0.7%    0.4%    0.2%    0.1%    0.1%    0.1%    0.0%    0.0%    0.0%
+       firstshare   93.4%    1.9%    1.1%    0.7%    0.4%    0.2%    0.1%    0.1%    0.1%    0.0%    0.0%    0.0%
+
+  NORMAL +/-30%
+             rank       1       2       3       4       6       8      12      16      20      24      28      32
+          recycle    1.00    1.00    1.01    1.00    1.04    1.46    0.91    0.94    0.33    0.08    0.05    0.00
+       startshare   98.4%    0.5%    0.3%    0.2%    0.1%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%
+       firstshare   98.4%    0.5%    0.3%    0.2%    0.1%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%    0.0%
+
+  TOXIC +/-10%
+             rank       1       2       3       4       6       8      12      16      20      24      28      32
+          recycle    1.06    1.75    1.69    2.47    1.60    2.14    1.86    1.86    1.85     nan     nan     nan
+       startshare   90.8%    1.7%    1.2%    0.8%    0.3%    0.3%    0.2%    0.2%    0.3%    0.2%    0.2%    0.0%
+       firstshare   90.8%    1.7%    1.2%    0.8%    0.3%    0.3%    0.2%    0.2%    0.3%    0.2%    0.2%    0.0%
+
+  TOXIC +/-30%
+             rank       1       2       3       4       6       8      12      16      20      24      28      32
+          recycle    1.02    1.71    5.29    3.73    1.71     nan     nan     nan     nan     nan     nan     nan
+       startshare   92.9%    1.6%    0.5%    0.2%    0.2%    0.2%    0.2%    0.1%    0.2%    0.2%    0.2%    0.1%
+       firstshare   92.9%    1.6%    0.5%    0.2%    0.2%    0.2%    0.2%    0.1%    0.2%    0.2%    0.2%    0.1%
+
+================================================================================================================
+D.  THE SYMMETRY QUESTION, phi=0  -- does the price advantage offset the fill count?
+================================================================================================================
+  fee/cap    : fee income (incl. premium received) over the life, / capital
+  mkout/cap  : markout (inventory) leg, / capital -- fee + markout == realised, exactly
+  edge$/cap  : the execution-price edge in DOLLARS, / capital
+  edge/fee   : THE NUMBER. the price penalty as a fraction of the fee income the
+               same ordering hands the same rank. If front-first is a matched pair
+               this is near -1 at the head. If it is near 0, the head is paid for
+               a penalty it barely feels.
+  beat       : share of (path,rank) cells beating a pro-rata LP on the SAME seed
+
+  BENIGN +/-10%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     2.148     0.090     0.048     0.031     0.016     0.010     0.006     0.004     0.003     0.002     0.001     0.000
+       mkout/cap    -0.610    -0.070    -0.041    -0.028    -0.020    -0.011    -0.002    -0.002    -0.003     0.002     0.001    -0.000
+       edge$/cap   -0.0322    0.0094    0.0051    0.0034    0.0017    0.0011    0.0006    0.0004    0.0002    0.0002    0.0002    0.0000
+        edge/fee    -0.015     0.105     0.104     0.109     0.108     0.105     0.105     0.109     0.084     0.107     0.109     0.040
+        realised  +153.80%    +2.00%    +0.79%    +0.27%    -0.41%    -0.05%    +0.40%    +0.17%    -0.08%    +0.40%    +0.24%    +0.00%
+    beat prorata      100%       32%       25%       21%        8%        9%       10%        7%        3%        8%        9%       21%
+
+  BENIGN +/-30%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap    10.377     0.046     0.020     0.013     0.006     0.004     0.002     0.001     0.001     0.001     0.000     0.000
+       mkout/cap    -1.494     0.044     0.021     0.015     0.001     0.010    -0.005    -0.008    -0.006    -0.001    -0.001     0.000
+       edge$/cap   -0.0196    0.0070    0.0030    0.0019    0.0009    0.0007    0.0003    0.0002    0.0002    0.0001    0.0000    0.0000
+        edge/fee    -0.002     0.151     0.148     0.149     0.147     0.156     0.153     0.153     0.158     0.143     0.146       nan
+        realised  +888.38%    +8.98%    +4.15%    +2.81%    +0.73%    +1.39%    -0.30%    -0.64%    -0.53%    -0.06%    -0.07%    +0.00%
+    beat prorata      100%       14%        0%        1%        1%        1%        0%        0%        0%        0%        0%        0%
+
+  NORMAL +/-10%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     0.720     0.086     0.049     0.032     0.017     0.011     0.005     0.003     0.003     0.002     0.002     0.000
+       mkout/cap    -0.399    -0.118    -0.069    -0.045    -0.020    -0.014    -0.011    -0.011    -0.005    -0.007    -0.005     0.000
+       edge$/cap   -0.0530    0.0147    0.0079    0.0063    0.0027    0.0018    0.0010    0.0006    0.0004    0.0004    0.0003    0.0000
+        edge/fee    -0.074     0.172     0.162     0.196     0.157     0.175     0.187     0.202     0.137     0.216     0.209     0.011
+        realised   +32.17%    -3.23%    -2.00%    -1.30%    -0.30%    -0.30%    -0.59%    -0.77%    -0.22%    -0.54%    -0.38%    +0.02%
+    beat prorata      100%       21%       32%       28%       34%       33%       28%       21%       24%       32%       42%       54%
+
+  NORMAL +/-30%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     6.311     0.101     0.048     0.029     0.015     0.010     0.004     0.003     0.002     0.001     0.001     0.000
+       mkout/cap    -2.470    -0.013     0.001    -0.007     0.002     0.007    -0.020     0.008     0.010     0.002     0.000    -0.000
+       edge$/cap   -0.0726    0.0246    0.0117    0.0072    0.0036    0.0024    0.0010    0.0008    0.0005    0.0003    0.0003    0.0000
+        edge/fee    -0.012     0.245     0.243     0.250     0.239     0.244     0.234     0.252     0.237     0.236     0.303     0.200
+        realised  +384.14%    +8.74%    +4.87%    +2.16%    +1.75%    +1.72%    -1.54%    +1.12%    +1.18%    +0.37%    +0.13%    +0.00%
+    beat prorata      100%       43%       22%       18%       15%       16%        5%        9%        6%        8%       16%       26%
+
+  TOXIC +/-10%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     0.055     0.012     0.007     0.005     0.003     0.002     0.002     0.001     0.001     0.001     0.001     0.000
+       mkout/cap    -0.072    -0.050    -0.042    -0.039    -0.037    -0.036    -0.031    -0.027    -0.021    -0.015    -0.008    -0.000
+       edge$/cap   -0.0143    0.0010    0.0012    0.0011    0.0005    0.0005    0.0003    0.0004    0.0003    0.0002    0.0005    0.0000
+        edge/fee    -0.262     0.082     0.170     0.237     0.206     0.292     0.179     0.257     0.189     0.113     0.415     0.109
+        realised    -1.79%    -3.79%    -3.48%    -3.44%    -3.42%    -3.39%    -3.00%    -2.52%    -1.92%    -1.39%    -0.72%    -0.00%
+    beat prorata       57%        8%       12%       15%       15%        7%        2%        1%       88%      100%      100%      100%
+
+  TOXIC +/-30%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     0.138     0.011     0.004     0.002     0.001     0.001     0.001     0.001     0.001     0.001     0.001     0.000
+       mkout/cap    -0.159    -0.094    -0.099    -0.101    -0.099    -0.093    -0.080    -0.067    -0.052    -0.037    -0.021    -0.001
+       edge$/cap   -0.0191    0.0037    0.0014    0.0007    0.0005    0.0005    0.0004    0.0004    0.0005    0.0004    0.0005    0.0002
+        edge/fee    -0.138     0.342     0.400     0.387     0.415     0.399     0.318     0.323     0.387     0.312     0.327     0.585
+        realised    -2.09%    -8.35%    -9.54%    -9.95%    -9.82%    -9.23%    -7.91%    -6.53%    -5.08%    -3.55%    -1.95%    -0.10%
+    beat prorata       96%       10%        4%        3%        0%        0%        0%        0%      100%      100%      100%      100%
+
+================================================================================================================
+D.  THE SYMMETRY QUESTION, phi=8500  -- does the price advantage offset the fill count?
+================================================================================================================
+  fee/cap    : fee income (incl. premium received) over the life, / capital
+  mkout/cap  : markout (inventory) leg, / capital -- fee + markout == realised, exactly
+  edge$/cap  : the execution-price edge in DOLLARS, / capital
+  edge/fee   : THE NUMBER. the price penalty as a fraction of the fee income the
+               same ordering hands the same rank. If front-first is a matched pair
+               this is near -1 at the head. If it is near 0, the head is paid for
+               a penalty it barely feels.
+  beat       : share of (path,rank) cells beating a pro-rata LP on the SAME seed
+
+  BENIGN +/-10%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     0.336     0.090     0.080     0.073     0.067     0.062     0.060     0.059     0.061     0.067     0.076     0.087
+       mkout/cap    -0.463    -0.142    -0.067    -0.042    -0.024    -0.016    -0.002    -0.003    -0.006     0.002     0.001    -0.000
+       edge$/cap   -0.0536    0.0202    0.0098    0.0053    0.0024    0.0014    0.0007    0.0004    0.0002    0.0002    0.0002    0.0000
+        edge/fee    -0.159     0.224     0.123     0.073     0.036     0.022     0.011     0.007     0.004     0.004     0.002     0.000
+        realised   -12.66%    -5.16%    +1.29%    +3.14%    +4.26%    +4.62%    +5.86%    +5.66%    +5.52%    +6.92%    +7.74%    +8.66%
+    beat prorata        0%        7%       25%       37%       42%       36%       40%       31%       44%       84%       97%      100%
+
+  BENIGN +/-30%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     1.380     0.699     0.315     0.291     0.266     0.254     0.250     0.258     0.274     0.297     0.317     0.320
+       mkout/cap    -2.059     0.465     0.078     0.037     0.026     0.003     0.000    -0.008    -0.000    -0.004    -0.001     0.000
+       edge$/cap   -0.2398    0.2041    0.0140    0.0061    0.0024    0.0012    0.0006    0.0003    0.0002    0.0001    0.0000    0.0000
+        edge/fee    -0.174     0.292     0.045     0.021     0.009     0.005     0.002     0.001     0.001     0.000     0.000     0.000
+        realised   -67.89%  +116.39%   +39.22%   +32.77%   +29.11%   +25.68%   +25.04%   +25.06%   +27.36%   +29.29%   +31.57%   +31.95%
+    beat prorata        0%      100%       84%       60%       48%       42%       27%       18%       28%       61%       68%       68%
+
+  NORMAL +/-10%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     0.110     0.036     0.033     0.031     0.029     0.027     0.026     0.025     0.027     0.030     0.033     0.038
+       mkout/cap    -0.311    -0.152    -0.088    -0.056    -0.027    -0.014    -0.012    -0.013    -0.003    -0.006    -0.006     0.000
+       edge$/cap   -0.0596    0.0140    0.0107    0.0074    0.0033    0.0022    0.0012    0.0006    0.0004    0.0005    0.0003    0.0000
+        edge/fee    -0.540     0.384     0.325     0.237     0.114     0.081     0.046     0.024     0.014     0.015     0.010     0.000
+        realised   -20.09%   -11.53%    -5.48%    -2.44%    +0.22%    +1.32%    +1.33%    +1.23%    +2.38%    +2.40%    +2.74%    +3.81%
+    beat prorata        0%        1%       11%       23%       43%       51%       36%       33%       79%       98%      100%      100%
+
+  NORMAL +/-30%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     0.506     0.413     0.339     0.220     0.183     0.176     0.163     0.169     0.176     0.188     0.203     0.215
+       mkout/cap    -1.272    -0.764    -0.373    -0.060    -0.018     0.008     0.007    -0.002     0.001     0.004    -0.000    -0.000
+       edge$/cap   -0.2417    0.0517    0.0784    0.0496    0.0100    0.0043    0.0019    0.0011    0.0006    0.0004    0.0003    0.0000
+        edge/fee    -0.478     0.125     0.231     0.225     0.055     0.025     0.011     0.007     0.004     0.002     0.001     0.000
+        realised   -76.57%   -35.19%    -3.42%   +16.01%   +16.49%   +18.44%   +16.96%   +16.72%   +17.74%   +19.27%   +20.25%   +21.50%
+    beat prorata        0%       33%       52%       54%       53%       48%       42%       38%       55%       89%       95%       95%
+
+  TOXIC +/-10%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     0.009     0.003     0.003     0.003     0.002     0.002     0.002     0.003     0.003     0.004     0.005     0.008
+       mkout/cap    -0.071    -0.050    -0.042    -0.039    -0.037    -0.036    -0.032    -0.027    -0.021    -0.015    -0.009    -0.000
+       edge$/cap   -0.0142    0.0009    0.0012    0.0011    0.0005    0.0006    0.0003    0.0004    0.0003    0.0002    0.0005    0.0000
+        edge/fee    -1.546     0.257     0.414     0.394     0.229     0.250     0.116     0.136     0.088     0.041     0.104     0.000
+        realised    -6.16%    -4.63%    -3.90%    -3.64%    -3.45%    -3.35%    -2.92%    -2.40%    -1.75%    -1.14%    -0.33%    +0.75%
+    beat prorata        0%        1%        4%        8%       14%        8%        2%        1%      100%      100%      100%      100%
+
+  TOXIC +/-30%
+            rank         1         2         3         4         6         8        12        16        20        24        28        32
+         fee/cap     0.024     0.006     0.004     0.004     0.003     0.003     0.004     0.004     0.005     0.006     0.008     0.013
+       mkout/cap    -0.152    -0.094    -0.099    -0.101    -0.100    -0.094    -0.081    -0.067    -0.052    -0.037    -0.021    -0.001
+       edge$/cap   -0.0195    0.0040    0.0015    0.0007    0.0005    0.0005    0.0004    0.0004    0.0005    0.0004    0.0005    0.0002
+        edge/fee    -0.808     0.669     0.354     0.200     0.153     0.142     0.107     0.099     0.105     0.073     0.061     0.016
+        realised   -12.76%    -8.84%    -9.45%    -9.77%    -9.66%    -9.04%    -7.70%    -6.27%    -4.75%    -3.13%    -1.35%    +1.13%
+    beat prorata        0%        3%        5%        4%        0%        0%        0%        0%      100%      100%      100%      100%
+
+================================================================================================================
+E.  THE VERDICT NUMBER, IN ONE TABLE:  edge/fee AT THE HEAD, ALL FOUR SEED RANGES
+================================================================================================================
+  A matched pair means the head's price penalty roughly cancels its fee advantage, i.e.
+  edge/fee near -1. Shown per seed range so a one-block result cannot hide.
+
+              config    phi  rank        A r0-29     B r100-129     C r200-229   D r1000-1029      POOLED
+       BENIGN +/-10%      0     1         -0.015         -0.016         -0.015         -0.014      -0.015
+                          0     4          0.108          0.100          0.113          0.113       0.109
+                          0    16          0.088          0.106          0.133          0.110       0.109
+                       8500     1         -0.158         -0.155         -0.160         -0.162      -0.159
+                       8500     4          0.069          0.076          0.076          0.071       0.073
+                       8500    16          0.006          0.007          0.010          0.006       0.007
+
+       BENIGN +/-30%      0     1         -0.002         -0.002         -0.002         -0.002      -0.002
+                          0     4          0.142          0.162          0.155          0.138       0.149
+                          0    16          0.114          0.153          0.166          0.186       0.153
+                       8500     1         -0.170         -0.174         -0.186         -0.165      -0.174
+                       8500     4          0.021          0.021          0.022          0.020       0.021
+                       8500    16          0.001          0.001          0.001          0.001       0.001
+
+       NORMAL +/-10%      0     1         -0.075         -0.076         -0.071         -0.074      -0.074
+                          0     4          0.214          0.182          0.188          0.196       0.196
+                          0    16          0.204          0.154          0.229          0.209       0.202
+                       8500     1         -0.533         -0.515         -0.566         -0.538      -0.540
+                       8500     4          0.237          0.204          0.276          0.218       0.237
+                       8500    16          0.019          0.025          0.029          0.024       0.024
+
+       NORMAL +/-30%      0     1         -0.012         -0.013         -0.010         -0.012      -0.012
+                          0     4          0.248          0.241          0.263          0.246       0.250
+                          0    16          0.329          0.217          0.247          0.220       0.252
+                       8500     1         -0.490         -0.445         -0.484         -0.488      -0.478
+                       8500     4          0.233          0.198          0.249          0.206       0.225
+                       8500    16          0.007          0.006          0.007          0.006       0.007
+
+        TOXIC +/-10%      0     1         -0.256         -0.253         -0.286         -0.254      -0.262
+                          0     4          0.187          0.233          0.338          0.200       0.237
+                          0    16          0.132          0.493          0.292          0.121       0.257
+                       8500     1         -1.516         -1.501         -1.676         -1.497      -1.546
+                       8500     4          0.325          0.399          0.561          0.308       0.394
+                       8500    16          0.080          0.246          0.154          0.059       0.136
+
+        TOXIC +/-30%      0     1         -0.138         -0.139         -0.144         -0.131      -0.138
+                          0     4          0.468          0.414          0.270          0.403       0.387
+                          0    16          0.167          0.441          0.403          0.281       0.323
+                       8500     1         -0.808         -0.821         -0.847         -0.760      -0.808
+                       8500     4          0.233          0.208          0.142          0.214       0.200
+                       8500    16          0.055          0.132          0.127          0.081       0.099
+
+================================================================================================================
+F.  WHERE THE HEAD'S MONEY ACTUALLY GOES -- rank 1 only, every config
+================================================================================================================
+  The matched-pair story says the head's cost is the WORST SLOT of every move. This
+  table asks how much of the head's cost that actually is.
+
+  edge/fee   = price penalty as a share of the head's fee income (matched pair => ~ -1)
+  edge/mkout = price penalty as a share of the head's OWN markout loss. If this is small,
+               the head's real cost is ordinary adverse selection from doing the volume,
+               NOT the pricing of its slot -- and the matched-pair story is misattributed.
+  beat r1 / beat r16 = share of (path,rank) cells beating a pro-rata LP on the same seed.
+
+            config    phi   fee/cap  mkout/cap  edge$/cap  edge/fee  edge/mkout  beat r1  beat r16
+     BENIGN +/-10%      0     2.148     -0.610    -0.0322    -0.015       0.053     100%        7%
+                     8500     0.336     -0.463    -0.0536    -0.159       0.116       0%       31%
+
+     BENIGN +/-30%      0    10.377     -1.494    -0.0196    -0.002       0.013     100%        0%
+                     8500     1.380     -2.059    -0.2398    -0.174       0.116       0%       18%
+
+     NORMAL +/-10%      0     0.720     -0.399    -0.0530    -0.074       0.133     100%       21%
+                     8500     0.110     -0.311    -0.0596    -0.540       0.192       0%       33%
+
+     NORMAL +/-30%      0     6.311     -2.470    -0.0726    -0.012       0.029     100%        9%
+                     8500     0.506     -1.272    -0.2417    -0.478       0.190       0%       38%
+
+      TOXIC +/-10%      0     0.055     -0.072    -0.0143    -0.262       0.197      57%        1%
+                     8500     0.009     -0.071    -0.0142    -1.546       0.201       0%        1%
+
+      TOXIC +/-30%      0     0.138     -0.159    -0.0191    -0.138       0.120      96%        0%
+                     8500     0.024     -0.152    -0.0195    -0.808       0.128       0%        0%
+
+  READ IT LIKE THIS: a matched pair needs edge/fee ~ -1. Anything near 0 means the head
+  is charged a toll it barely feels and paid a fee it feels enormously.
+
+================================================================================================================
+[generated in 349s]
+================================================================================================================
+
+================================================================================================================
+G.  IS THE EXECUTION-PRICE COMPARISON CONFOUNDED BY phi?  (measured, not argued)
+================================================================================================================
+  EDGE is computed from `give` and `take`. The premium is withheld from the CREDIT
+  after both are fixed (`pot = phi*FEE*give`), so phi cannot enter the price directly.
+  It can still enter through the PATH, by moving inventory between seats. If the two
+  columns agree, section A at phi=0 characterises the shipped pool too.
+
+            config    phi       r1       r2       r3       r4       r6       r8      r12      r16      r20      r24      r28      r32
+     BENIGN +/-10%      0    -5.91     4.08     4.13     4.86     3.17     3.66     3.30     1.07     6.16    -0.24    -0.43     0.39
+                     8500    -5.93     4.22     4.00     4.76     3.50     4.18     3.37     0.19     5.47     0.52     1.31     1.11
+
+     BENIGN +/-30%      0    -6.24     6.42     6.34     6.45     8.37     6.47     7.30     7.34     9.60     5.88     7.92      nan
+                     8500    -6.58     6.07     6.70     5.90     6.18     6.27     8.01     5.54     4.80     6.30    11.58      nan
+
+     NORMAL +/-10%      0   -11.20     4.37     5.97     6.56     6.83     6.34     2.28     1.72     4.49     9.76     6.63      nan
+                     8500   -10.69     4.35     5.18     6.55     5.83     7.09     2.06     2.38     6.22     6.55     6.58      nan
+
+     NORMAL +/-30%      0   -10.53    10.31     9.31    10.63     9.16    11.51    16.59     4.86    12.61     8.14    11.93     2.61
+                     8500   -10.95     8.80    10.19     8.61    11.91     8.55    12.50     8.59    11.96    12.74    11.96     1.49
+
+      TOXIC +/-10%      0   -30.59    -9.86     4.77     5.75    11.75    15.71     0.44     7.90    11.53    20.54     6.96      nan
+                     8500   -30.45    -9.92     4.70     6.69    11.88    15.50     0.07     7.97    11.72    20.18     6.98      nan
+
+      TOXIC +/-30%      0   -22.73    12.69    10.60    24.56    12.83     9.70    12.74     6.44    17.66    16.70    15.34    17.00
+                     8500   -22.70    11.74    11.99    24.76    11.69     9.16    12.18     6.69    17.89    15.79    15.53    17.05
+
+  RESULT: the two rows track each other at every rank. The edge is a PRE-premium
+  quantity and the phi=0 tables above are not confounded.
+[G appended by: python3 report_exec.py --phicheck]
+
+================================================================================================================
+H.  HOW MANY RANKS ARE ECONOMICALLY DISTINCT?  (adjacent-rank separation, phi=0)
+================================================================================================================
+    TWO RANKS APART on the outcome they will actually live, so the test is not "do the means
+    differ" -- with 120 paths almost any two means differ -- but "is the gap between adjacent
+    ranks large compared with the spread of outcomes a single holder faces".
+
+      turn ratio  = mean turnover(k) / mean turnover(k+1).  ~1.0 means the two are the same object.
+      sep         = |mean paired return difference| / stdev of rank k's own return ACROSS PATHS.
+                    Ranks are paired (same seed), so the difference is measured per path.
+                    sep >= 0.5 : a holder can feel the difference. sep < 0.1 : they cannot.
+    
+            config        stat      1v2      2v3      3v4      4v5      5v6      6v8     8v12    12v16    16v24
+     BENIGN +/-10%  turn ratio    23.82     1.86     1.58     1.45     1.36     1.52     1.81     1.59     1.68
+                           sep     1.15     0.23     0.09     0.08     0.05     0.08     0.10     0.05     0.05
+
+     BENIGN +/-30%  turn ratio   226.52     2.29     1.59     1.45     1.37     1.47     2.03     1.58     2.02
+                           sep     2.51     0.43     0.12     0.11     0.07     0.06     0.14     0.04     0.08
+
+     NORMAL +/-10%  turn ratio     8.40     1.75     1.52     1.39     1.33     1.65     2.06     1.60     1.68
+                           sep     1.09     0.32     0.19     0.16     0.08     0.00     0.06     0.04     0.07
+
+     NORMAL +/-30%  turn ratio    62.74     2.10     1.67     1.41     1.33     1.57     2.15     1.37     2.24
+                           sep     1.26     0.22     0.16     0.01     0.02     0.00     0.20     0.23     0.05
+
+      TOXIC +/-10%  turn ratio     4.62     1.63     1.53     1.41     1.25     1.37     1.20     1.06     1.02
+                           sep     1.34     0.23     0.03     0.05     0.06     0.02     0.45     0.66     2.88
+
+      TOXIC +/-30%  turn ratio    12.48     2.93     1.79     1.29     1.08     1.02     1.00     1.00     1.00
+                           sep     2.40     0.62     0.23     0.04     0.23     1.34     6.61     6.81    14.48
+
+[H appended by: python3 report_exec.py --nseats]
+
+================================================================================================================
+H.  HOW MANY RANKS ARE ECONOMICALLY DISTINCT?  N = 5 SEATS, phi=0
+================================================================================================================
+    TWO RANKS APART on the outcome they will actually live, so the test is not "do the means
+    differ" -- with 120 paths almost any two means differ -- but "is the gap between adjacent
+    ranks large compared with the spread of outcomes a single holder faces".
+
+      turn ratio  = mean turnover(k) / mean turnover(k+1).  ~1.0 means the two are the same object.
+      sep         = |mean paired return difference| / stdev of rank k's own return ACROSS PATHS.
+                    Ranks are paired (same seed), so the difference is measured per path.
+                    sep >= 0.5 : a holder can feel the difference. sep < 0.1 : they cannot.
+    
+  ROSTER CHECK: all 720 worker results built 5 seats of $200,000. PASS.
+
+            config        stat      1v2      2v3      3v4      4v5
+     BENIGN +/-10%  turn ratio    47.31     2.24     1.55     2.40
+                           sep     1.05     0.03     0.06     0.05
+
+     BENIGN +/-30%  turn ratio   530.24     2.27     1.83     6.42
+                           sep     2.37     0.09     0.02     0.06
+
+     NORMAL +/-10%  turn ratio    19.10     2.37     1.50     2.10
+                           sep     0.62     0.05     0.09     0.04
+
+     NORMAL +/-30%  turn ratio   146.72     2.19     1.87     2.98
+                           sep     1.14     0.05     0.04     0.04
+
+      TOXIC +/-10%  turn ratio     7.57     1.15     1.02     1.76
+                           sep     0.06     1.32     2.17     3.48
+
+      TOXIC +/-30%  turn ratio    16.68     1.00     1.00     1.19
+                           sep     0.20    10.53    11.50    12.32
+
+[H at N=5 appended by: QUEUE_NSEAT=5 python3 report_exec.py --nseats]
+
+================================================================================================================
+I.  THE SHIPPED ROSTER: N = 5 SEATS of $200,000
+================================================================================================================
+
+    Every other table in this file was taken at 32 equal seats.  That was a mistake of framing on
+    my part: the 32-seat book is a research fixture and the shipped pool is not it, so the roster
+    size belongs in the measurement rather than in an extrapolation afterwards.
+
+    Both phi are shown, and the pair is the point.  phi = 0 isolates what the ORDERING does; phi =
+    8500 is what the pool actually pays.  If ranks 2..5 are dead at phi = 0 and alive at phi =
+    8500, then their entire economic content is the premium -- which is distributed by STANDING
+    INVENTORY WEIGHT, not by rank -- and the ranking among them is decoration.
+    
+  BENIGN +/-10%
+    phi=0       turnover    122.66      2.59      1.16      0.74      0.31
+                 fee/cap    0.3687    0.0078    0.0035    0.0022    0.0009
+                realised   +24.40%    +0.22%    +0.09%    +0.29%    +0.13%
+              sep(k,k+1)      1.05      0.03      0.06      0.05         -
+    phi=8500    turnover    121.78      3.23      1.31      0.81      0.34
+                 fee/cap    0.1160    0.0615    0.0596    0.0658    0.0802
+                realised    -0.55%    +5.34%    +5.70%    +6.59%    +8.05%
+              sep(k,k+1)      1.87      0.04      0.11      0.18         -
+
+  BENIGN +/-30%
+    phi=0       turnover    544.06      1.03      0.45      0.25      0.04
+                 fee/cap    1.6364    0.0031    0.0013    0.0007    0.0001
+                realised  +141.64%    +0.47%    -0.39%    -0.24%    -0.05%
+              sep(k,k+1)      2.37      0.09      0.02      0.06         -
+    phi=8500    turnover    542.87      1.88      0.67      0.35      0.05
+                 fee/cap    0.5205    0.2526    0.2601    0.2910    0.3175
+                realised   +29.87%   +25.64%   +25.44%   +28.80%   +31.68%
+              sep(k,k+1)      0.26      0.01      0.19      0.20         -
+
+  NORMAL +/-10%
+    phi=0       turnover     48.58      2.54      1.07      0.71      0.34
+                 fee/cap    0.1459    0.0076    0.0032    0.0021    0.0010
+                realised    +3.86%    -0.38%    -0.59%    -0.30%    -0.16%
+              sep(k,k+1)      0.62      0.05      0.09      0.04         -
+    phi=8500    turnover     48.13      2.88      1.15      0.74      0.35
+                 fee/cap    0.0439    0.0263    0.0256    0.0290    0.0349
+                realised    -6.19%    +1.35%    +1.66%    +2.40%    +3.21%
+              sep(k,k+1)      1.82      0.05      0.14      0.15         -
+
+  NORMAL +/-30%
+    phi=0       turnover    339.44      2.31      1.05      0.56      0.19
+                 fee/cap    1.0202    0.0070    0.0032    0.0017    0.0006
+                realised   +63.22%    +0.50%    +1.10%    +0.52%    +0.18%
+              sep(k,k+1)      1.14      0.05      0.04      0.04         -
+    phi=8500    turnover    336.84      4.36      1.41      0.72      0.22
+                 fee/cap    0.3010    0.1693    0.1700    0.1850    0.2073
+                realised    -9.44%   +17.78%   +17.32%   +19.00%   +20.86%
+              sep(k,k+1)      2.74      0.02      0.07      0.08         -
+
+  TOXIC +/-10%
+    phi=0       turnover      4.44      0.59      0.51      0.50      0.29
+                 fee/cap    0.0132    0.0017    0.0015    0.0015    0.0008
+                realised    -3.25%    -3.20%    -2.44%    -1.53%    -0.45%
+              sep(k,k+1)      0.06      1.32      2.17      3.48         -
+    phi=8500    turnover      4.44      0.59      0.51      0.50      0.29
+                 fee/cap    0.0038    0.0023    0.0028    0.0038    0.0060
+                realised    -4.18%    -3.14%    -2.31%    -1.31%    +0.06%
+              sep(k,k+1)      1.55      1.40      2.34      3.94         -
+
+  TOXIC +/-30%
+    phi=0       turnover      8.28      0.50      0.50      0.50      0.42
+                 fee/cap    0.0246    0.0012    0.0013    0.0014    0.0012
+                realised    -8.37%    -8.53%    -6.34%    -3.97%    -1.35%
+              sep(k,k+1)      0.20     10.53     11.50     12.32         -
+    phi=8500    turnover      8.28      0.50      0.50      0.50      0.42
+                 fee/cap    0.0072    0.0036    0.0043    0.0056    0.0090
+                realised   -10.01%    -8.33%    -6.08%    -3.57%    -0.58%
+              sep(k,k+1)      4.93      9.20      9.96     10.90         -
+
+  sep = |mean paired return difference| / stdev of rank k's own return across paths.
+  >= 0.5 a holder can feel it; < 0.1 they cannot. Ranks are paired on the same seed.
+[I appended by: QUEUE_NSEAT=5 python3 report_exec.py --shipped]

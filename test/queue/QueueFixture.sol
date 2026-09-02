@@ -75,14 +75,15 @@ abstract contract QueueFixture is BaseTest {
 
     /// @dev Storage address of seat `id`'s BALANCE word.
     ///
-    ///      `q` is a dynamic array of a TWO-slot struct since Phase 7 — `(a0, a1)` packed in the
-    ///      first, `(snap0, snap1)` in the second — so element `id` starts at `keccak(slot) + 2*id`. Two
+    ///      `q` is a dynamic array of a FOUR-slot struct since Phase 8 — `(a0, a1)` packed in the
+    ///      first, `snap0`, `snap1` and `liquidity` in the next three — so element `id` starts at
+    ///      `keccak(slot) + 4*id`. Two
     ///      suites poke this directly and both had the stride written into them independently; when
     ///      the struct grew from one slot to three, the copies were wrong in the same way at the
     ///      same time. It is written HERE once, and every caller reads its poke back through the
     ///      contract's own view so a future repacking fails loudly rather than silently addressing
     ///      an unrelated slot (LAW 2).
-    uint256 constant SEAT_SLOTS = 2;
+    uint256 constant SEAT_SLOTS = 4;
 
     function _seatSlot(uint256 id) internal view returns (bytes32) {
         return bytes32(uint256(keccak256(abi.encode(hook.seatArraySlot()))) + SEAT_SLOTS * id);
@@ -540,6 +541,35 @@ abstract contract QueueFixture is BaseTest {
         assertEq(_sumEscrows(), esc, string.concat(tag, ": escrowTotal disagrees with the seats"));
     }
 
+    /// @notice **INVARIANT L (Phase 8): `Σ seatLiquidity + liquidityUnattributed == positionLiquidity`.**
+    ///
+    /// @dev EXACT, not a bound. `liquidityContributed` is the premium's denominator, so a drift here
+    ///      is a drift in who the premium is paid to — and unlike a token amount it is backed by
+    ///      nothing that conservation would notice, because liquidity is not a balance. Only two
+    ///      sites write it (`_fundSeat` mints, `_chargeBurn` burns) and one site writes the
+    ///      unattributed pot (`sweepFloatIntoPosition`), so the three of them either tie out or one
+    ///      of them is wrong.
+    ///
+    ///      The aggregate `standingL` is a SECOND WRITER of the same fact as the per-seat values, so
+    ///      it is checked against the sum rather than trusted — a rule kept in two places has been
+    ///      wrong five times on this project. Without that line a burn that decrements the aggregate
+    ///      but not the seat (or the reverse) passes every other assertion here while the roster
+    ///      collectively claims more depth than the position holds.
+    function _checkInvariantL(string memory tag) internal view {
+        uint256 n = hook.seatCount();
+        uint256 sum;
+        for (uint256 i; i < n; i++) {
+            sum += hook.seatLiquidity(i);
+        }
+        (uint256 contributed, uint256 unattributed, uint256 shortfall) = hook.liquidityTotals();
+        assertEq(sum, contributed, string.concat(tag, ": standingL disagrees with the seats"));
+        assertEq(
+            contributed + unattributed,
+            hook.positionLiquidity() + shortfall,
+            string.concat(tag, ": INVARIANT L - the liquidity ledger does not tie out")
+        );
+    }
+
     function _sumEscrows() internal view returns (uint256 s) {
         uint256 n = hook.seatCount();
         for (uint256 i; i < n; i++) {
@@ -640,13 +670,22 @@ abstract contract QueueFixture is BaseTest {
 
     /// @dev Withdraw and keep the witness in step. `withdraw` pays `min(face, available)`, so the
     ///      seat is debited by what was PAID, never by what was asked (dust policy F1).
+    ///      A withdrawal that takes DEPTH out costs the seat its place in the queue, so the witness
+    ///      demotes too. It reads the seat's contributed liquidity either side of the call rather
+    ///      than re-deriving `_payOut`'s float arithmetic, and that is a deliberate division of
+    ///      labour, stated so nobody mistakes it for an independent check: this keeps the witness's
+    ///      ORDER model in step so `_checkOrder`, INVARIANT C and the cursor assertions stay
+    ///      meaningful, while WHEN a demotion should happen is asserted directly and independently
+    ///      by `Evacuation.t.sol` (`test_8_8`, `test_8_8b`, `test_8_9`).
     function _withdrawTracked(uint256 seatId, uint256 w0, uint256 w1) internal returns (uint256 p0, uint256 p1) {
+        uint128 lBefore = hook.seatLiquidity(seatId);
         vm.prank(hook.ownerOf(seatId));
         (p0, p1) = hook.withdraw(seatId, w0, w1);
         ref0[seatId] -= p0;
         ref1[seatId] -= p1;
         expT0 -= p0;
         expT1 -= p1;
+        if (lBefore != hook.seatLiquidity(seatId)) _refDemote(seatId);
     }
 
     /// @dev Re-base the witness after a seat evacuation. A transfer empties the seat OUTRIGHT —

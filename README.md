@@ -2,6 +2,40 @@
 
 **A Uniswap v4 hook that lets the people putting up the money buy and sell their place in line — so whoever wants to be filled first pays whoever is willing to go last.**
 
+> ## ⚠ CORRECTED 2026-09-02 — READ THIS BEFORE THE BODY
+>
+> Everything below is the mechanism, and the mechanism is accurate. **The product description is
+> not**, and three numbers in it are wrong. Corrected here rather than quietly edited, so a reader
+> can check.
+>
+> **1. It ships FIVE seats, not 32.** `MAX_SEATS = 32` is structural — one byte per rank in a
+> 32-byte word — and it is a cap, never a recommendation. `QueueDeployBase` deploys `SEATS = 5`, and
+> measurement says that is right: at five seats **all five are reached in every regime** and the top
+> two take 87–99.9% of turnover, where 32 equal seats leave one to two ranks with literally zero
+> flow. Every "32 desks" in the text below should read "five".
+>
+> **2. The book is not a ladder of 32 differentiated positions. It is rank 1 plus a pool.** On the
+> shipped roster, adjacent-rank separation is **2.37 between seats 1 and 2 and 0.01–0.09 everywhere
+> else** — ranks 2–5 are indistinguishable to a holder. At φ = 0 they turn over 0.04–1.03× across
+> the band's *entire life*; rank 1 collects **528× rank 2**. Their whole economic content is the
+> premium, and the premium is shared by inventory weight, not by rank. **So the ordering among seats
+> 2–5 is decoration.** The honest sentence is: *rank 1 is a market maker doing 122–543× turnover;
+> seats 2–5 are a premium-sharing pool in which rank does nothing.*
+>
+> **3. The gas figure has now been wrong twice, both times in our favour.** "+48%" compared against
+> a pool that had never traded. "+133%" was right until today's fix, which made the hot path
+> *cheaper*. **It is +119%** — 152,947 against 69,970, same swap, same storage state.
+>
+> **4. "Desk 32 is worth funding" rested on a mechanism that did not run.** On the 18/6 pool this
+> script actually deploys, the token0-direction premium reached the roster **0 wei, 0 of 4
+> accruals**, against an 18/18 control stranding 0%. Fixed today; see `PITFALLS.md` §5.124.
+>
+> **What survives, and it is the whole product: the FRONT seat.** Rank 0 is a two-sided claim on flow
+> that re-anchors to spot on every swap, in both directions, at zero cost — and it beats an
+> *optimistically modelled* keeper-managed ATM range by **30 to 758 points**. Replicating that
+> property costs 80–123%/yr at the widths that compete. **What is NOT established is what a buyer
+> will pay for it** — see `BUSINESS.md` §0.
+
 Think of a shop with a **paid counter** and a **public warehouse**.
 
 - Around today's price (~±10%) sit **32 paid desks**. Desk 1 serves every customer. Desk 32 only serves a customer so large that 1–31 are already empty. You buy a desk. You pay rent to the desks behind you. Anyone can take your desk at the price you posted.

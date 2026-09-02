@@ -68,20 +68,36 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      bound is nonetheless CHECKED rather than assumed: every narrowing in this contract goes
     ///      through `_u128`, which reverts. A silent wrap here would mint balance out of nothing.
     ///
-    ///      **PHASE 7 ADDS TWO MORE SLOTS, AND THEY ARE NOT PACKED WITH THE BALANCES ON PURPOSE.**
-    ///      `snap0`/`snap1` are the seat's marks against the premium accumulators (see
-    ///      `premGrowth0`). They are read and written ONLY on the settle path, so keeping them out
-    ///      of the balance word leaves the hot read of `(a0, a1)` exactly as cheap as it was.
-    ///      They are packed into ONE slot, which costs an overflow argument and is worth it:
-    ///      unpacked, they measured **+52% on a head-only swap and pushed the supportable roster
-    ///      from 32 seats down to 23**. The argument is in `_accruePremium` — an accrual is only
-    ///      taken when the standing inventory is at least the size of the pot, so a single growth
-    ///      increment can never exceed `2^64` and 128 bits holds `2^64` of them.
+    ///      **PHASE 7 ADDS THE PREMIUM MARKS, AND PHASE 8 UNPACKED THEM. THAT COST WAS PAID
+    ///      DELIBERATELY AND THE REASON IS NOT GAS.** `snap0`/`snap1` are the seat's marks against
+    ///      the premium accumulators (see `premGrowth0`). They are read and written ONLY on the
+    ///      settle path, so keeping them out of the balance word leaves the hot read of `(a0, a1)`
+    ///      exactly as cheap as it was.
+    ///
+    ///      They used to be two `uint128`s sharing ONE slot, and that packing was bought with an
+    ///      overflow argument — "an accrual is only taken when the standing inventory is at least
+    ///      the size of the pot, so a growth increment can never exceed `2^64`". **The argument was
+    ///      true and the condition it rested on was the defect.** Requiring `standing >= pot` is an
+    ///      ARITHMETIC constraint wearing an economic hat, and on the 18/6 pool `QueueDeployBase`
+    ///      actually ships it is false on essentially every swap in one direction — so the premium
+    ///      was HELD, permanently, and `0 wei` of it ever reached the roster. See `premGrowth0` and
+    ///      `test/queue/PremiumDecimals.t.sol`.
+    ///
+    ///      A feature that does not execute on the pool the deploy script builds is worse than a
+    ///      feature that costs a slot. Unpacked, X128, no overflow condition, no hold except the
+    ///      economic one.
+    ///      **PHASE 8 ADDS `liquidity`, AND IT IS THE PREMIUM'S WEIGHT.** It is the Uniswap
+    ///      liquidity this seat actually MINTED — the `dl` `_fundSeat` put into the position, less
+    ///      whatever a withdrawal burned back out. It is deliberately NOT the seat's current
+    ///      inventory: front-first allocation drives a seat to single-token composition, so
+    ///      inventory is a quantity that vanishes precisely when the seat has just been jumped,
+    ///      which is the moment it is owed most. Contributed liquidity survives conversion.
     struct Seat {
         uint128 a0; // token0 this seat holds
         uint128 a1; // token1 this seat holds
-        uint128 snap0; // mark against `premGrowth0`, X64
-        uint128 snap1; // mark against `premGrowth1`, X64
+        uint256 snap0; // mark against `premGrowth0`, X128
+        uint256 snap1; // mark against `premGrowth1`, X128
+        uint128 liquidity; // Uniswap liquidity this seat contributed and has not withdrawn
     }
 
     /// @dev **INDEX IS SEAT ID, NOT RANK.** It was both up to Phase 3, because nothing could
@@ -171,7 +187,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      is a privileged role over the split everyone else's capital is standing in.
     uint256 public immutable PREMIUM_BPS;
 
-    /// @dev `pot * 2^64 / standing`, accumulated. `premGrowth0` is token0 premium per unit of
+    /// @dev `pot * 2^128 / standing`, accumulated. `premGrowth0` is token0 premium per unit of
     ///      token1 STANDING; `premGrowth1` is the mirror.
     ///
     ///      **THE WEIGHT IS THE OPPOSITE TOKEN, AND THAT IS THE WHOLE ECONOMIC CONTENT.** A
@@ -183,13 +199,41 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      A seat that was just drained to `a1 == 0` holds no weight and receives nothing from the
     ///      pot it generated. The payer does not pay itself.
     ///
-    ///      X64, in 128 bits, and both halves of that are load-bearing. `_accruePremium` refuses to
-    ///      take an accrual unless `standing >= pot`, so `mulDiv(pot, 2^64, standing) <= 2^64` and a
-    ///      `uint128` holds `2^64` accruals before it can wrap — and if it ever did, `+=` on a
-    ///      `uint128` reverts rather than silently zeroing every seat's mark. The precision cost is
-    ///      under one wei per settlement (`a1 / 2^64`, with `a1` at 1e18).
-    uint128 internal premGrowth0;
-    uint128 internal premGrowth1;
+    ///      ─────────────────────────────────────────────────────────────────────────────────────
+    ///      **X128 IN 256 BITS SINCE PHASE 8, AND THE PREVIOUS ANSWER — X64 IN 128 BITS — WAS A
+    ///      REAL DEFECT RATHER THAN A TIGHT FIT.**
+    ///
+    ///      **The diagnosis.** This number is *incoming-token wei per **OUTGOING-token** wei
+    ///      standing*. The numerator and the denominator are DIFFERENT TOKENS, so the natural
+    ///      magnitude of the ratio moves by `10^(dec_in - dec_out)`. On an 18/6 pair that is `1e12`
+    ///      in one direction and `1e-12` in the other — **twenty-four orders of magnitude apart on
+    ///      the same pool, in the same block.** A fixed-point scale `Q` must therefore be LARGE
+    ///      enough that the small-ratio direction does not floor to zero, and SMALL enough that the
+    ///      large-ratio direction does not overflow the accumulator. **No single `Q` in 128 bits can
+    ///      satisfy both**, which is why this could not be fixed by tuning the constant.
+    ///
+    ///      **What that cost.** The old code bought its packing with `if (w < total) hold`, i.e. it
+    ///      refused to accrue unless the standing inventory was at least the size of the pot. That
+    ///      is an ARITHMETIC bound (keep `mulDiv(pot, 2^64, w)` under `2^64`) welded to an ECONOMIC
+    ///      question (is there anybody to pay?). On the 18/6 pool `QueueDeployBase` ships, the
+    ///      token0 pot of a one-token swap is `2.55e15` while `standing1` is `2.0e9`, so the
+    ///      condition failed every time, the pot was held, and held pots ADD — measured over eight
+    ///      swaps on a real pool: **0 of 4 accruals moved the accumulator, 100% stranded, `0 wei`
+    ///      of token0 premium ever reached the roster.** The 18/18 control, identical in every other
+    ///      respect, stranded 0%. The feature did not exist on the pool we deploy.
+    ///
+    ///      **Why 128 and not 64 or 96.** Same reason Uniswap's own `feeGrowthGlobal0X128` is 128:
+    ///      it is the scale at which the smallest interesting numerator still registers against the
+    ///      largest plausible denominator. At X64 a `1`-wei pot against a `2.5e19` book increments
+    ///      by `mulDiv(1, 2^64, 2.5e19) == 0` and the wei is stranded; at X128 the same accrual
+    ///      increments by `~1.4e19`. There is no upper cost to pay for it any more, because the
+    ///      accumulator is now 256 bits and is allowed to wrap.
+    ///
+    ///      **The only guard left is the economic one.** `_accruePremium` holds when `w == 0` —
+    ///      nobody is standing, so there is no one to pay — and otherwise pays the WHOLE pot. There
+    ///      is no arithmetic condition, which is the entire point of the widening.
+    uint256 internal premGrowth0;
+    uint256 internal premGrowth1;
 
     /// @dev `Σ q[i].a0` and `Σ q[i].a1` across the whole roster — the accumulators' denominators.
     ///      Maintained incrementally at the SIX sites that write a seat balance rather than summed
@@ -197,6 +241,54 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      `totals()` is the independent witness that the increments have not drifted.
     uint256 internal standing0;
     uint256 internal standing1;
+
+    /// @dev `Σ q[i].liquidity` — the premium accumulators' denominator since Phase 8, and the whole
+    ///      of why the premium is now decimals-independent.
+    ///
+    ///      **WHY THE WEIGHT IS LIQUIDITY AND NOT INVENTORY, IN ONE PARAGRAPH.** `premGrowth0` is
+    ///      *token0 premium per unit of weight*. When the weight was `standing1`, the numerator and
+    ///      the denominator were DIFFERENT TOKENS, so the ratio's natural magnitude moved by
+    ///      `10^(dec_in - dec_out)` — `1e12` one way and `1e-12` the other on an 18/6 pair. Every
+    ///      rule expressed as a comparison between them ("hold unless there is more standing than
+    ///      pot") was therefore a units error, and on the pool `QueueDeployBase` ships it stranded
+    ///      **100% of the token0 premium, 0 wei reaching the roster** over eight swaps.
+    ///
+    ///      Liquidity is ONE unit shared by both directions, so the comparison stops being a units
+    ///      error. It is also dust-resistant: a seat drained to its last wei still carries the depth
+    ///      it contributed, where under inventory weighting it carried `1` and took the entire pot
+    ///      (`test_7_14`).
+    ///
+    ///      Maintained incrementally at the two sites that mint or burn a seat's liquidity, for the
+    ///      same reason `standing0/1` are: a swap must not pay O(n) to learn its own denominator.
+    uint256 internal standingL;
+
+    /// @dev Liquidity in the position that NO seat contributed — everything
+    ///      `sweepFloatIntoPosition` has minted out of the shared float. It is tracked rather than
+    ///      ignored so `standingL + liquidityUnattributed == liquidity` is an EXACT identity a test
+    ///      can assert, instead of an inequality with a hand-waved residual.
+    ///
+    ///      **IT IS CREDITED TO NOBODY, AND THAT IS A DECISION WITH A REASON.** The float is
+    ///      capital that seats were ALREADY credited for through INVARIANT F and that nobody has
+    ///      re-committed as depth; `liquidityContributed` measures what a seat committed. Paying
+    ///      premium on it would also make `sweepFloatIntoPosition` — a permissionless function —
+    ///      a THIRD writer of `liquidityContributed` and an O(n) full-roster write, which is a gas
+    ///      griefing surface on a function anyone may call. Unattributed liquidity does not dilute
+    ///      anyone: the pot is divided by `standingL`, so contributors simply split it among
+    ///      themselves. The number is kept here so that apportioning it later is a decision rather
+    ///      than an archaeology exercise.
+    uint256 internal liquidityUnattributed;
+
+    /// @dev Liquidity BURNED that neither a seat's own contribution nor the unattributed pot could
+    ///      account for — the exact residual in INVARIANT L, tracked rather than tolerated.
+    ///
+    ///      It arises because a round trip does not close in liquidity: `_liquidityForAmounts`
+    ///      sizes a deposit DOWN while `_liquidityToCover` sizes the matching withdrawal UP, so
+    ///      taking out exactly what you put in can burn one unit more than was recorded against you.
+    ///      §E.4 scale — one unit per round trip, not per swap. Naming it is what lets the invariant
+    ///      be asserted as an equality: `standingL + unattributed == liquidity + shortfall`. A test
+    ///      that asserted a BOUND here instead would be blind to every defect that moved the
+    ///      residual the same way the rounding does (PITFALLS 5.53).
+    uint256 internal liquidityShortfall;
 
     /// @dev Premium accrued into an accumulator and not yet settled into any seat. It is money the
     ///      position is already holding, so INVARIANT F counts it on the LEDGER side — without
@@ -495,7 +587,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             if (holder == address(0)) revert ZeroHolder(i);
             // Both marks start at zero, which is exactly where the accumulators start, so a founding
             // seat has no retroactive claim and needs no initialising write.
-            q.push(Seat({a0: 0, a1: 0, snap0: 0, snap1: 0}));
+            q.push(Seat({a0: 0, a1: 0, snap0: 0, snap1: 0, liquidity: 0}));
             _mintSeat(holder, i);
             // The founding order is the identity permutation: seat i starts at rank i. Every seat
             // starts UNPRICED, which under Harberger means free to take — see `buyPrice`.
@@ -1014,8 +1106,13 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
     // --------------------------------------------------------------------- the premium (Phase 7)
 
-    /// @dev The accumulators' fixed-point scale. See `premGrowth0` for why 64 and not 96 or 128.
-    uint256 private constant PREMIUM_Q = 1 << 64;
+    /// @dev The accumulators' fixed-point scale. See `premGrowth0` for why 128 and not 64 or 96 —
+    ///      X64 in a `uint128` made the premium INERT on an 18/6 pool, which is the pair we ship.
+    ///      `internal` rather than `private` so the mandatory negative controls in `Premium.t.sol`
+    ///      can READ it instead of hardcoding a copy. One of them carried `1 << 64` as a literal and
+    ///      had to be found by the compiler when this changed; a control that has drifted from
+    ///      production in a second place dies of the difference it was not testing (PITFALLS 5.105).
+    uint256 internal constant PREMIUM_Q = 1 << 128;
 
     /// @notice What this swap hands to the seats it jumped.
     ///
@@ -1050,41 +1147,75 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     /// @dev `virtual` for ONE reason, the same one `_allocate` and `_u128` carry: the mandatory
     ///      negative controls in `Premium.t.sol` subclass this and change exactly one line each.
     ///      Nothing in production overrides it.
-    function _accruePremium(bool inIsZero, uint256 pot) internal virtual {
+    function _accruePremium(bool inIsZero, uint256 pot, uint256 excludedL) internal virtual {
         if (inIsZero) {
             uint256 total = pot + premiumHeld0;
             if (total == 0) return;
-            uint256 w = standing1;
-            // **HOLD UNLESS THERE IS MORE INVENTORY STANDING THAN PREMIUM TO PAY.** At `w == 0` the
-            // swap emptied the book of token1 and there is nobody to pay at all; between there and
-            // `w == total` the premium per unit standing would exceed one, which says the same
-            // thing less starkly — the book is effectively empty and this pot has no one to
-            // compensate. Held, exactly as `_distributeRent` holds a pot with no eligible
-            // recipient, and folded into the next accrual that does have one. The wei has left the
-            // allocation, so it is accounted either way.
+            uint256 w = standingL - excludedL;
+            premiumOwed0 += pot;
+
+            // **THE WHOLE POT, EVERY TIME THERE IS ANYBODY TO PAY. THERE IS NO ARITHMETIC
+            // CONDITION HERE ANY MORE, AND ITS ABSENCE IS THE FIX.**
             //
-            // It is also the whole of the overflow argument for a 128-bit accumulator: the
-            // increment below is `mulDiv(total, 2^64, w)` with `total <= w`, hence at most `2^64`.
-            if (w < total) {
+            // This guard has been wrong twice, in two different ways, and both had the same root:
+            // an arithmetic bound was wearing an economic hat.
+            //
+            //   1. `if (w < total) { hold everything }` — bounded `mulDiv(pot, 2^64, w)` so a
+            //      `uint128` could not wrap. Held pots ADD into the next `total`, so every hold made
+            //      the next release strictly harder: monotone in the wrong direction. And on the
+            //      18/6 pool we actually ship, `w` is a 6-decimal quantity and `total` an
+            //      18-decimal one, so it failed on essentially every swap — `0 wei` of token0
+            //      premium reached the roster over eight swaps, against 0% stranded on the 18/18
+            //      control (`test/queue/PremiumDecimals.t.sol`).
+            //   2. `give = min(total, w)` — released incrementally, which cured the ratchet and NOT
+            //      the decimals: on the same pool it paid out `w = 2.0e9` of a `2.55e15` pot per
+            //      accrual, i.e. 0.00008%. Permanently inert became asymptotically inert.
+            //
+            // With a 256-bit X128 accumulator there is nothing left to bound, so the question
+            // reduces to the only one that was ever economic: **is there anybody standing to pay?**
+            //
+            // `inc == 0` is kept as a floor rather than an overflow guard. At X128 it needs
+            // `w > total * 2^128`, which a book of `uint128`-bounded balances cannot reach; it
+            // survives because the alternative to holding an unpayable wei is DESTROYING it —
+            // `premiumOwed0` would go on counting money no seat could ever claim (PITFALLS 5.124).
+            //
+            // **`mulDiv` CANNOT REVERT HERE.** `total` is a claim on tokens the position is already
+            // holding, and v4 bounds those to `uint128`, so `total < 2^128`; `w >= 1` on this
+            // branch. Hence `inc = total * 2^128 / w <= total * 2^128 < 2^256`, strictly.
+            uint256 inc = w == 0 ? 0 : FullMath.mulDiv(total, PREMIUM_Q, w);
+            if (inc == 0) {
                 premiumHeld0 = total;
-                premiumOwed0 += pot;
                 return;
             }
             premiumHeld0 = 0;
-            premiumOwed0 += pot;
-            premGrowth0 += uint128(FullMath.mulDiv(total, PREMIUM_Q, w));
+            // **WRAPPING IS DELIBERATE, AND HERE IS WHY IT IS SAFE — the half of Uniswap's pattern
+            // that gets copied without being checked.** Only DIFFERENCES of this accumulator are
+            // ever read (`_claims` computes `premGrowth0 - s.snap0`, also unchecked). Modular
+            // arithmetic makes that difference the true growth **provided no seat's mark is more
+            // than one full `2^256` cycle stale**, and a seat is re-marked by `_syncSeat` on every
+            // one of the six sites that touch its balance. A checked `+=` would revert instead of
+            // wrapping, and a revert here is inside `_afterSwap` — it would brick the pool rather
+            // than lose a rounding wei. Wrapping is the strictly safer failure.
+            unchecked {
+                premGrowth0 += inc;
+            }
         } else {
+            // THE MIRROR. Kept line-for-line identical to the branch above, in the same order, so a
+            // reader can diff them by eye — that is the only defence a duplicated rule has, and this
+            // project has been wrong in exactly one of two copies five times (PITFALLS 5.125).
             uint256 total = pot + premiumHeld1;
             if (total == 0) return;
-            uint256 w = standing0;
-            if (w < total) {
+            uint256 w = standingL - excludedL;
+            premiumOwed1 += pot;
+            uint256 inc = w == 0 ? 0 : FullMath.mulDiv(total, PREMIUM_Q, w);
+            if (inc == 0) {
                 premiumHeld1 = total;
-                premiumOwed1 += pot;
                 return;
             }
             premiumHeld1 = 0;
-            premiumOwed1 += pot;
-            premGrowth1 += uint128(FullMath.mulDiv(total, PREMIUM_Q, w));
+            unchecked {
+                premGrowth1 += inc;
+            }
         }
     }
 
@@ -1157,15 +1288,40 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      compounds one settlement into the other and breaks the conservation the pot is divided
     ///      under. Both weights are read before either credit is formed.
     function _claims(Seat storage s) internal view returns (uint256 owed0, uint256 owed1) {
-        uint256 w0 = s.a0;
-        uint256 w1 = s.a1;
-        if (w1 != 0) {
-            uint256 d = premGrowth0 - s.snap0;
-            if (d != 0) owed0 = FullMath.mulDiv(w1, d, PREMIUM_Q);
-        }
-        if (w0 != 0) {
-            uint256 d = premGrowth1 - s.snap1;
-            if (d != 0) owed1 = FullMath.mulDiv(w0, d, PREMIUM_Q);
+        // **ONE WEIGHT, BOTH DIRECTIONS.** It used to be `a1` for the token0 claim and `a0` for
+        // the token1 claim — the seat's inventory in the token it was standing with. That is what
+        // made the accumulators' scale depend on the pair's decimals, and it is what let a seat
+        // drained to one wei collect an entire pot. Contributed liquidity is the same unit in both
+        // directions and does not move when inventory converts.
+        //
+        // The old two-weight form needed a paragraph explaining that both had to be READ before
+        // either credit was formed, because a settlement credits the token opposite its weight and
+        // would otherwise compound one into the other. That hazard is gone: `liquidity` is not
+        // touched by a settlement at all.
+        uint256 wl = s.liquidity;
+        if (wl == 0) return (0, 0);
+        // **THE SUBTRACTIONS ARE `unchecked` AND THE WRAP IS THE POINT, NOT AN OVERSIGHT.**
+        //
+        // `premGrowth0/1` are 256-bit accumulators that only ever increase, and `_accruePremium`
+        // adds to them `unchecked` so that reaching `2^256` wraps instead of reverting inside
+        // `_afterSwap`. Modular arithmetic then makes `premGrowth - snap` the TRUE growth over the
+        // interval, because `(a + d) - a == d` in `uint256` for any `d < 2^256` — the wrap cancels.
+        //
+        // **The condition this rests on, stated rather than assumed:** it is exact provided no
+        // seat's mark is more than one full `2^256` cycle stale. `_syncSeat` re-marks a seat at
+        // every one of the six sites that write its balance, and a seat that is never touched is
+        // one nobody is filling, depositing to, or withdrawing from. Cumulative growth of `2^256`
+        // between two touches of the same seat is not reachable by any flow this pool can carry —
+        // it is the same assumption Uniswap's `feeGrowthGlobal0X128` makes, and it is the half of
+        // that pattern people copy without checking, so it is written down here.
+        //
+        // A CHECKED subtraction would be the unsafe choice: on a wrap it reverts, and `_claims` is
+        // reached from `_allocate`, so that revert is a bricked pool rather than a lost wei.
+        unchecked {
+            uint256 d0 = premGrowth0 - s.snap0;
+            if (d0 != 0) owed0 = FullMath.mulDiv(wl, d0, PREMIUM_Q);
+            uint256 d1 = premGrowth1 - s.snap1;
+            if (d1 != 0) owed1 = FullMath.mulDiv(wl, d1, PREMIUM_Q);
         }
     }
 
@@ -1252,6 +1408,15 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // `start`: this fill just credited token Y to seats from `start` upward, so if cursorY now
         // leads it would skip a funded seat on the next Y-outgoing swap. That is the line people
         // forget, and it loses money rather than gas.
+        //
+        // **IT REWINDS TO `start`, NOT TO RANK 0, AND THE DISTINCTION IS REAL BUT DOES NOT BITE.**
+        // The seats BELOW `start` were already empty of the outgoing token when this fill began
+        // (that is what `start == cursorX` means), and this fill credited them nothing, so pulling
+        // back further would only cost the next swap a walk over seats it would skip anyway.
+        // Measured by the economics workstream: `startshare` at rank 1 is 90.8-99.5%, i.e. a fill
+        // begins at the head almost always, so `start` IS 0 in the overwhelming majority of swaps
+        // and the two rules coincide. Recorded because reading the line invites the question, not
+        // because there is anything to change.
         // **THE TOTALS ARE THE FILL'S OWN TOTALS, NOT A RUNNING SUM, AND THAT IS A PROOF RATHER
         // THAN AN OPTIMISATION.** Past the underflow check directly above, the walk sourced exactly
         // `amtOut` of the outgoing token (that is what `st.remaining == 0` means) and handed out
@@ -1276,7 +1441,77 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // outgoing token once this fill is done, so the seats it just drained carry no weight and
         // collect none of it. `outIsOne` means token1 left and token0 arrived, so the pot is
         // token0 — `inIsZero == outIsOne`.
-        _accruePremium(outIsOne, amtIn - st.amtIn);
+        // **THE PREMIUM IS SETTLED IN ONE CALL AND NOT INLINE, FOR A STACK REASON THAT IS WORTH
+        // WRITING DOWN.** `_allocate` compiles without `via_ir` only just — the file has said so
+        // since Phase 7 — and the payer set needed two more locals (the excluded weight and a
+        // bitmap of ranks). It did not fit: the first attempt was `Stack too deep`. Passing the
+        // range instead and letting the callee re-derive both keeps this function at exactly the
+        // locals it had before the premium was excluded from its own payers.
+        _settlePremium(ord, start, next, outIsOne, amtIn - st.amtIn);
+    }
+
+    /// @notice Accrue the fill's premium to everyone EXCEPT the seats that fill just paid.
+    ///
+    /// @dev **"THE PAYER DOES NOT PAY ITSELF" — RESTORED ON A WEIGHT THAT SURVIVES CONVERSION.**
+    ///
+    ///      The premium is skimmed off `amtIn` BEFORE it is split, so the seats that pay it are
+    ///      exactly the seats the fill credited. Under the old inventory weighting they were
+    ///      excluded for free, because a drained seat's weight was its now-zero inventory. A weight
+    ///      that survives conversion cannot do that by itself — that is the price of fixing the
+    ///      decimals — so the exclusion is made explicit here. It is done in TWO places at once and
+    ///      they must agree: the payers' weight is removed from the denominator, AND their marks
+    ///      are moved past the accrual. Doing only the second would leave their share accrued to
+    ///      nobody and stranded in `premiumOwed` — PITFALLS 5.124 in a new costume.
+    ///
+    ///      **O(k), NOT O(n).** `k` is the seats the fill reached, which is ONE for the head-only
+    ///      swap that dominates. Every slot written here was already written earlier in the same
+    ///      call by `_syncSeat`, so it is a dirty-slot `SSTORE` at 100 gas rather than 2,900, and
+    ///      only the accumulator that actually moved is re-marked.
+    ///
+    ///      **WHY THE RANGE IS `[start, next]` INCLUSIVE, AND WHAT THAT COSTS.** Against the
+    ///      pro-rata benchmark, displacement is `D_i = S·w_i/W − t_i`. A fully-drained seat has
+    ///      `D_i = w_i(S/W − 1) ≤ 0` — it sold MORE than pro-rata, so it is a beneficiary of the
+    ///      ordering and is owed nothing. A partially-filled seat CAN have `D_k > 0` (`w = (1,100)`,
+    ///      `S = 1.5` gives `D_2 = +0.985`), so excluding it forfeits a real claim. It is excluded
+    ///      anyway, because including it is what let the last-wei holder take an ENTIRE pot: as
+    ///      `S → W` every other seat is drained, so the boundary seat is the only one left
+    ///      unexcluded and its share is 100%. Measured before this line existed: `standing1` fell
+    ///      to 1 wei on seat 7 and it claimed the whole 2.667e17 pot having paid an eighth of it
+    ///      (`test_7_14`). Held pots fold forward, so an excluded claim is DEFERRED to the next
+    ///      accrual with an unexcluded seat, never destroyed. A bounded deferral beats a live
+    ///      extraction.
+    ///
+    ///      `next` is a cursor, so it equals the last paid rank when that seat was partially filled
+    ///      and one PAST it when the seat was exactly exhausted. In the second case this excludes
+    ///      one seat the fill did not reach. That is conservative in the safe direction — the seat
+    ///      is deferred, never overpaid — and it is the price of not carrying a second local into a
+    ///      function that is already at the stack limit.
+    ///
+    ///      There is exactly one other site that credits a seat from a swap: the degenerate fill in
+    ///      `_afterSwap`. It needs no equivalent because it withholds no premium and never reaches
+    ///      `_accruePremium`. Checked in the source, not assumed — that is the shape which has been
+    ///      wrong here five times.
+    function _settlePremium(uint256 ord, uint256 start, uint256 next, bool outIsOne, uint256 pot) internal {
+        uint256 n = q.length;
+        uint256 last = next < n ? next : n - 1;
+
+        uint256 lTouched;
+        for (uint256 i = start; i <= last; i++) {
+            lTouched += q[_idAt(ord, i)].liquidity;
+        }
+
+        _accruePremium(outIsOne, pot, lTouched);
+
+        // AFTER the accrual, so the mark lands on the growth this fill produced.
+        uint256 g = outIsOne ? premGrowth0 : premGrowth1;
+        for (uint256 i = start; i <= last; i++) {
+            Seat storage seat_ = q[_idAt(ord, i)];
+            if (outIsOne) {
+                seat_.snap0 = g;
+            } else {
+                seat_.snap1 = g;
+            }
+        }
     }
 
     // ============================================================== DEPOSIT / WITHDRAW (Phase 2)
@@ -1322,6 +1557,11 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         int256 d0;
         int256 d1;
         uint128 dl = _liquidityForAmounts(amount0, amount1);
+        // **WRITER 1 OF EXACTLY TWO.** `liquidityContributed` is paired with the liquidity actually
+        // MINTED, never with the tokens supplied — a single-token in-range deposit mints ZERO
+        // (`_liquidityForAmounts` takes the min of the two legs and `_liq0(..., 0) == 0`), so it
+        // contributes no depth, attracts no flow, and must therefore earn no premium. Weighting by
+        // what was supplied instead of by what was minted is exactly the free ride this closes.
         if (dl != 0) {
             (d0, d1) = _modifyPosition(int256(uint256(dl)));
             liquidity += dl;
@@ -1356,11 +1596,17 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // deposit-side version of the attack `_settleAhead` closes for rent: without it a depositor
         // would weigh a flash-loaned balance against premium that accrued over a period they were
         // not standing for. Settling first cashes the seat's claim at the weight it actually held.
+        // Since Phase 8 the weight is `liquidity`, so this must run BEFORE `dl` is added or the
+        // seat is paid for depth it had not yet provided.
         (uint256 has0, uint256 has1) = _syncSeat(s);
         s.a0 = _u128(has0 + amount0);
         s.a1 = _u128(has1 + amount1);
         standing0 += amount0;
         standing1 += amount1;
+        if (dl != 0) {
+            s.liquidity += dl;
+            standingL += dl;
+        }
 
         // TOPPING UP A SEAT BELOW A CURSOR WOULD MAKE THAT CURSOR LEAD. Opening a seat at the tail
         // cannot, but `addToSeat` on an exhausted seat re-funds it in place, and a cursor that has
@@ -1402,17 +1648,79 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         if (w0 > has0) revert OverEntitlement(w0, has0);
         if (w1 > has1) revert OverEntitlement(w1, has1);
 
-        (p0, p1) = _payOut(w0, w1);
+        uint128 burned;
+        (p0, p1, burned) = _payOut(w0, w1);
+        bool tookDepthOut = _chargeBurn(s, burned);
 
         s.a0 = _u128(has0 - p0);
         s.a1 = _u128(has1 - p1);
         standing0 -= p0;
         standing1 -= p1;
 
-        // Cursors are deliberately NOT touched. A withdrawal only ever REDUCES a seat, so it cannot
-        // make a cursor lead; leaving them costs a little gas and can never lose money.
+        // Cursors are deliberately NOT touched HERE. A withdrawal only ever REDUCES a seat, so it
+        // cannot make a cursor lead; leaving them costs a little gas and can never lose money. The
+        // demotion below does its own cursor adjustment, which is exact — see `_demoteToTail`.
         // Withdrawing to zero does NOT destroy the seat: an empty seat is pure rank with no capital,
         // and being able to hold, price and sell one is what gives rank a price of its own.
+
+        // **A WITHDRAWAL COSTS THE HOLDER THEIR PLACE IN THE QUEUE.**
+        //
+        // Without this line the product's central claim is not enforced by anything. QUEUE sells
+        // SUBORDINATION: the front seat is filled first, so it absorbs adverse selection first, and
+        // the seats behind it are protected by the inventory standing in front of them. An instant,
+        // rank-preserving withdrawal lets the holder who is PAID to bear that risk delete it at a
+        // moment of their choosing and keep the rank anyway —
+        //
+        //     withdraw(head) -> adverse swap -> addToSeat(head)
+        //
+        // — in ONE transaction, hands the fill to the seats behind, and returns to the front. It
+        // was measured, not imagined: on an eight-seat book a 5.8% adverse move cost the head 267
+        // bps of its seat value if it stood still and ZERO if it evacuated, while the seats behind
+        // it gave up 10.7% more inventory. `test/queue/Evacuation.t.sol` is the whole experiment,
+        // two live pools differing only in the evacuation.
+        //
+        // **HARBERGER DOES NOT PRICE THIS, AND BELIEVING IT DID WAS THE ACTUAL DEFECT.**
+        // PITFALLS 5.9 recorded rank-then-run as CLOSED by Phase 4 on the strength of `test_4_7` —
+        // which warps THIRTY DAYS in every arm. Rent is a time integral (`Rent.owed(price, elapsed,
+        // ...)`, and `_settleSeat` returns on `elapsed == 0`), so the bill for an abandonment is
+        // proportional to how long you are away, and this one is away for no time at all. Priced at
+        // 100e18, the same window costs 8.219e17 wei over thirty days and EXACTLY ZERO atomically
+        // (`test_8_5`). The lease could not see the attack because the attack has no duration.
+        //
+        // Rank is the thing the mechanism can take back, so rank is what it charges.
+        //
+        // **A WITHDRAWAL THAT PAID NOTHING CHANGES NOTHING.** The guard is on what was actually
+        // PAID, never on what was asked. Two reasons, and neither is a threshold: `_payOut` clamps
+        // to the float under dust policy F1, so a holder whose request is clamped to zero would
+        // otherwise pay the full penalty for receiving nothing; and `withdraw(id, 0, 0)` would
+        // become a way to demote yourself by accident. It opens no door — a withdrawal that moves
+        // no capital dodges no fill.
+        //
+        // **WHAT COSTS A RANK IS TAKING DEPTH OUT, NOT TAKING MONEY OUT.**
+        //
+        // The first version of this line demoted on any withdrawal that PAID something. That closes
+        // the attack, and it also punishes the holder the mechanism is supposed to be paying: the
+        // front seat is where the flow is, so realising accrued premium means calling `withdraw`,
+        // and a blanket rule would cost them the seat for collecting the coupon they are owed.
+        //
+        // `liquidityContributed` gives the principled line with no constant in it. A withdrawal
+        // that burns into the seat's own contributed liquidity is the holder LEAVING — that is the
+        // evacuation, and it is the only thing the attack can be built from, because dodging a fill
+        // REQUIRES the capital to be out of the pool. A withdrawal the float covers, or one that
+        // burns only liquidity backing earnings the seat never contributed, moves no depth and
+        // costs no rank.
+        //
+        // The old guard survives inside `_chargeBurn`: `burned == 0` returns false, so a withdrawal
+        // that moved nothing — including one the dust policy clamped to zero — still changes
+        // nothing.
+        //
+        // **ORDERING.** Last, after every ledger write and before the external `_send`. Nothing
+        // above it reads a rank, so the position is free; putting it before the transfer keeps the
+        // state final ahead of the only external call. `_demoteToTail` adjusts both cursors itself
+        // and the adjustment is exact in both directions — a seat below a cursor holds zero of that
+        // token by INVARIANT C, so the seats that shift down past it were zero too, and a seat at
+        // or above the cursor moves nothing the cursor describes.
+        if (tookDepthOut) _demoteToTail(seatId);
 
         _send(msg.sender, p0, p1);
     }
@@ -1426,7 +1734,15 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         if (w0 > h0) revert OverEntitlement(w0, h0);
         if (w1 > h1) revert OverEntitlement(w1, h1);
 
-        (p0, p1) = _payOut(w0, w1);
+        // A pending claim belongs to an ADDRESS, not a seat, so the burn has no seat to charge and
+        // falls to `liquidityUnattributed` by construction.
+        uint128 burned;
+        (p0, p1, burned) = _payOut(w0, w1);
+        if (burned != 0) {
+            uint256 fromPot = burned > liquidityUnattributed ? liquidityUnattributed : burned;
+            liquidityUnattributed -= fromPot;
+            if (burned != fromPot) liquidityShortfall += burned - fromPot;
+        }
 
         // Decrement, never `= h0 - p0`. A cached read written back whole is a stale-write, and the
         // only thing standing between it and a reentrant double-claim would be the guard alone.
@@ -1444,7 +1760,11 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///
     ///      Returns what will actually be paid, which is `min(requested, available)` — the caller
     ///      must debit the ledger by the RETURNED amount, never by the requested one.
-    function _payOut(uint256 w0, uint256 w1) internal returns (uint256, uint256) {
+    /// @dev Returns the liquidity it BURNED alongside what it paid, because `liquidityContributed`
+    ///      has to be paired with the liquidity actually destroyed and this is the only place that
+    ///      knows it. `claimPending` discards it — a pending claim belongs to an ADDRESS, not to a
+    ///      seat, so there is no seat to debit and the burn falls to `liquidityUnattributed`.
+    function _payOut(uint256 w0, uint256 w1) internal returns (uint256, uint256, uint128 burned) {
         uint256 d0 = w0 > float0 ? w0 - float0 : 0;
         uint256 d1 = w1 > float1 ? w1 - float1 : 0;
         if (d0 != 0 || d1 != 0) {
@@ -1453,6 +1773,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
                 (uint256 g0, uint256 g1) = _burnPosition(dl); // decrements `liquidity` (PITFALLS 5.23)
                 float0 += g0;
                 float1 += g1;
+                burned = dl;
             }
         }
 
@@ -1465,7 +1786,35 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
         float0 -= w0;
         float1 -= w1;
-        return (w0, w1);
+        return (w0, w1, burned);
+    }
+
+    /// @notice **WRITER 2 OF EXACTLY TWO.** Charge burned liquidity against a seat's contribution.
+    ///
+    /// @dev Capped at what the seat actually contributed, and the cap is the whole of DECISION 2's
+    ///      rule: what is burned BEYOND a seat's own contribution is liquidity that was backing
+    ///      accrued EARNINGS rather than principal, so it belongs to the shared pool and is charged
+    ///      to `liquidityUnattributed`. That is also floored, because the position can be short of
+    ///      both — a seat withdrawing earnings after its contribution is exhausted burns liquidity
+    ///      that neither pot recorded. `_checkLiquidityIdentity` measures that residual rather than
+    ///      assuming it away.
+    ///
+    /// @return reduced whether the SEAT's own contribution fell. That, not "was anything paid", is
+    ///         what costs a holder their place in the queue.
+    function _chargeBurn(Seat storage s, uint128 burned) internal returns (bool reduced) {
+        if (burned == 0) return false;
+        uint128 fromSeat = burned > s.liquidity ? s.liquidity : burned;
+        if (fromSeat != 0) {
+            s.liquidity -= fromSeat;
+            standingL -= fromSeat;
+            reduced = true;
+        }
+        uint256 rest = burned - fromSeat;
+        if (rest != 0) {
+            uint256 fromPot = rest > liquidityUnattributed ? liquidityUnattributed : rest;
+            liquidityUnattributed -= fromPot;
+            if (rest != fromPot) liquidityShortfall += rest - fromPot;
+        }
     }
 
     function _send(address to, uint256 a0, uint256 a1) internal {
@@ -1569,7 +1918,24 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // This is the common case and the one the buyout leans on.
         if (a0 == 0 && a1 == 0 && esc == 0) return;
 
-        (uint256 p0, uint256 p1) = _payOut(a0, a1);
+        (uint256 p0, uint256 p1, uint128 burnedOnExit) = _payOut(a0, a1);
+        // The seat leaves EMPTY, so its whole recorded contribution leaves with it — the buyer
+        // receives rank, never depth. Charging only `burnedOnExit` would leave the departing
+        // holder's `liquidityContributed` on a seat that now holds nothing, and the new holder
+        // would collect premium weighted by depth somebody else provided and took away.
+        {
+            uint128 had = s.liquidity;
+            if (had != 0) {
+                s.liquidity = 0;
+                standingL -= had;
+            }
+            uint256 rest = burnedOnExit > had ? burnedOnExit - had : 0;
+            if (rest != 0) {
+                uint256 fromPot = rest > liquidityUnattributed ? liquidityUnattributed : rest;
+                liquidityUnattributed -= fromPot;
+                if (rest != fromPot) liquidityShortfall += rest - fromPot;
+            }
+        }
 
         // The seat leaves EMPTY whatever happened above. Anything the position could not release on
         // the spot — residual-scale, by the §E.4 bound — is retained as a claim on the DEPARTING
@@ -1623,6 +1989,10 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
         (int256 d0, int256 d1) = _modifyPosition(int256(uint256(added)));
         liquidity += added;
+        // **THIS DEPTH IS CREDITED TO NOBODY — see `liquidityUnattributed` for the reason.** It is
+        // recorded rather than ignored so INVARIANT L stays an EXACT identity instead of an
+        // inequality with a hand-waved residual.
+        liquidityUnattributed += added;
         // Same signed measurement as `_fundSeat`: a sweep can be net CREDITED when the position's
         // realised fees exceed the principal it takes in, and the credit belongs to the float.
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -2236,6 +2606,17 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         Seat storage s = q[i];
         (uint256 owed0, uint256 owed1) = _claims(s);
         return (uint256(s.a0) + owed0, uint256(s.a1) + owed1);
+    }
+
+    /// @notice The depth this seat contributed and has not withdrawn — the premium's weight.
+    function seatLiquidity(uint256 i) external view returns (uint128) {
+        return q[i].liquidity;
+    }
+
+    /// @notice `Σ seatLiquidity`, and the liquidity in the position no seat contributed.
+    /// @dev `contributed + unattributed == positionLiquidity()` is INVARIANT L.
+    function liquidityTotals() external view returns (uint256 contributed, uint256 unattributed, uint256 shortfall) {
+        return (standingL, liquidityUnattributed, liquidityShortfall);
     }
 
     function totals() external view returns (uint256 t0, uint256 t1) {

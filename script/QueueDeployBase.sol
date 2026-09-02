@@ -67,22 +67,44 @@ abstract contract QueueDeployBase is CommonBase {
     uint256 internal constant FIRM_WINDOW = 1 hours;
 
     /// @dev φ — the share of the LP fee a filled seat hands to the seats still standing behind it.
-    ///      8,500 bps = 85%.
+    ///      7,900 bps = 79%.
     ///
-    ///      **THIS IS THE NUMBER THAT DECIDES WHETHER THE BACK OF THE BOOK IS WORTH FUNDING**, and
-    ///      it is not a round figure somebody liked. Measured per rank over 30 price paths, at
-    ///      φ = 0 between 24 and 29 of 32 seats lose money in every regime tested, because rank 0
-    ///      takes four orders of magnitude more turnover than the tail and keeps the whole fee on
-    ///      it. Swept across four INDEPENDENT seed ranges on a ±30% band over a 25%-vol pair,
-    ///      φ ≈ 0.85 is the only setting that put 0 of 32 seats negative on ALL FOUR, with a spread
-    ///      of 10–15 points.
+    ///      **SOLVED FROM A STATED PARTICIPATION CONSTRAINT, NOT SWEPT FOR A GREEN NUMBER, AND
+    ///      MEASURED ON THE ROSTER THIS SCRIPT ACTUALLY DEPLOYS.** The previous value of 8,500 was
+    ///      chosen against "0 of 32 seats negative" — a SIGN TEST, which AGENTS.md §3b names as the
+    ///      thing that is not a correctness assertion — on a 32-equal book whose head is $31,250.
+    ///      This deploys FIVE seats funded 5:4:3:2:1, so the head is $333,333, and the answer is
+    ///      different. Both bounds below are measured on THAT configuration.
     ///
-    ///      The honest limits, because the earlier version of this project shipped a headline that
-    ///      held on one seed range and nowhere else: on a 45%-vol pair the same φ leaves 0–4 seats
-    ///      negative depending on the draw, and the best φ per configuration ranges 0.55–0.90. φ is
-    ///      a per-deployment parameter for that reason, and `docs/research/seat-economics/` carries
-    ///      the sweep rather than a single recommended constant.
-    uint256 internal constant PREMIUM_BPS = 8_500;
+    ///      Two constraints, and they are asymmetric because the two sides have different
+    ///      alternatives:
+    ///
+    ///        * **The seats behind have no option**, so their bar is hard: beat passive LPing or do
+    ///          not fund. In the benign regime seat 2 falls to exactly the pro-rata LP's return at
+    ///          φ = 7,455 and below it the funding pool has no reason to exist.  =>  φ >= 7455
+    ///        * **The front buys something no LP can sell it** — costless two-sided re-anchoring —
+    ///          so it can rationally accept a below-LP return, and its bar is the cheapest way to
+    ///          replicate that: a keeper-managed narrow ATM range, which costs 80-123%/yr in
+    ///          conversion fee and price impact at the widths that actually compete. The front stops
+    ///          beating that alternative at φ = 8,312.  =>  φ <= 8312
+    ///
+    ///      Intersection [7455, 8312], midpoint **7,900**. It also sits inside the 45%-vol window
+    ///      [4114, 8921], so a more volatile pair widens the window downward and 7,900 stays valid.
+    ///      A pair calmer than 25% vol raises the lower bound and is the untested edge.
+    ///
+    ///      **THE SENSITIVITY THAT DECIDES THE PRODUCT, stated here because it is not a detail.**
+    ///      Hold the front to the PASSIVE-LP bar instead of the managed-wing bar and it falls below
+    ///      at φ = 6,397 — below the 7,455 the back needs — so **both windows are empty and no
+    ///      shipping constant exists.** The window is non-empty only because re-anchoring is worth
+    ///      something to the front. What it COSTS to replicate is measured; what a buyer will PAY
+    ///      for it is not, and no simulator can say.
+    ///
+    ///      TOXIC is excluded by calendar weight rather than by deletion: a toxic band dies in ~1.4
+    ///      days against ~61 benign, so it is ~1.7% of the calendar even at equal likelihood.
+    ///
+    ///      Reproduce: `python3 docs/research/seat-economics/report_shipping.py`. The sweep is
+    ///      checked in — which, before 2026-09-02, this comment claimed while it was not.
+    uint256 internal constant PREMIUM_BPS = 7_900;
 
     /// @dev The canonical deterministic CREATE2 proxy. Verified to have code on Unichain Sepolia.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;

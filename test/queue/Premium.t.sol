@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {QueueFixture} from "./QueueFixture.sol";
-import {stdError} from "forge-std/StdError.sol";
 
 interface IERC20Like {
     function approve(address, uint256) external returns (bool);
@@ -365,52 +364,301 @@ contract PremiumTest is QueueFixture {
         assertEq(got1, afterSettle1 + top1, "the seat was credited token1 for an interval it was not standing for");
         assertGt(got0, afterSettle0, "the deposit did not land: this test proves nothing");
     }
-}
 
-/// @dev N7 — the two claims COMPOUND. `_claims` weights the token1 claim by an `a0` that already
-///      includes the token0 claim just credited, instead of by the balance the seat actually stood
-///      with while the premium was earned. It pays out more than was accrued.
-contract CompoundingPremiumHook is QueueHarness {
-    constructor(
-        IPoolManager pm,
-        Currency c0_,
-        Currency c1_,
-        uint24 f,
-        int24 sp,
-        int24 bhw,
-        address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // 7.10-7.12 — THE HOLD BRANCH. A pot that is withheld must reach somebody, eventually.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
 
-    function _syncSeat(Seat storage s) internal override returns (uint256 a0, uint256 a1) {
-        a0 = s.a0;
-        a1 = s.a1;
-        uint128 g0 = premGrowth0;
-        if (s.snap0 != g0) {
-            uint256 owed = a1 == 0 ? 0 : FullMath.mulDiv(a1, g0 - s.snap0, 1 << 64);
-            s.snap0 = g0;
-            if (owed != 0) {
-                a0 += owed;
-                s.a0 = _u128(a0);
-                standing0 += owed;
-                premiumOwed0 -= owed;
+    /// @dev **THE INVARIANT ALL THREE OF THESE ASSERT.** Every wei `_accruePremium` takes out of a
+    ///      fill is added to `premiumOwed`. It is only ever made PAYABLE through `premGrowth`, and
+    ///      only ever RETAINED through `premiumHeld`. So a pot that moves neither is STRANDED: it is
+    ///      conserved — INVARIANT F counts it on the ledger side — and it is claimable by nobody,
+    ///      ever. "Conserved" and "payable" are two different claims, and this is the second one.
+    function _assertPotWentSomewhere(bool inIsZero, uint256 g0, uint256 g1, uint256 h0, uint256 h1, string memory tag)
+        internal
+        view
+    {
+        (,, uint256 nh0, uint256 nh1) = hook.premiums();
+        (uint256 ng0, uint256 ng1) = hook.growths();
+        bool moved = inIsZero ? (ng0 > g0 || nh0 > h0) : (ng1 > g1 || nh1 > h1);
+        assertTrue(moved, string.concat(tag, ": neither made claimable nor held - the pot is STRANDED"));
+    }
+
+    /// @notice A pot too small to move the accumulator was DESTROYED rather than kept.
+    ///
+    /// @dev `premGrowth += mulDiv(total, 2^64, w)` floors. On a book with `w` standing, any pot
+    ///      below `w / 2^64` increments the accumulator by ZERO — and the pre-fix code set
+    ///      `premiumHeld = 0` on the very same branch, so the wei left the allocation, entered
+    ///      `premiumOwed`, and became unreachable. Here `w` is ~1e21, so the threshold is around
+    ///      54,000 wei of pot, which an ordinary small swap is comfortably underneath. It needs no
+    ///      attacker: every tiny swap silently burnt its own priority premium.
+    function test_7_10_theSmallestPossiblePotReachesTheAccumulator() public {
+        _use(onHook, onKey);
+        (uint256 g0, uint256 g1) = hook.growths();
+        (uint256 owedBefore,, uint256 h0, uint256 h1) = hook.premiums();
+
+        // token0 in: the pot is token0 and the weight is token1 standing.
+        _swap(true, _smallestPottedInput());
+
+        (uint256 owedAfter,, uint256 h0After,) = hook.premiums();
+        uint256 pot = owedAfter - owedBefore;
+        (, uint256 w) = hook.standings();
+        _assertSmallestPotRegisters(pot, w, "token0");
+        h0After;
+        _assertPotWentSomewhere(true, g0, g1, h0, h1, "tiny token0 pot");
+    }
+
+    /// @dev The MIRROR. It exists because the same rule living in two branches has been wrong in
+    ///      exactly one of them four times on this project (PITFALLS 5.37, 5.50, 5.52 twice), and
+    ///      nothing about `test_7_10` passing says anything at all about this branch.
+    function test_7_11_theSmallestPossiblePotReachesTheAccumulator_token1Branch() public {
+        _use(onHook, onKey);
+        (uint256 g0, uint256 g1) = hook.growths();
+        (, uint256 owedBefore, uint256 h0, uint256 h1) = hook.premiums();
+
+        // token1 in: the pot is token1 and the weight is token0 standing.
+        _swap(false, _smallestPottedInput());
+
+        (, uint256 owedAfter,,) = hook.premiums();
+        uint256 pot = owedAfter - owedBefore;
+        (uint256 w,) = hook.standings();
+        _assertSmallestPotRegisters(pot, w, "token1");
+        _assertPotWentSomewhere(false, g0, g1, h0, h1, "tiny token1 pot");
+    }
+
+    /// @dev The SMALLEST input that still withholds a whole wei of premium, derived from the
+    ///      contract's own parameters rather than picked. `_premiumOn` is
+    ///      `mulDiv(amtIn, fee * phi, 1e6 * 10_000)`, so this is its inverse at a pot of one, rounded
+    ///      up. A hardcoded size here would be a second unproven number, and it would silently stop
+    ///      exercising the branch the day the fixture's book or phi changed.
+    function _smallestPottedInput() internal pure returns (uint256) {
+        uint256 d = uint256(FEE) * PHI;
+        return (1e6 * 10_000 + d - 1) / d;
+    }
+
+    /// @dev **WHAT THESE TWO TESTS ASSERT CHANGED IN PHASE 8, AND THE OLD VERSION IS RECORDED HERE
+    ///      RATHER THAN QUIETLY REPLACED.** They were written against an X64 accumulator, where the
+    ///      SMALLEST POSSIBLE POT — one wei — moved `premGrowth` by `mulDiv(1, 2^64, 2.5e19) == 0`
+    ///      and the wei was then destroyed outright. They asserted the precondition (`the pot really
+    ///      does round away here`) and then that it was HELD rather than lost.
+    ///
+    ///      At X128 that precondition is FALSE and cannot be made true through the public API: it
+    ///      needs `w > total * 2^128`, and a book of `uint128`-bounded balances cannot reach it. So
+    ///      the tests now assert the thing the widening actually bought, which is strictly stronger:
+    ///      **a one-wei pot REACHES THE ACCUMULATOR** instead of being stranded or held. Against the
+    ///      old X64 code the same assertion is red.
+    ///
+    ///      The `inc == 0` branch survives in production as a floor, not as a live path. It is not
+    ///      dead code with nothing depending on it (PITFALLS 5.49): `w == 0` still reaches it on any
+    ///      swap that empties the book, and `test_N8` is the control proving that dropping instead
+    ///      of holding there breaks conservation.
+    function _assertSmallestPotRegisters(uint256 pot, uint256 w, string memory tag) internal {
+        assertGt(pot, 0, string.concat(tag, ": no premium was withheld: this test proves nothing"));
+        assertGt(w, 0, string.concat(tag, ": nothing is standing: this test proves nothing"));
+        emit log_named_uint(string.concat(tag, " pot, wei"), pot);
+        emit log_named_uint(string.concat(tag, " weight standing"), w);
+        assertEq(pot, 1, string.concat(tag, ": this is not the smallest possible pot"));
+        assertGt(
+            FullMath.mulDiv(pot, hook.premiumQ(), w),
+            0,
+            string.concat(tag, ": a one-wei pot cannot register at this scale - the widening failed")
+        );
+    }
+
+    /// @notice **A POT WITH NOBODY TO PAY IS HELD, AND THE WHOLE OF IT IS PAID BY THE NEXT ACCRUAL
+    ///         THAT HAS A RECIPIENT.** Both directions, separately.
+    ///
+    /// @dev **WHAT THESE TWO TESTS USED TO ASSERT, AND WHY IT CHANGED.** They were written against
+    ///      the release rule `give = min(total, w)`, which handed out as much as the book could
+    ///      absorb and retained the rest — so they asserted the closed form
+    ///      `heldAfter == heldBefore + pot − give`. That rule is gone. It existed to bound
+    ///      `mulDiv(total, Q, w)` for a `uint128` accumulator, and bounding a pot in the INCOMING
+    ///      token by a weight in the OUTGOING one is the units error that made the premium inert on
+    ///      the shipped 18/6 pool (PITFALLS 5.126). With a 256-bit X128 accumulator weighted by
+    ///      contributed liquidity there is nothing left to bound: the pot is paid in FULL whenever
+    ///      anybody is standing to receive it, and held in full when nobody is.
+    ///
+    ///      So the property worth asserting is the one that makes holding safe: a held pot is
+    ///      DEFERRED, never destroyed, and it is paid out whole. The "nothing was held: this test
+    ///      proves nothing" guard is kept in both — it is what caught the state becoming
+    ///      unreachable when the release rule changed underneath these tests.
+    function test_7_12_aHeldPotIsPaidInFullByTheNextAccrualWithARecipient() public {
+        _use(onHook, onKey);
+        // Sizes are taken BEFORE the sweep: `expT0`/`expT1` are the fixture's running conservation
+        // totals, and the sweep drives one of them to dust — `expT1 / 4` after it is zero, which
+        // reverts the router rather than testing anything.
+        uint256 base0 = expT0;
+        uint256 base1 = expT1;
+        // Sweep the whole book: every seat is a payer, so every seat is excluded, so there is
+        // nobody left to receive and the pot must be held rather than paid or dropped.
+        _swap(true, base0 * 4);
+        (uint256 owedAfterDrain,, uint256 held0,) = hook.premiums();
+        assertGt(held0, 0, "nothing was held: this test proves nothing");
+        (uint256 g0Held,) = hook.growths();
+        emit log_named_uint("token0 held with nobody standing", held0);
+
+        // The sweep drove the price to the band's edge, so the book has to be walked back before
+        // another token0 pot can exist at all. This one-for-zero swap accrues in the OTHER
+        // direction and restores token1 inventory; it leaves `premiumHeld0` untouched.
+        _swap(false, base1 / 4);
+        (,, uint256 stillHeld,) = hook.premiums();
+        assertEq(stillHeld, held0, "the opposite-direction swap moved the token0 hold: wrong branch");
+
+        (uint256 g0Before,) = hook.growths();
+        assertEq(g0Before, g0Held, "the restoring swap moved the token0 accumulator: this test proves nothing");
+        _swap(true, base0 / 200);
+
+        (uint256 owedAfter,, uint256 heldAfter,) = hook.premiums();
+        (uint256 g0After,) = hook.growths();
+        emit log_named_uint("token0 held afterwards          ", heldAfter);
+        emit log_named_uint("accumulator advanced by         ", g0After - g0Before);
+
+        assertGt(g0After, g0Before, "the held pot was not paid to the seats standing");
+        assertEq(heldAfter, 0, "the held pot was not paid IN FULL");
+        assertGt(owedAfter, owedAfterDrain, "no premium was withheld by the second swap");
+    }
+
+    /// @dev The MIRROR. It exists because the same rule living in two branches has been wrong in
+    ///      exactly one of them five times on this project (PITFALLS 5.37, 5.50, 5.52 twice, 5.125)
+    ///      — and the fifth of those was caught on THIS pair of tests, when restoring the ratchet in
+    ///      the token1 branch survived the whole suite because only the token0 test existed.
+    function test_7_13_aHeldPotIsPaidInFullByTheNextAccrualWithARecipient_token1Branch() public {
+        _use(onHook, onKey);
+        uint256 base0 = expT0;
+        uint256 base1 = expT1;
+        _swap(false, base1 * 4);
+        (, uint256 owedAfterDrain,, uint256 held1) = hook.premiums();
+        assertGt(held1, 0, "nothing was held: this test proves nothing");
+        emit log_named_uint("token1 held with nobody standing", held1);
+
+        _swap(true, base0 / 4);
+        (,,, uint256 stillHeld) = hook.premiums();
+        assertEq(stillHeld, held1, "the opposite-direction swap moved the token1 hold: wrong branch");
+
+        (, uint256 g1Before) = hook.growths();
+        _swap(false, base1 / 200);
+
+        (, uint256 owedAfter,, uint256 heldAfter) = hook.premiums();
+        (, uint256 g1After) = hook.growths();
+        emit log_named_uint("token1 held afterwards          ", heldAfter);
+        emit log_named_uint("accumulator advanced by         ", g1After - g1Before);
+
+        assertGt(g1After, g1Before, "the held pot was not paid to the seats standing");
+        assertEq(heldAfter, 0, "the held pot was not paid IN FULL");
+        assertGt(owedAfter, owedAfterDrain, "no premium was withheld by the second swap");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+    // 7.14 — THE LAST-WEI CONCENTRATION. Written before the fix, red against the tree as it stood.
+    // ══════════════════════════════════════════════════════════════════════════════════════════
+
+    /// @notice **A SEAT THAT CONTRIBUTED AN EIGHTH OF THE DEPTH TOOK THE WHOLE POT, BECAUSE IT
+    ///         HAPPENED TO HOLD THE LAST WEI OF STANDING INVENTORY.**
+    ///
+    /// @dev Front-first drains the tail LAST, so after a book-emptying swap the tail seat is
+    ///      systematically the only one left holding any of the outgoing token. The weight was that
+    ///      inventory, so `premGrowth += mulDiv(pot, Q, 1)` and the tail's claim was
+    ///      `mulDiv(1, d, Q) == the entire pot`. Measured on this fixture before the fix:
+    ///      `standing1` fell to **1 wei** held by seat 7, and the whole **2.667e17** token0 pot
+    ///      accrued to it — having paid only its own eighth of it. That is a strategy, not a
+    ///      knife-edge, and it is a free lane in the AGENTS §5 sense.
+    ///
+    ///      **THE ASSERTION IS ON THE SHARE, NOT ON A MAGNITUDE**, so no tolerance can satisfy it:
+    ///      a bound on wei would be met by any change that shrank the pot. The threshold is `pot/4`
+    ///      — twice the equal-roster fair share of `1/8` — chosen so it cannot be passed by a small
+    ///      improvement, only by the concentration actually being gone. Pre-fix the share is 100%.
+    function test_7_14_theLastWeiHolderCannotTakeTheWholePot() public {
+        _use(onHook, onKey);
+
+        // A swap large enough to sweep the book. What is left standing is dust.
+        _swap(true, expT0 * 4);
+        (, uint256 st1) = hook.standings();
+        assertGt(st1, 0, "the book emptied exactly: the concentration path was not entered");
+        assertLt(st1, 1e6, "the book did not actually get swept: this test proves nothing");
+
+        // Which seat is holding the residue, and what did the fill withhold?
+        uint256 dustId = type(uint256).max;
+        for (uint256 i; i < 8; i++) {
+            (, uint256 a1) = hook.seat(i);
+            if (a1 != 0) {
+                assertEq(dustId, type(uint256).max, "more than one seat is standing: not the dust case");
+                dustId = i;
             }
         }
-        uint128 g1 = premGrowth1;
-        if (s.snap1 != g1) {
-            // THE MUTATION: `a0` here has already absorbed the credit above.
-            uint256 owed = a0 == 0 ? 0 : FullMath.mulDiv(a0, g1 - s.snap1, 1 << 64);
-            s.snap1 = g1;
-            if (owed != 0) {
-                a1 += owed;
-                s.a1 = _u128(a1);
-                standing1 += owed;
-                premiumOwed1 -= owed;
-            }
+        assertTrue(dustId != type(uint256).max, "no seat is standing: this test proves nothing");
+
+        (uint256 owedBefore,,,) = hook.premiums();
+        assertGt(owedBefore, 0, "no premium was withheld: this test proves nothing");
+
+        // Settling the seat is what turns its accumulator claim into credited tokens, and the fall
+        // in `premiumOwed0` is exactly what it took. Withdrawing zero pays nothing, so it settles
+        // without moving capital and without costing the holder a rank.
+        vm.prank(hook.ownerOf(dustId));
+        hook.withdraw(dustId, 0, 0);
+        (uint256 owedAfter,,,) = hook.premiums();
+        uint256 claim = owedBefore - owedAfter;
+
+        emit log_named_uint("seat holding the last wei    ", dustId);
+        emit log_named_uint("token1 it was standing with  ", st1);
+        emit log_named_uint("token0 pot withheld          ", owedBefore);
+        emit log_named_uint("token0 it claimed            ", claim);
+        emit log_named_uint("its share of the pot, %      ", (claim * 100) / owedBefore);
+
+        assertLe(claim * 4, owedBefore, "THE DUST SEAT TOOK THE POT: last-wei concentration is live");
+    }
+
+    /// @notice **THE DEGENERATE FILL WITHHOLDS NO PREMIUM, SO IT NEEDS NO PAYER EXCLUSION — AND
+    ///         THAT IS ASSERTED BY ENTERING THE BRANCH, NOT BY READING THE SOURCE.**
+    ///
+    /// @dev `_settlePremium` excludes the seats a fill PAID from the pot they generated. There is
+    ///      exactly one other site that credits a seat out of a swap: the `amtOut == 0` path in
+    ///      `_afterSwap`, where the pool took input and paid nothing out. If that path withheld a
+    ///      premium, the seat it credits would be a payer and would need the same exclusion — one
+    ///      rule, two sites, which has been wrong on this project five times (PITFALLS 5.37, 5.50,
+    ///      5.52 twice, 5.73).
+    ///
+    ///      It does not: the branch returns before `_allocate`, so `_premiumOn` is never applied and
+    ///      `_accruePremium` is never reached. The seat is credited the WHOLE input, which is the
+    ///      consistent answer — no seat gave anything up, so nobody was jumped and nobody is owed
+    ///      compensation. A comment saying so would be worth nothing; this drives the branch.
+    function test_7_15_theDegenerateFillWithholdsNoPremium() public {
+        _use(onHook, onKey);
+        // Push `cursor0` forward with ordinary one-for-zero flow, so the degenerate credit lands
+        // somewhere the assertions can see it. Same setup `Adversarial.t.sol::test_6_1` uses.
+        for (uint256 i; i < 3; i++) {
+            _swap(false, expT1 / 8);
         }
+
+        (uint256 owed0Before, uint256 owed1Before, uint256 held0Before, uint256 held1Before) = hook.premiums();
+        (uint256 g0Before, uint256 g1Before) = hook.growths();
+        (uint256 t0Before,) = hook.totals();
+
+        // A one-wei swap. The output rounds to zero on a 0.30% pool, which IS the degenerate fill.
+        _swap(true, 1);
+
+        (uint256 t0After,) = hook.totals();
+        assertGt(t0After, t0Before, "nothing happened: the degenerate fill credited no seat, this test proves nothing");
+
+        (uint256 owed0After, uint256 owed1After, uint256 held0After, uint256 held1After) = hook.premiums();
+        (uint256 g0After, uint256 g1After) = hook.growths();
+
+        // Nothing was withheld, nothing was held, and neither accumulator moved — so there is no
+        // pot, hence no payer, hence nothing for an exclusion rule to do.
+        // **`premiumOwed` CAN FALL HERE AND THAT IS NOT A POT.** The degenerate path settles the
+        // seat it credits — it is one of the six sites that write a seat balance — and a settlement
+        // moves wei OUT of `premiumOwed` into the seat. Only WITHHOLDING puts wei in. So the
+        // assertion is one-sided, and the first draft of this test had it as an equality and failed
+        // on a settlement of 3.1e15 that was the mechanism working correctly.
+        assertLe(owed0After, owed0Before, "the degenerate fill withheld a token0 premium");
+        assertLe(owed1After, owed1Before, "the degenerate fill withheld a token1 premium");
+        assertEq(held0After, held0Before, "the degenerate fill held a token0 pot");
+        assertEq(held1After, held1Before, "the degenerate fill held a token1 pot");
+        assertEq(g0After, g0Before, "the degenerate fill moved premGrowth0");
+        assertEq(g1After, g1Before, "the degenerate fill moved premGrowth1");
+
+        // Neither accumulator moved and nothing was held, so no pot was formed at all — which is
+        // what makes an exclusion rule unnecessary on this path rather than merely absent from it.
+        assertGe(t0After - t0Before, 1, "the degenerate fill did not credit the input");
     }
 }
 
@@ -431,23 +679,38 @@ contract DroppingPremiumHook is QueueHarness {
         uint256 pb
     ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
 
-    function _accruePremium(bool inIsZero, uint256 pot) internal override {
+    function _accruePremium(bool inIsZero, uint256 pot, uint256 excludedL) internal override {
         if (inIsZero) {
+            // **KEPT LINE-FOR-LINE IDENTICAL TO PRODUCTION EXCEPT FOR THE ONE MARKED LINE.** This
+            // mutant used to carry the pre-Phase-8 guard `if (w < total) return;`, which was TWO
+            // divergences once production stopped bounding the release — the control would then
+            // have died of the difference it was not testing (PITFALLS 5.105). It also hardcoded
+            // `1 << 64`; it reads `PREMIUM_Q` now, so a change of scale cannot silently strand it.
             uint256 total = pot + premiumHeld0;
             if (total == 0) return;
-            uint256 w = standing1;
-            if (w < total) return; // THE MUTATION: dropped, not held.
-            premiumHeld0 = 0;
+            uint256 w = standingL - excludedL;
+            uint256 inc = w == 0 ? 0 : FullMath.mulDiv(total, PREMIUM_Q, w);
+            // THE MUTATION: dropped, not held — and it returns BEFORE `premiumOwed0 += pot`,
+            // because that is what DROPPING means. Returning after it would leave the wei counted
+            // on the ledger side of INVARIANT F and the control would be invisible, which is
+            // exactly how this control failed when the production branch order changed under it.
+            if (inc == 0) return;
             premiumOwed0 += pot;
-            premGrowth0 += uint128(FullMath.mulDiv(total, 1 << 64, w));
+            premiumHeld0 = 0;
+            unchecked {
+                premGrowth0 += inc;
+            }
         } else {
             uint256 total = pot + premiumHeld1;
             if (total == 0) return;
-            uint256 w = standing0;
-            if (w < total) return; // THE MUTATION.
-            premiumHeld1 = 0;
+            uint256 w = standingL - excludedL;
+            uint256 inc = w == 0 ? 0 : FullMath.mulDiv(total, PREMIUM_Q, w);
+            if (inc == 0) return; // THE MUTATION.
             premiumOwed1 += pot;
-            premGrowth1 += uint128(FullMath.mulDiv(total, 1 << 64, w));
+            premiumHeld1 = 0;
+            unchecked {
+                premGrowth1 += inc;
+            }
         }
     }
 }
@@ -487,68 +750,47 @@ contract PremiumControlsTest is QueueFixture {
         assertEq(t0 + q0, expT0, "the unmutated hook did not conserve: the harness is wrong");
     }
 
-    /// @dev **THE FIRST VERSION OF THIS CONTROL DID NOT GO RED, AND THE REASON IS THE FINDING.**
+    /// @notice **THE COMPOUNDING CONTROL IS RETIRED, AND THAT IS A RESULT RATHER THAN A DELETION.**
     ///
-    ///      It expected an underflow and drove the pool with `_drive()`. Nothing reverted, because
-    ///      compounding is only REACHABLE when BOTH accumulators have advanced since the seat's last
-    ///      touch — a `zeroForOne` swap moves `premGrowth0` alone, so the second branch of the
-    ///      mutated `_syncSeat` never even executed. A control that cannot enter the code it
-    ///      mutates proves nothing (PITFALLS 5.54), and this one was one assertion away from being
-    ///      recorded as evidence that the ordering rule in `_claims` was unnecessary.
+    /// @dev It mutated `_syncSeat` to weight the token1 claim by an `a0` that had ALREADY absorbed
+    ///      the token0 credit — compounding one settlement into the other, so the pot was handed out
+    ///      faster than it was accrued and the last seats to settle found it empty. It went red on
+    ///      `stdError.arithmeticError` and it was a good control.
     ///
-    ///      The reachable shape is: accrue in BOTH directions, then settle a seat deep enough to
-    ///      still hold both tokens. The overpayment is second-order — `owed0 * Δg1 / 2^64` — so the
-    ///      detector is CONSERVATION, not a revert: the ledger ends up claiming more token1 than the
-    ///      position holds.
-    function test_N7_compoundingClaimsPayOutMoreThanWasAccrued() public {
-        _deployMutant("Premium.t.sol:CompoundingPremiumHook", 0xC400);
-        // The pot is handed out faster than it was accrued, so the last seats to settle drive
-        // `premiumOwed1 -= owed` below zero. Asserted on the EXACT panic — `stdError.arithmeticError`
-        // — and not on a bare `vm.expectRevert()`, which passes for any reason at all and is how two
-        // LAW 2 violations survived six phases here (PITFALLS 5.83, 5.84). The settle runs from the
-        // test directly rather than through a swap, so v4 does not wrap it.
-        vm.expectRevert(stdError.arithmeticError);
-        this.bothDirectionsThenSettle();
+    ///      **Phase 8 made the defect unexpressible.** The premium's weight is no longer the seat's
+    ///      inventory in the opposite token — it is `liquidityContributed`, ONE quantity that both
+    ///      accumulators divide by and that a settlement does not touch. There is no longer a
+    ///      "first" credit that can contaminate a "second" weight, so the mutation is now an
+    ///      EQUIVALENT MUTANT: it produces a contract that behaves identically to production, and a
+    ///      control that cannot fail is worse than no control, because it reads as coverage.
+    ///
+    ///      What replaces it is the structural property the whole hazard rested on, asserted
+    ///      directly. If a future change ever makes a settlement move the weight again, this goes
+    ///      red and the compounding class is live once more.
+    function test_N7_settlingCannotMoveTheWeightItIsPaidOn() public {
+        _deployMutant("QueueHarness.sol:QueueHarness", 0xC400);
+        // Accrue in BOTH directions, which is what the retired control needed to be reachable at
+        // all — a one-directional swap moves only one accumulator (PITFALLS 5.54).
+        _drive();
 
-        _deployMutant("QueueHarness.sol:QueueHarness", 0xC600);
-        uint256 honest = this.bothDirectionsThenSettle();
-        emit log_named_uint("premiumOwed1 left after the whole roster settled, production", honest);
-    }
-
-    function bothDirectionsThenSettle() external returns (uint256) {
-        return _bothDirectionsThenSettle();
-    }
-
-    /// @return over how much MORE token1 the ledger claims than was ever put into it.
-    function _bothDirectionsThenSettle() internal returns (uint256 over) {
-        _swap(true, expT0 / 40); // accrues premGrowth0
-        _swap(false, expT1 / 40); // accrues premGrowth1
-        _swap(true, expT0 / 40);
-        _swap(false, expT1 / 40);
-
-        // A seat deep enough that the fills never reached it still holds BOTH tokens, so it has a
-        // live claim on both accumulators — the only state in which the two can compound.
-        uint256 seatId = 7;
-        (uint256 d0, uint256 d1) = hook.seat(seatId);
-        assertTrue(d0 != 0 && d1 != 0, "the deep seat is single-sided: this control proves nothing");
-
-        vm.prank(hook.ownerOf(seatId));
-        hook.withdraw(seatId, 0, 0);
-
-        // **CONSERVATION CANNOT SEE THIS ONE, AND FINDING THAT OUT IS THE POINT.** An overpaid claim
-        // moves wei OUT of `premiumOwed1` and INTO the seat, so `totals() + premiums()` is unchanged
-        // by construction — the second detector this control tried, and it read 0 for the mutant and
-        // 0 for production alike. What compounding actually steals is the OTHER seats' unsettled
-        // claims: the pot is handed out faster than it was accrued, so the last seats to settle find
-        // it empty. Settling the WHOLE roster is what makes that visible.
+        uint256 moved;
         for (uint256 i; i < 8; i++) {
-            (uint256 h0, uint256 h1) = hook.seat(i);
-            if (h0 == 0 && h1 == 0) continue;
+            uint128 lBefore = hook.seatLiquidity(i);
+            // **THE CREDIT IS MEASURED ON `premiumOwed`, NOT ON `seat()`.** `seat()` reports raw
+            // ledger PLUS accrued claim (PITFALLS 5.117), so it reads identically either side of a
+            // settlement and a detector built on it registers nothing however much moved. The first
+            // draft of this test did exactly that and its own "this test proves nothing" guard
+            // caught it.
+            (uint256 owed0Before, uint256 owed1Before,,) = hook.premiums();
+            // `withdraw(id, 0, 0)` settles the seat without paying anything out, so nothing but the
+            // premium credit can move — and it costs no rank, because nothing was paid.
             vm.prank(hook.ownerOf(i));
             hook.withdraw(i, 0, 0);
+            (uint256 owed0After, uint256 owed1After,,) = hook.premiums();
+            if (owed0After != owed0Before || owed1After != owed1Before) moved++;
+            assertEq(hook.seatLiquidity(i), lBefore, "settling moved the seat's premium weight");
         }
-        (, uint256 owed1,,) = hook.premiums();
-        return owed1;
+        assertGt(moved, 0, "no seat was actually credited: this test proves nothing");
     }
 
     function test_N8_droppingAHeldPotBreaksConservation() public {

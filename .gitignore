@@ -18,3 +18,7 @@ node_modules/
 
 docs/research/grok_chat.md
 docs/research/perp_chat.md
+
+# Python
+__pycache__/
+*.pyc

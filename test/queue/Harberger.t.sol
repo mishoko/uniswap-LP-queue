@@ -662,10 +662,20 @@ contract HarbergerTest is QueueFixture {
         vm.prank(ALICE);
         hook.addToSeat(0, a0, a1); // ...and comes back after it
 
-        assertEq(hook.ownerOf(0), ALICE, "plain rank: the abandonment cost the holder their rank");
-        assertEq(hook.rankOfId(0), 0, "plain rank: the abandonment cost the holder their place");
-        // She is out only the §E.4 rounding residual on the round trip. Holding the FRONT of the
-        // queue across the entire window cost her nothing at all.
+        // **THIS ARM WAS REWRITTEN 2026-09-02, AND WHAT IT USED TO ASSERT WAS THE BUG.**
+        //
+        // It read `assertEq(hook.rankOfId(0), 0, "the abandonment cost the holder their place")` —
+        // i.e. it asserted, as the correct behaviour, that a holder can take their capital out of
+        // the front of the queue, sit out whatever they were afraid of, put it back, and still be
+        // standing at the front. That is `test/queue/Evacuation.t.sol`'s attack, written down as an
+        // expectation. `withdraw` now demotes, so the abandonment costs the RANK.
+        //
+        // **AND THE MONEY STILL COSTS NOTHING, WHICH IS THE POINT OF KEEPING THIS ARM.** The two
+        // assertions below are unchanged and still pass: no rent, no residual beyond §E.4. That is
+        // exactly why rank had to be the charge — see arm 2's note.
+        assertEq(hook.ownerOf(0), ALICE, "the abandonment took the seat, not just the place");
+        assertEq(hook.rankOfId(0), 3, "THE ABANDONMENT KEPT THE RANK: the evacuation attack is open");
+        assertEq(hook.idAtRank(0), 1, "seat 1 was not promoted into the vacated front");
         assertApproxEqAbs(_bal(c0, ALICE), spentBefore, _tol(2), "plain rank: abandonment was not free");
         assertEq(hook.rentDue(0), 0, "plain rank: an unpriced seat somehow owes rent");
 
@@ -679,6 +689,15 @@ contract HarbergerTest is QueueFixture {
         hook.withdraw(0, a0, a1);
         vm.warp(block.timestamp + 30 days);
         hook.settleRent(0);
+
+        // **WHAT THIS ARM DOES AND DOES NOT PROVE — READ THIS BEFORE CITING IT.** The bill below is
+        // proportional to `elapsed`, and `elapsed` here is thirty days because of the warp three
+        // lines up. Rent is a time integral (`Rent.owed`, and `_settleSeat` returns on
+        // `elapsed == 0`), so this arm says NOTHING about an abandonment that lasts no time at all:
+        // the same seat at the same price, evacuated and refilled in ONE transaction, is charged
+        // exactly zero (`test/queue/Evacuation.t.sol::test_8_5`). Harberger prices a holder who is
+        // absent for a while; it cannot see one who is absent for no time. Reading this arm as
+        // closing the whole class is what PITFALLS 5.9 did, and it was wrong — see 5.87.
 
         uint256 rentPaid = escStart - _escrow(0);
         // 100e18 at 10%/yr for 30 days, exactly.
@@ -976,11 +995,19 @@ contract HarbergerTest is QueueFixture {
     ///      Phase 3 exists to make holdable and sellable. Under the spec it cannot be priced at all.
     function test_4_13b_pureRankIsHoldableAtAPrice() public {
         _four();
-        (uint256 a0, uint256 a1) = hook.seat(0);
-        vm.prank(ALICE);
-        hook.withdraw(0, a0, a1);
+        // EMPTY THE SEAT WITHOUT WITHDRAWING. A withdrawal that pays now demotes the seat to the
+        // tail, and this test is about FORECLOSURE — whether a paid-up EMPTY seat keeps its place —
+        // not about what a withdrawal costs. Reaching the empty state through the buyout keeps the
+        // seat at rank 0, which is what makes the assertion below non-vacuous. (Emptying it by
+        // withdrawing would leave it at rank 3 before the settle even ran, and "it kept its rank"
+        // would then be a statement about a seat that had already lost it.)
+        vm.prank(BOB);
+        hook.buySeat(0, 0, 0); // never-priced seat: free, evacuates ALICE, rank untouched
+        vm.prank(BOB);
+        hook.transfer(ALICE, 0, 1); // hand the empty rank back to ALICE
         (uint256 e0, uint256 e1) = hook.seat(0);
         assertTrue(e0 == 0 && e1 == 0, "the seat is not empty: this test proves nothing");
+        assertEq(hook.rankOfId(0), 0, "the setup moved the rank: this test would prove nothing");
 
         _setPrice(ALICE, 0, 100e18);
         _prepay(ALICE, 0, 20e18);
@@ -989,10 +1016,14 @@ contract HarbergerTest is QueueFixture {
         assertEq(hook.rankOfId(0), 0, "production could not hold pure rank at a price");
         assertEq(_price(0), 100e18, "production foreclosed a paid-up empty seat");
 
+        // The variant's rig is a FRESH, unfunded pool, so seat 0 is already empty and at rank 0 —
+        // the withdrawal below moves nothing and therefore costs no rank, which is what leaves the
+        // demotion assertion at the end of this arm meaningful.
         _mutantRig("Harberger.t.sol:RentFromSeatCapitalHook", 0x9116);
-        (a0, a1) = hook.seat(0);
+        (uint256 a0, uint256 a1) = hook.seat(0);
         vm.prank(ALICE);
         hook.withdraw(0, a0, a1);
+        assertEq(hook.rankOfId(0), 0, "the variant's seat did not start at the front");
         _setPrice(ALICE, 0, 100e18);
         _prepay(ALICE, 0, 20e18);
         vm.warp(block.timestamp + 1);

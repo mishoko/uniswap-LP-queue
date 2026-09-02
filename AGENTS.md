@@ -104,10 +104,25 @@ so. If something is unproven, write UNPROVEN next to it. Never describe a plan a
 
 Violating any of these produces a green test that proves nothing. All five were paid for.
 
-1. **NEVER test at a 1:1 price.** Use 1:4 or worse, and unequal decimals (18/6) where you can. A 1:1
+1. **NEVER test at a 1:1 price, and NEVER at equal decimals.** Use 1:4 or worse, and 18/6. A 1:1
    fixture hides **every** token0/token1 unit-mixing bug. A prior project in this repo shipped a
    metric that subtracted token1 units from token0 units; on its 1:1 fixture the error was invisible,
    and on a real pair it pinned at maximum fee forever.
+   **AMENDED 2026-09-02 — THE DECIMALS HALF WAS WRITTEN AS "WHERE YOU CAN" AND THAT COST THE PROJECT
+   AN ENTIRE SHIPPED FEATURE.** `18/18 is to decimals what 1:1 is to price.` `_accruePremium`'s guard
+   `if (w < total)` compares a pot denominated in the **incoming** token against a weight denominated
+   in the **outgoing** token, in raw units — the identical unit-mixing error, one dimension over. On
+   the 18/6 pool `QueueDeployBase` actually ships, **zero wei of token0 premium reached the roster
+   across a whole run — 0 of 4 accruals — while an 18/18 control stranded 0%.** The Phase 7 premium
+   did not exist in one direction on the pool the deploy script builds, and `Premium.t.sol`, the one
+   suite that tests the premium, ran at `dec0 = dec1 = 18`. The natural reading of a green
+   equal-decimals control — "18/18 works, so 18/6 is an edge case" — is exactly **inverted**: the
+   control is green *because it is the fixture this law forbids*.
+   **The rule, hardened: any quantity compared against, divided by, or accumulated against a quantity
+   in the OTHER token must be tested at unequal decimals in BOTH directions.** Asymmetric bugs are
+   asymmetric — here only the direction whose pot was the 18-decimal token and whose weight was the
+   6-decimal token broke; the mirror was clean in both fixtures, before and after. Evidence:
+   `test/queue/PremiumDecimals.t.sol`, `PITFALLS.md` §5.124.
 2. **Every claim needs a negative control that goes RED — and you must assert the revert REASON.**
    A control that fails for an unrelated reason proves nothing. This exact mistake was made here: a
    test asserted only `reason.length > 0` and passed under a mutation, because the mutant reverted
@@ -140,6 +155,37 @@ Violating any of these produces a green test that proves nothing. All five were 
    being measured. Evidence: `test/queue/Gas.t.sol`, `PITFALLS.md` §5.66–5.67.
 5. **A first-run pass is a reason for suspicion.** Before believing any suite, deliberately break the
    code it covers and confirm the suite goes red.
+   **AMENDED 2026-09-02 — THIS LAW SAID "BE SUSPICIOUS" WITHOUT SAYING WHAT TO CHECK, AND FIVE
+   TAUTOLOGICAL CONTROLS SURFACED IN A SINGLE SESSION.** They were: the rotation `+0.0000%` identity;
+   the seat-32 `pnl = a − o` identity (an unreached seat scores 0 for EVERY allocator, including a
+   maximally corrupt one); a `total P&L under rule A − under rule B ≈ 0` check (availability is
+   order-invariant, so no ordering rule can ever fail it); a per-fill zero-sum check reading
+   `|Σe| / Σ|e|` — **float dust over float dust, passing on noise**; and a rank-separation statistic
+   that would have been one had it used the standard error instead of the outcome standard deviation
+   (120 paths separate any two means). Three of the five were caught by the person who wrote them.
+   **They share one shape: the denominator or the baseline is derived from the same quantity as the
+   numerator.**
+   **THE TEST, and it is cheap enough that there is no excuse for skipping it: ask what would have to
+   be true for this control to read FAIL. If the answer is "nothing I could plausibly do wrong", it
+   is not a control — it is arithmetic wearing a control's costume.** That single question caught
+   three of the five.
+   **Corollary — the strongest control is one that could falsify your own headline.** The execution-
+   price instrument stands on exactly that: under average pricing every seat in a fill gets the same
+   price *by construction*, so the measured edge must collapse while turnover survives. It read
+   `<1e-6 bps against 8–47 bps` with turnover unchanged. Without it, "the head eats the stalest end
+   of every move" would have remained a claim. Evidence: `docs/research/seat-economics/results-exec.txt`.
+   **Second corollary — an instrument that agrees with the artifact it models is NOT thereby
+   validated.** When instrument and artifact share a defect, agreement is a negative control that
+   cannot fire. The simulator faithfully mirrored `_accruePremium`, and both were wrong together.
+   **Third corollary, and the one that actually protects you: A TAUTOLOGY IS MOST LIKELY TO BE
+   INTRODUCED BY A FIX.** Four of the five were added while tightening something — the per-fill
+   zero-sum check was written *specifically* to be the failable control replacing an unfailable
+   aggregate one, and it shipped with a denominator made of the same float dust as its numerator, by
+   somebody who was actively hunting for this exact failure mode at the time. **Vigilance is not the
+   defence and awareness of the shape is not the defence.** What caught it was running the instrument
+   against a configuration whose answer was known IN ADVANCE: under average pricing every seat in a
+   fill gets the same price by construction, so the measured edge MUST collapse while turnover
+   survives. **Build the case with a known answer; do not merely look harder at the metric.**
 
 ---
 

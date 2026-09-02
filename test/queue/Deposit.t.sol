@@ -401,10 +401,16 @@ contract DepositTest is QueueFixture {
                 uint256 id = i % 3;
                 address owner_ = id == 0 ? ALICE : (id == 1 ? BOB : CARL);
                 (uint256 x0, uint256 x1) = hook.seat(id);
+                uint128 lBefore = hook.seatLiquidity(id);
                 vm.prank(owner_);
                 (bool ok,) =
                     address(hook).call(abi.encodeCall(hook.withdraw, (id, x0 / (size % 7 + 1), x1 / (size % 5 + 1))));
-                ok;
+                // A withdrawal that takes DEPTH out demotes the seat to the tail, so the witness's
+                // own order has to follow — otherwise `_checkOrder` fails on every such withdrawal
+                // and tells us nothing about cursors, which is what this fuzz is for. Taking PROFIT
+                // out does not demote, which is why the trigger is the seat's contributed liquidity
+                // and not "was anything paid".
+                if (ok && hook.seatLiquidity(id) != lBefore) _refDemote(id);
             }
             _checkInvariantC("fuzz");
         }

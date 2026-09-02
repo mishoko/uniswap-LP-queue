@@ -75,14 +75,31 @@ contract QueueHarness is QueueHook {
             q[i].a1 = _u128(a1);
         }
 
-        // **THE SEVENTH WRITER.** Phase 7's premium accumulators are denominated by `standing0` /
-        // `standing1`, and every site in `src/` that moves a seat balance moves those with it. This
+        // **THE SEVENTH WRITER, AND IT HAS NOW BEEN CAUGHT OUT TWICE.** Every site in `src/` that
+        // moves a seat balance also moves the aggregates the premium is denominated by. This
         // function is the one balance writer that lives OUTSIDE `src/`, so it has to obey the same
         // rule or the first swap underflows `standing -= amtOut` against a book it never counted.
         // `acc0`/`acc1` are exactly `s0`/`s1` by the loop's own remainder line, and `seed` runs once
-        // on an empty roster, so this is an assignment rather than an increment.
+        // on an empty roster, so these are assignments rather than increments.
         standing0 = s0;
         standing1 = s1;
+
+        // **PHASE 8: THE DENOMINATOR IS `liquidity`, SO THE HARNESS MUST APPORTION IT TOO.** Without
+        // this every seeded seat has `liquidityContributed == 0`, `standingL == 0`, and therefore
+        // `w == 0` on every accrual — the premium is held for ever and every suite built on `seed()`
+        // silently tests a pool where the feature is switched off. It presented as
+        // `test_7_3` failing with "the premium did not move", which is the right failure for the
+        // wrong-looking reason: the mechanism was fine and the FIXTURE had not been told.
+        //
+        // `seed` mints `liq` in one `_mintPosition` call, so the roster's share of it is split by
+        // the same bps the balances were, with the same remainder line closing it to the wei.
+        uint128 accL;
+        for (uint256 i; i < bps.length; i++) {
+            uint128 li = i == bps.length - 1 ? liq - accL : uint128(FullMath.mulDiv(liq, bps[i], 10_000));
+            accL += li;
+            q[i].liquidity = li;
+        }
+        standingL = liq;
     }
 
     /// @dev The storage slot of `q`, read from the contract rather than assumed. An earlier version
@@ -113,6 +130,25 @@ contract QueueHarness is QueueHook {
     ///      reimplement it.
     function liquidityToCover(uint256 need0, uint256 need1) external view returns (uint128) {
         return _liquidityToCover(need0, need1);
+    }
+
+    /// @dev The accumulators' fixed-point scale, READ FROM PRODUCTION rather than copied into the
+    ///      suite. A test that hardcodes `1 << 64` keeps passing when production moves to `1 << 128`
+    ///      and silently stops describing the contract — which is how `Premium.t.sol`'s compounding
+    ///      control came to differ from production in two places at once (PITFALLS 5.105).
+    function premiumQ() external pure returns (uint256) {
+        return PREMIUM_Q;
+    }
+
+    /// @dev The premium ACCUMULATORS, which `premiums()` deliberately does not report — it reports
+    ///      what is owed and what is held, i.e. the money. These two are the per-unit-of-standing
+    ///      growth marks, and they are the only way to tell the difference between a pot that has
+    ///      been made claimable and one that has merely been counted. A pot that lands in
+    ///      `premiumOwed` while neither `premGrowth` nor `premiumHeld` moves is STRANDED: conserved
+    ///      by INVARIANT F on the ledger side, and claimable by nobody, ever. Reading them is the
+    ///      only way a test can say that out loud.
+    function growths() external view returns (uint256 g0, uint256 g1) {
+        return (premGrowth0, premGrowth1);
     }
 
     /// @dev The Phase 1 solvency oracle. LAW 3 as amended: a raw PoolManager-balance conservation

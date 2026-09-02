@@ -62,7 +62,7 @@ contract MintingDepositHook is QueueHarness {
 
     function deposit(uint256 amount0, uint256 amount1) external returns (uint256 seatId) {
         seatId = q.length;
-        q.push(Seat({a0: 0, a1: 0, snap0: 0, snap1: 0}));
+        q.push(Seat({a0: 0, a1: 0, snap0: 0, snap1: 0, liquidity: 0}));
         // The new seat joins the order at the TAIL. Phase 4 made rank an explicit permutation, so a
         // variant that grows the roster has to say where the new rank goes — this control is about
         // rank being MINTABLE, not about the order word being maintainable, so it maintains it.
@@ -551,13 +551,20 @@ contract RankTest is QueueFixture {
     ///      attached is the whole object the project exists to create.
     function test_3_7_emptySeatIsTransferableAndKeepsRank() public {
         _three();
-        (uint256 a0, uint256 a1) = hook.seat(0);
-        vm.prank(ALICE);
-        hook.withdraw(0, a0, a1);
+        // EMPTY THE SEAT WITHOUT WITHDRAWING. A withdrawal that pays now costs the seat its place
+        // in the queue, so reaching "empty" that way would move the rank before the transfer under
+        // test ever ran — and this test is about what a TRANSFER does to a rank, not about what a
+        // withdrawal does. `buySeat` on a never-priced seat evacuates it and leaves the rank alone,
+        // which is exactly the state the test wants and is reached through production.
+        vm.prank(BOB);
+        hook.buySeat(0, 0, 0);
+        vm.prank(BOB);
+        hook.transfer(ALICE, 0, 1); // hand the now-empty head back, so ALICE holds pure rank
         _evacuateRef(0);
 
         (uint256 z0, uint256 z1) = hook.seat(0);
         assertLe(z0 + z1, _bound(0), "the seat was not emptied");
+        assertEq(hook.rankOfId(0), 0, "the setup moved the rank: this test would prove nothing");
 
         uint256 payBefore = _bal(c0, ALICE) + _bal(c1, ALICE);
         vm.prank(ALICE);
@@ -566,6 +573,7 @@ contract RankTest is QueueFixture {
         assertEq(hook.ownerOf(0), DAVE, "empty seat did not transfer");
         assertEq(_bal(c0, ALICE) + _bal(c1, ALICE), payBefore, "an empty transfer moved tokens");
         assertEq(hook.seatCount(), 3, "the roster changed size on a transfer");
+        assertEq(hook.rankOfId(0), 0, "THE TRANSFER MOVED THE RANK");
 
         // Rank is preserved: DAVE now holds the HEAD, and funding it puts him in front of everyone.
         _addTo(DAVE, 0, 40e18, 10e18);

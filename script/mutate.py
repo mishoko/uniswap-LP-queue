@@ -37,8 +37,15 @@ MUTS = [
      "        order = low | shifted | (seatId << (8 * r));"),
     ("M4", HOOK, "the demoted seat keeps the rank it was demoted FROM",
      "        newRank = n - 1;", "        newRank = r;"),
+    # M5 REPAIRED 2026-09-02. The pattern was the bare line `Seat storage seat_ = q[_idAt(ord, i)];`,
+    # which was unique until Phase 8's `_settlePremium` introduced a character-identical line. Two
+    # matches is a BAD-PATTERN, not a mutation, and the campaign said so. It now carries the loop
+    # header above it, which belongs to `_allocate` alone.
     ("M5", HOOK, "the allocator indexes by SEAT ID instead of by rank",
-     "            Seat storage seat_ = q[_idAt(ord, i)];", "            Seat storage seat_ = q[i];"),
+     "        for (uint256 i = start; i < n && st.remaining > 0; i++) {\n"
+     "            Seat storage seat_ = q[_idAt(ord, i)];",
+     "        for (uint256 i = start; i < n && st.remaining > 0; i++) {\n"
+     "            Seat storage seat_ = q[i];"),
     ("M6", HOOK, "the degenerate fill indexes by rank instead of resolving the seat",
      "                uint256 idx = _idAt(order, rank);", "                uint256 idx = rank;"),
     ("M7", HOOK, "the cursor0 pull-back on funding compares against the SEAT ID",
@@ -213,12 +220,22 @@ MUTS = [
     # Five lines the invariant campaign was what caught. Each is written here so the fix is proven
     # load-bearing the same way every other line in this contract is, and §D.8 V3 names the
     # invariant that goes red for each (`--campaign`).
+    # M62/M63 REPAIRED 2026-09-02. The credit used to read the slot directly
+    # (`_u128(uint256(sd.a0) + amtIn)`); it now reads the settled balance `_syncSeat` returns, and a
+    # `standing0 += amtIn` line sits between the credit and the cursor pull-back. Same defect, same
+    # line deleted — only the surrounding text moved.
     ("M62", HOOK, "the degenerate fill credits token0 without pulling cursor0 back (PITFALLS 5.73)",
-     "                    sd.a0 = _u128(uint256(sd.a0) + amtIn);\n                    if (rank < cursor0) cursor0 = rank;",
-     "                    sd.a0 = _u128(uint256(sd.a0) + amtIn);"),
+     "                    sd.a0 = _u128(has0 + amtIn);\n"
+     "                    standing0 += amtIn;\n"
+     "                    if (rank < cursor0) cursor0 = rank;",
+     "                    sd.a0 = _u128(has0 + amtIn);\n"
+     "                    standing0 += amtIn;"),
     ("M63", HOOK, "the degenerate fill credits token1 without pulling cursor1 back (PITFALLS 5.73)",
-     "                    sd.a1 = _u128(uint256(sd.a1) + amtIn);\n                    if (rank < cursor1) cursor1 = rank;",
-     "                    sd.a1 = _u128(uint256(sd.a1) + amtIn);"),
+     "                    sd.a1 = _u128(has1 + amtIn);\n"
+     "                    standing1 += amtIn;\n"
+     "                    if (rank < cursor1) cursor1 = rank;",
+     "                    sd.a1 = _u128(has1 + amtIn);\n"
+     "                    standing1 += amtIn;"),
     ("M64", HOOK, "the position measurement is unsigned again: an ADD net-credited by fees underflows (5.74)",
      "        return nowBal >= before ? int256(nowBal - before) : -int256(before - nowBal);",
      "        return int256(before - nowBal);"),
@@ -293,10 +310,23 @@ MUTS = [
                   "position holds",
      "        Allocation.State memory st = Allocation.init(amtIn - _premiumOn(amtIn), amtOut);",
      "        Allocation.State memory st = Allocation.init(amtIn, amtOut);"),
-    ("M82", HOOK, "the premium is accrued BEFORE the fill instead of after, so the seat the swap is "
-                  "about to drain still carries weight and is handed back the pot it just generated",
-     "        _accruePremium(outIsOne, amtIn - st.amtIn);",
-     "        _accruePremium(outIsOne, 0);"),
+    # M82 REPAIRED 2026-09-02, AND THE REPAIR IS NOT COSMETIC — the defect is the same and the way
+    # to express it changed completely.
+    #
+    # It used to be "accrue BEFORE the fill". That worked because the weight WAS the seat's
+    # inventory: accruing early meant a seat still held the token the swap was about to take, so it
+    # carried weight and was handed back the pot it had just generated. Phase 8 made the weight
+    # `liquidityContributed`, which a fill does not move at all — so accrual ORDER no longer decides
+    # anything and the old mutation would have tested nothing even if its pattern had matched.
+    #
+    # What now stops a payer being paid out of its own pot is the EXCLUSION: `_settlePremium`
+    # subtracts the paid seats' liquidity from the denominator and moves their marks past the
+    # accrual. Accruing with an empty exclusion set is therefore the identical defect against the
+    # current source, and it is what this mutation now does.
+    ("M82", HOOK, "the seats a fill PAID are not excluded from the pot they generated, so the head is "
+                  "handed back a share of its own payment",
+     "        _settlePremium(ord, start, next, outIsOne, amtIn - st.amtIn);",
+     "        _accruePremium(outIsOne, amtIn - st.amtIn, 0);"),
     ("M83", HOOK, "a seat's mark is only advanced when its claim was non-zero, so a claim that "
                   "floored away leaves the interval claimable AGAIN later against a bigger balance",
      "        s.snap0 = premGrowth0;\n        s.snap1 = premGrowth1;",
@@ -310,14 +340,33 @@ MUTS = [
      "            uint256 bal = _syncBal(seat_, outIsOne);\n            if (bal == 0) continue;",
      "            uint256 bal = outIsOne ? seat_.a1 : seat_.a0;\n            if (bal == 0) continue;\n"
      "            _syncBal(seat_, outIsOne);"),
-    ("M86", HOOK, "the token1 claim is weighted by the balance AFTER the token0 claim landed, so the "
-                  "two settlements compound and pay out more than was ever accrued",
-     "        uint256 w0 = s.a0;\n        uint256 w1 = s.a1;",
-     "        uint256 w1 = s.a1;\n        uint256 w0 = uint256(s.a0)\n            + (w1 == 0 ? 0 : FullMath.mulDiv(w1, premGrowth0 - s.snap0, PREMIUM_Q));"),
+    # M86 RETIRED 2026-09-02 — NOT SUPERSEDED, because the DEFECT IT POLICED CANNOT BE WRITTEN ANY
+    # MORE. It compounded the two claims: weight the token1 claim by an `a0` that had already
+    # absorbed the token0 credit, so the pot is handed out faster than it was accrued and the last
+    # seats to settle find it empty. That required `_claims` to read TWO weights — `a1` for one
+    # direction and `a0` for the other — which is exactly what made the premium's scale depend on
+    # the pair's decimals (PITFALLS 5.126).
+    #
+    # Phase 8 weights BOTH directions by `s.liquidity`, one quantity that a settlement does not
+    # touch. There is no longer a "first" credit that can contaminate a "second" weight, so any
+    # attempt to write this mutation produces a contract identical to production — an EQUIVALENT
+    # MUTANT, which reads as coverage while proving nothing. `Premium.t.sol`'s matching negative
+    # control (`CompoundingPremiumHook`) was retired for the same reason on the same day, and
+    # `test_N7_settlingCannotMoveTheWeightItIsPaidOn` replaced it: it asserts the structural
+    # property this whole hazard rested on, so if a settlement ever moves the weight again, the
+    # compounding class is live once more and that test goes red.
+    #
+    # Recorded rather than deleted, per M59's precedent: a retired case with a reason is evidence,
+    # a deleted one is a gap.
+    # M87 REPAIRED 2026-09-02. The hold branch was `if (w < total) { premiumHeld0 = total;
+    # premiumOwed0 += pot; return; }`; it is now `if (inc == 0) { premiumHeld0 = total; return; }`
+    # with `premiumOwed0 += pot` hoisted above it, because the release condition stopped being a
+    # comparison between a pot and a weight in two different tokens. Same defect, same line deleted:
+    # the wei is counted in `premiumOwed0` and held by nothing, so no seat can ever claim it.
     ("M87", HOOK, "a pot with nobody standing is DROPPED rather than held, so the wei leaves the "
                   "allocation and is never credited to anybody",
-     "                premiumHeld0 = total;\n                premiumOwed0 += pot;\n                return;",
-     "                premiumOwed0 += pot;\n                return;"),
+     "            if (inc == 0) {\n                premiumHeld0 = total;\n                return;\n            }",
+     "            if (inc == 0) {\n                return;\n            }"),
 ]
 
 

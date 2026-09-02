@@ -35,7 +35,57 @@ What the contract does (src/queue/QueueHook.sol, read line by line):
 
 `PREM_MODE` below selects between the contract's aggregate form and the per-seat form; they agree
 to well under a basis point (measured), and 'contract' is the default.
----------------------------------------------------------------------------------------------------
+
+===================================================================================================
+THE EXECUTION-PRICE FORK, 2026-09-02.  A COPY OF sim.py (md5 3b69d27a..).  sim.py IS NOT TOUCHED.
+
+THE HYPOTHESIS UNDER TEST -- "the matched pair".  `_fill` walks `sprev` from `s0` toward `s1`, so
+the seat filled FIRST is priced on the segment nearest the PRE-swap price and the seat filled LAST
+on the segment nearest the POST-swap price.  In BOTH directions the first slot is the WORST slot:
+
+    zfo (price FALLS): the seat GIVES token1 and RECEIVES token0 -- it is BUYING the volatile
+        asset.  The first segment is the HIGHEST price, so the head buys dearest.
+    !zfo (price RISES): the seat GIVES token0 and RECEIVES token1 -- it is SELLING.  The first
+        segment is the LOWEST price, so the head sells cheapest.
+
+So the claim is that front-first is not a pure privilege: the head pays the worst price of every
+move and is compensated with fills and recycling inventory, while the tail is filled rarely but at
+the best price of each move and then holds.  If that trade is symmetric, the Ratchet
+(premise-review/fairness.md A.2c) is not a defect and the project should stop trying to fix it.
+If one side is strictly worse, this says which and by how much.
+
+WHAT IS ADDED, AND THE CLOSED FORM THAT MAKES IT CHEAP.  Under marginal pricing a seat's segment
+runs [sprev, si] in sqrt-price and `give*(1-FEE)` is exactly the segment's net amount, so its
+realised MARKET price (fee excluded) is exactly `sprev*si`.  It is computed here from the flows
+rather than the closed form, because the REMAINDER LINE does not follow the closed form and the
+remainder line is the load-bearing one (PITFALLS 2.14):
+
+    gnet = give*(1-FEE)
+    zfo : Px = take/gnet     (numeraire per volatile GIVEN UP -- the seat BUYS; LOWER is better)
+    !zfo: Px = gnet/take     (numeraire per volatile RECEIVED  -- the seat SELLS; HIGHER is better)
+
+and the benchmark is the SAME SWAP's own average, i.e. what ONE undivided pro-rata seat would have
+realised on that trade:
+
+    zfo : Pv = amt_out/(amt_in*(1-FEE))          !zfo: Pv = (amt_in*(1-FEE))/amt_out
+
+    EDGE = (Pv - Px)/Pv  if zfo else (Px - Pv)/Pv        POSITIVE = better than pro-rata.
+
+EDGE is signed the same way in both directions, is dimensionless, and sums to ~zero across the
+seats of one fill by construction -- which is what makes it a real per-rank measurement and not a
+restatement of the total.  `u` in [0,1] is where the seat landed inside the move (0 = executed at
+the pre-swap price, 1 = at the post-swap price); it is reported because it is the geometry, while
+EDGE is the money.
+
+TWO WARNINGS ABOUT WHAT THIS FILE CANNOT DO.
+  * `total P&L` differences between orderings CANNOT FAIL -- availability is order-invariant and
+    the remainder line forces sum(give) == amtIn.  `ROTATION.md`'s banner already recorded a
+    maximally corrupt allocator scoring +0.000000% on exactly that check.  Nothing here rests on
+    an aggregate identity; every table is per (path, rank).
+  * This simulator is pure float with no decimals and one pool.  It cannot see a token0/token1
+    unit-mixing bug the way an 18/6 fixture can (LAW 1).  Read it as economics, not as a test of
+    the contract's arithmetic.
+===================================================================================================
 """
 import numpy as np, math
 FEE = 0.0030
@@ -46,24 +96,6 @@ FEE = 0.0030
 #              Differs only in whether a PARTIALLY drained seat shares in the pot of the seats
 #              ahead of it in the same swap.  Kept so the difference can be measured, not assumed.
 PREM_MODE = 'contract'
-
-# THE PREMIUM'S WEIGHT. 'inventory' is what the contract does today: post-fill holdings of the
-# OUTGOING token, so a seat the swap just drained carries zero weight and collects nothing.
-# 'liquidity' is the settled replacement: CONTRIBUTED LIQUIDITY, which no fill can move.
-#
-# Why the change is not primarily the 18/6 bug. The old counterfactual was circular -- it asked
-# "given the book as it stands NOW, what would pro-rata have given me?", when the book stands as it
-# does BECAUSE the mechanism drained you. A seat holding nothing is told it is owed nothing, and the
-# reason it holds nothing is that the mechanism took it. The correct counterfactual is "what would
-# this capital have earned in an ordinary pro-rata pool?" -- the same participation constraint the
-# phi* solve binds to -- and in a pro-rata pool fills preserve composition exactly, so w_i is
-# proportional to L_i at every instant. YOU CANNOT BIND phi* TO ONE BENCHMARK AND WEIGHT THE COUPON
-# BY THE OTHER.
-#
-# In this simulator no seat funds or withdraws mid-path, so contributed liquidity is CONSTANT and
-# proportional to opening capital: the distribution is a fixed vector and the hold condition
-# degenerates to "the book has no liquidity at all", which cannot happen once funded.
-PREM_WEIGHT = 'inventory'
 
 class Book:
     def __init__(self, caps, P0, marginal, half=0.10, phi=0, trace=False):
@@ -102,17 +134,32 @@ class Book:
         # this product is that rank k IS a tick span; this is the number that settles it.
         self.smin = np.full(self.n, np.inf)     # lowest sqrt-price at which this seat was filled
         self.smax = np.full(self.n, -np.inf)    # highest
-        # CONTRIBUTED LIQUIDITY share -- constant, because nothing funds or withdraws mid-path.
-        self.Lsh = caps/caps.sum()
-        self.weight = PREM_WEIGHT
-        # WEIGHT DRIFT AT ACCRUAL TIME, not at path end. Drained seats are at maximum divergence
-        # from proportionality BY CONSTRUCTION, one line after being drained, so measuring at the
-        # end of the path measures the wrong instant and would understate it.
-        self.drift = []
-        self._ex0, self._ex1 = 0, 0
-        self.head_excl = 0          # swaps whose excluded interval contains rank 0
-        self.all_excl = 0           # swaps where EVERY seat is excluded -> pot held under the rule
-        self.over_excl = 0          # swaps whose [start,next] reaches PAST the last seat touched
+        # ---- EXECUTION-PRICE INSTRUMENTS (the execution-price fork). Split by DIRECTION, because
+        # "entry price" and "exit price" are different questions and averaging them cancels the
+        # very asymmetry under test. b = the seat BUYS the volatile asset (zfo). s = it SELLS.
+        self.nfb, self.nfs   = z(), z()    # fill COUNT
+        self.ntb, self.nts   = z(), z()    # NOTIONAL of those fills, in numeraire
+        self.edb, self.eds   = z(), z()    # sum(edge * notional)  -> NUMERAIRE of edge vs pro-rata
+        self.uwb, self.uws   = z(), z()    # sum(u * notional)     -> where in the move it landed
+        self.pxb, self.pxs   = z(), z()    # sum(Px * notional)    -> notional-weighted exec price
+        self.pvb, self.pvs   = z(), z()    # sum(Pv * notional)    -> the same for the benchmark
+        # SOLO vs MULTI.  On a fill that touches ONE seat, that seat IS the pool and its execution
+        # price IS the swap average: edge is exactly 0 by construction, for every rank.  Those
+        # fills therefore DILUTE the head's mean edge toward zero without saying anything about
+        # ordering.  The mechanism under test only operates when a fill touches 2+ seats, so the
+        # multi-seat subset is reported separately -- and the solo subset is reported too, as a
+        # built-in null: it MUST come out at 0.000 bps for every rank or the instrument is wrong.
+        self.mnb, self.mns   = z(), z()    # fill count,  MULTI-seat fills only
+        self.mtb, self.mts   = z(), z()    # notional,    MULTI-seat fills only
+        self.mdb, self.mds   = z(), z()    # sum(edge*notional), MULTI-seat fills only
+        self.mub, self.mus   = z(), z()    # sum(u*notional),    MULTI-seat fills only
+        self.sdb, self.sds   = z(), z()    # sum(edge*notional), SOLO fills only (the null)
+        self.stb, self.sts   = z(), z()    # notional,           SOLO fills only
+        self.first_ct = z()                # times this seat was the FIRST seat of a fill
+        self.start_ct = z()                # times a fill STARTED at this rank (the cursor value)
+        # per-fill audit of the new instrument: sum of seat legs must reconstruct the swap's legs
+        self.exec_err = 0.0
+        self.edge_zero_err = 0.0
         # ---- optional heavy trace, for the matched-wing engine only (see wing.py). OFF by default
         # because it costs ~2x runtime and the main grid does not need it.
         self.trace = trace
@@ -154,17 +201,9 @@ class Book:
             gross_in = net/(1-FEE)
         if self.trace:
             a, b = (s1, s0) if zfo else (s0, s1)
-            # Only the bins the swap actually crosses -- most swaps cross one or two, and touching
-            # the whole 1024-wide array per swap made a traced run ~50x slower than an untraced one.
-            i0 = max(0, int(np.searchsorted(self.edges, a, 'right')) - 1)
-            i1 = min(self.NB, int(np.searchsorted(self.edges, b, 'left')))
-            if i1 > i0:
-                lo = np.clip(self.elo[i0:i1], a, b); hi = np.clip(self.ehi[i0:i1], a, b)
-                if zfo:
-                    self.bnet0[i0:i1] += np.where(hi > lo, self.L*(1.0/np.maximum(lo, 1e-300)
-                                                                   - 1.0/np.maximum(hi, 1e-300)), 0.0)
-                else:
-                    self.bnet1[i0:i1] += self.L*(hi - lo)
+            lo = np.clip(self.elo, a, b); hi = np.clip(self.ehi, a, b)
+            if zfo: self.bnet0 += np.where(hi > lo, self.L*(1.0/np.maximum(lo, 1e-300) - 1.0/np.maximum(hi, 1e-300)), 0.0)
+            else:   self.bnet1 += self.L*(hi - lo)
             self.swaps.append((s0, s1, zfo, net))
         self._fill(gross_in, out, zfo, s0, s1)
         v = gross_in*(P if zfo else 1.0)
@@ -199,23 +238,7 @@ class Book:
         the shipped pool would actually pay backward.
         """
         if pot <= 0 and (self.held0 if zfo else self.held1) <= 0: return
-        inv = self.a1 if zfo else self.a0                 # OUTGOING token: the CURRENT weighting
-        # the statistic that decides whether the two weightings differ occasionally or always
-        si, sl = inv.sum(), self.Lsh.sum()
-        if si > 0:
-            ref = si/sl
-            self.drift.append(float(np.max(np.abs(inv/self.Lsh - ref))/ref))
-        if self.weight == 'inventory':
-            wts = inv
-        elif self.weight == 'liquidity':
-            wts = self.Lsh
-        else:
-            # 'liquidity_excl' -- MY READING of the rule described as "weight by contributed
-            # liquidity, payers excluded over [start, next] inclusive, pot HELD when every seat is
-            # excluded". UNCONFIRMED against the Solidity. It is NOT pure L-weighting and it does
-            # NOT give the head the rebate that pure L-weighting does.
-            wts = self.Lsh.copy()
-            wts[self._ex0:self._ex1 + 1] = 0.0
+        wts = self.a1 if zfo else self.a0                 # OUTGOING token = the weight
         tot = wts.sum()
         if zfo:
             total = pot + self.held0
@@ -246,6 +269,25 @@ class Book:
         deepest = -1
         rem, assigned, cum, sprev, nxt = amt_out, 0.0, 0.0, s0, cur
         swap_pot = 0.0
+        # ---- execution-price locals -------------------------------------------------------------
+        nf  = self.nfb if zfo else self.nfs
+        nt  = self.ntb if zfo else self.nts
+        ed  = self.edb if zfo else self.eds
+        uw  = self.uwb if zfo else self.uws
+        pxa = self.pxb if zfo else self.pxs
+        pva = self.pvb if zfo else self.pvs
+        _ain = amt_in*(1-FEE)
+        Pv = (amt_out/_ain) if zfo else (_ain/amt_out)     # the swap's OWN average -- pro-rata
+        P_pre, P_post = s0*s0, s1*s1
+        _dP = P_post - P_pre
+        _sum_num, _sum_den, _first = 0.0, 0.0, -1
+        _recs = []                          # (rank, edge, notional, u) buffered for the solo/multi split
+        # THE ZERO-SUM AUDIT: edge is a SPLIT, it creates nothing.  The residual is scaled by the
+        # fill's NOTIONAL, not by sum|edge|.  That matters: under AVERAGE pricing every edge is
+        # float dust, so |sum(e)|/sum|e| is a ratio of two dust quantities and reads a meaningless
+        # 1.0 -- it looked like a catastrophic failure and was nothing.  Scaled by notional the
+        # metric stays meaningful whether the edge is real or identically zero.
+        _edge_sum = _edge_abs = 0.0
         for i in range(cur, self.n):
             if rem <= 1e-15: break
             if bal[i] <= 1e-15: continue
@@ -275,6 +317,35 @@ class Book:
             gv_in[i]  += give
             tk_out[i] += take
             deepest = i
+            # ---- EXECUTION PRICE, from the flows (so the remainder line is covered too) --------
+            _gnet = give*(1-FEE)
+            if _gnet > 0.0 and take > 0.0:
+                # WEIGHT BY THE VOLATILE LEG VALUED AT Pv, NOT BY THE NUMERAIRE LEG.  The
+                # counterfactual is "the same seat, the same volatile quantity, at the swap's own
+                # average price", so the dollar edge is volleg*(Pv - Px) for a buyer and
+                # volleg*(Px - Pv) for a seller.  With that weight the edge is EXACTLY ZERO-SUM
+                # across the seats of one fill -- sum = Pv*sum(volleg) - sum(numleg) = 0 -- which
+                # is a per-FILL property that can fail, unlike any aggregate identity.  Weighting
+                # by the numeraire leg instead loses that and biases the dollar figure by ~Px/Pv.
+                if zfo:                                   # gives numeraire, BUYS volatile
+                    volleg = _gnet; Px = take/_gnet; edge = (Pv - Px)/Pv
+                else:                                     # gives volatile, SELLS it for numeraire
+                    volleg = take;  Px = _gnet/take; edge = (Px - Pv)/Pv
+                notional = Pv*volleg
+                nf[i]  += 1.0
+                nt[i]  += notional
+                ed[i]  += edge*notional
+                pxa[i] += Px*notional
+                pva[i] += Pv*notional
+                _u = ((Px - P_pre)/_dP) if _dP != 0.0 else 0.5
+                uw[i]  += _u*notional
+                _recs.append((i, edge, notional, _u))
+                _edge_sum += edge*notional
+                _edge_abs += notional
+                _sum_num += (_gnet if zfo else take)      # volatile leg of this seat
+                _sum_den += (take if zfo else _gnet)      # numeraire leg of this seat
+                if _first < 0:
+                    _first = i; self.first_ct[i] += 1.0
             if _sp1 < self.smin[i]: self.smin[i] = _sp1
             if _sp1 > self.smax[i]: self.smax[i] = _sp1
             if _sp0 < self.smin[i]: self.smin[i] = _sp0
@@ -295,13 +366,35 @@ class Book:
         else:   self.c0, self.c1 = nxt, min(self.c1, cur)
         if zfo: self.potted0 += swap_pot
         else:   self.potted1 += swap_pot
+        # ---- THE ZERO-SUM AUDIT.  Every dollar of edge one rank gains, another rank loses on the
+        # SAME fill.  If this ever drifts, the per-rank edge numbers are inventing money and every
+        # conclusion drawn from them is void.  Checked on every multi-seat fill, not in aggregate.
+        if _edge_abs > 0.0:
+            self.edge_zero_err = max(self.edge_zero_err, abs(_edge_sum)/_edge_abs)
+        # ---- commit the solo/multi split now that the fill's width is known --------------------
+        if _recs:
+            if len(_recs) > 1:
+                mn = self.mnb if zfo else self.mns; mt = self.mtb if zfo else self.mts
+                md = self.mdb if zfo else self.mds; mu = self.mub if zfo else self.mus
+                for (i, e, nn, uu) in _recs:
+                    mn[i] += 1.0; mt[i] += nn; md[i] += e*nn; mu[i] += uu*nn
+            else:
+                sd = self.sdb if zfo else self.sds; st = self.stb if zfo else self.sts
+                (i, e, nn, uu) = _recs[0]
+                sd[i] += e*nn; st[i] += nn
         self.nswap += 1
+        if deepest >= 0:
+            self.start_ct[cur] += 1.0
+            # AUDIT the new instrument every fill: the seats' own legs must reconstruct the swap's.
+            # Without this, a per-seat price can be wrong in a way no aggregate would ever show.
+            _vol_leg = _ain if zfo else amt_out
+            _num_leg = amt_out if zfo else _ain
+            if _vol_leg > 0 and _num_leg > 0:
+                self.exec_err = max(self.exec_err,
+                                    abs(_sum_num - _vol_leg)/_vol_leg,
+                                    abs(_sum_den - _num_leg)/_num_leg)
         self.reach[deepest + 1] += 1                  # index 0 == "no seat touched at all"
         if self.tag == 'a': self.reach_a[deepest + 1] += 1
-        self._ex0, self._ex1 = cur, min(nxt, self.n - 1)      # the excluded rank interval
-        if cur == 0: self.head_excl += 1
-        if nxt > deepest and deepest >= 0: self.over_excl += 1   # an UNTOUCHED seat is excluded
-        if cur == 0 and nxt >= self.n - 1: self.all_excl += 1
         # AFTER the fill, never before: the drained seats now carry zero weight.
         if self.phi > 0 and PREM_MODE == 'contract':
             self._accrue(zfo, swap_pot)
@@ -335,6 +428,33 @@ class Book:
         scale = max(1.0, float(np.max(np.abs(d))))
         assert float(np.max(np.abs(fees + markout - d)))/scale < tol, "fees+markout != pnl"
         return fees, markout
+
+    def exec_stats(self):
+        """Per-rank execution quality. Returns a dict of length-n arrays.
+
+        Every 'mean' here is NOTIONAL-WEIGHTED, not fill-weighted: a rank whose fills are one big
+        one and ninety dust ones must not have the dust dominate its average price.
+        """
+        w = lambda a, n: np.where(n > 0, a/np.maximum(n, 1e-300), np.nan)
+        return dict(
+            nfill_b=self.nfb, nfill_s=self.nfs, nfill=self.nfb + self.nfs,
+            not_b=self.ntb, not_s=self.nts, notional=self.ntb + self.nts,
+            edge_b=w(self.edb, self.ntb), edge_s=w(self.eds, self.nts),
+            edge=w(self.edb + self.eds, self.ntb + self.nts),
+            edge_usd_b=self.edb, edge_usd_s=self.eds, edge_usd=self.edb + self.eds,
+            u_b=w(self.uwb, self.ntb), u_s=w(self.uws, self.nts),
+            px_b=w(self.pxb, self.ntb), px_s=w(self.pxs, self.nts),
+            pv_b=w(self.pvb, self.ntb), pv_s=w(self.pvs, self.nts),
+            first=self.first_ct, start=self.start_ct,
+            m_nfill_b=self.mnb, m_nfill_s=self.mns, m_nfill=self.mnb + self.mns,
+            m_not=self.mtb + self.mts,
+            m_edge_b=w(self.mdb, self.mtb), m_edge_s=w(self.mds, self.mts),
+            m_edge=w(self.mdb + self.mds, self.mtb + self.mts),
+            m_edge_usd=self.mdb + self.mds,
+            m_u_b=w(self.mub, self.mtb), m_u_s=w(self.mus, self.mts),
+            # THE NULL: solo fills must show EXACTLY zero edge at every rank.
+            solo_edge=w(self.sdb + self.sds, self.stb + self.sts),
+            solo_not=self.stb + self.sts)
 
     def prem_recv(self, Pt):
         return self.pr0*Pt + self.pr1
