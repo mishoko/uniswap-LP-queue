@@ -1772,7 +1772,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
         uint128 burned;
         (p0, p1, burned) = _payOut(w0, w1);
-        bool tookDepthOut = _chargeBurn(s, burned);
+        _chargeBurn(s, burned);
 
         s.a0 = _u128(has0 - p0);
         s.a1 = _u128(has1 - p1);
@@ -1818,23 +1818,38 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // become a way to demote yourself by accident. It opens no door — a withdrawal that moves
         // no capital dodges no fill.
         //
-        // **WHAT COSTS A RANK IS TAKING DEPTH OUT, NOT TAKING MONEY OUT.**
+        // **ANY PAYOUT COSTS A RANK. THE REFINED RULE WAS TRIED, IT WAS EXPLOITABLE, AND IT IS
+        // WITHDRAWN — THIS COMMENT USED TO ARGUE THE OPPOSITE.**
         //
-        // The first version of this line demoted on any withdrawal that PAID something. That closes
-        // the attack, and it also punishes the holder the mechanism is supposed to be paying: the
-        // front seat is where the flow is, so realising accrued premium means calling `withdraw`,
-        // and a blanket rule would cost them the seat for collecting the coupon they are owed.
+        // The refinement said: demote only when the withdrawal burned into the seat's own
+        // contributed liquidity, so that realising the coupon did not cost the seat the rank it is
+        // paid to hold. That is a good intention and it does not survive contact with `_payOut`,
+        // which consumes `float0`/`float1` FIRST and only burns the remainder. **A payout the float
+        // covers burns nothing, so `_chargeBurn` returns false, so nothing is demoted** — and the
+        // float is nearly free to build, because an in-range SINGLE-TOKEN deposit mints essentially
+        // no liquidity and lands in the float whole while the depositing seat is credited every wei.
+        // Pre-fund the float, withdraw the entire balance, keep rank 1. Executed as `test_8_15`:
+        // 500e18 + 125e18 out, zero burned, rank retained.
         //
-        // `liquidityContributed` gives the principled line with no constant in it. A withdrawal
-        // that burns into the seat's own contributed liquidity is the holder LEAVING — that is the
-        // evacuation, and it is the only thing the attack can be built from, because dodging a fill
-        // REQUIRES the capital to be out of the pool. A withdrawal the float covers, or one that
-        // burns only liquidity backing earnings the seat never contributed, moves no depth and
-        // costs no rank.
+        // **AND THE OBVIOUS REPAIRS ARE THE SAME QUESTION IN A COSTUME.** "Did `s.liquidity` fall?"
+        // is what `_chargeBurn` already asks — it returns early on `burned == 0` and then debits
+        // `min(burned, s.liquidity)`, so the contribution falls if and only if something was burned.
+        // Every remaining formulation compares the seat's REMAINING LEDGER against the depth it is
+        // credited with, and that needs a price-dependent valuation of its principal — under which
+        // **an honest front seat is demoted for its MARKOUT LOSSES**, which is PITFALLS 5.130 one
+        // level deeper rather than a fix for it. (The single-token reading of a fully-FILLED front
+        // seat is a symptom of that, not the whole of it.)
         //
-        // The old guard survives inside `_chargeBurn`: `burned == 0` returns false, so a withdrawal
-        // that moved nothing — including one the dust policy clamped to zero — still changes
-        // nothing.
+        // So the rule is the simple one, and it is stated on the merits rather than as a retreat:
+        // **the product sells SUBORDINATION, and a holder cannot be subordinate and liquid at the
+        // same time.** The seats behind are paying this one to STAND THERE; a seat that has taken
+        // its value out is not standing. It cannot be griefed — `withdraw` reverts for anyone but
+        // the seat holder, so no third party can force a demotion. A holder who wants the coupon and
+        // the rank leaves earnings in the seat, where they go on earning, or re-buys a rank at the
+        // posted price. `_chargeBurn` still charges the liquidity; it just no longer decides rank.
+        //
+        // A withdrawal that moved NOTHING still changes nothing: `p0 == 0 && p1 == 0` is the
+        // dust-policy clamp and the zero request, and neither is an exit.
         //
         // **ORDERING.** Last, after every ledger write and before the external `_send`. Nothing
         // above it reads a rank, so the position is free; putting it before the transfer keeps the
@@ -1842,7 +1857,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // and the adjustment is exact in both directions — a seat below a cursor holds zero of that
         // token by INVARIANT C, so the seats that shift down past it were zero too, and a seat at
         // or above the cursor moves nothing the cursor describes.
-        if (tookDepthOut) _demoteToTail(seatId);
+        if (p0 != 0 || p1 != 0) _demoteToTail(seatId);
 
         _send(msg.sender, p0, p1);
     }
@@ -1921,8 +1936,11 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      that neither pot recorded. `_checkLiquidityIdentity` measures that residual rather than
     ///      assuming it away.
     ///
-    /// @return reduced whether the SEAT's own contribution fell. That, not "was anything paid", is
-    ///         what costs a holder their place in the queue.
+    /// @return reduced whether the SEAT's own contribution fell. **This no longer decides rank** —
+    ///         `withdraw` demotes on any payout at all, because a payout the FLOAT covers burns
+    ///         nothing and this would report false while the whole balance left (`test_8_15`). It is
+    ///         kept because it is the honest answer to the question it asks, and callers may want
+    ///         it; nothing in production branches on it today.
     function _chargeBurn(Seat storage s, uint128 burned) internal returns (bool reduced) {
         if (burned == 0) return false;
         uint128 fromSeat = burned > s.liquidity ? s.liquidity : burned;

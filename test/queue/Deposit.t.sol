@@ -401,16 +401,28 @@ contract DepositTest is QueueFixture {
                 uint256 id = i % 3;
                 address owner_ = id == 0 ? ALICE : (id == 1 ? BOB : CARL);
                 (uint256 x0, uint256 x1) = hook.seat(id);
-                uint128 lBefore = hook.seatLiquidity(id);
+                uint256 h0 = MockERC20(Currency.unwrap(c0)).balanceOf(owner_);
+                uint256 h1 = MockERC20(Currency.unwrap(c1)).balanceOf(owner_);
                 vm.prank(owner_);
                 (bool ok,) =
                     address(hook).call(abi.encodeCall(hook.withdraw, (id, x0 / (size % 7 + 1), x1 / (size % 5 + 1))));
-                // A withdrawal that takes DEPTH out demotes the seat to the tail, so the witness's
-                // own order has to follow — otherwise `_checkOrder` fails on every such withdrawal
-                // and tells us nothing about cursors, which is what this fuzz is for. Taking PROFIT
-                // out does not demote, which is why the trigger is the seat's contributed liquidity
-                // and not "was anything paid".
-                if (ok && hook.seatLiquidity(id) != lBefore) _refDemote(id);
+                // ANY withdrawal that PAYS demotes the seat to the tail, so the witness's own order
+                // has to follow — otherwise `_checkOrder` fails on every such withdrawal and tells
+                // us nothing about cursors, which is what this fuzz is for.
+                //
+                // **THE TRIGGER IS WHAT THE HOLDER RECEIVED, MEASURED ON THEIR OWN ERC20 BALANCE.**
+                // It used to be `seatLiquidity(id) != lBefore`, mirroring the old rule that only a
+                // withdrawal burning into contributed depth cost a rank. That rule is gone: a payout
+                // the FLOAT covers burns nothing, so it reported "no demotion" while the entire
+                // balance walked out of the seat (`test_8_15`). Reading the holder's balance is also
+                // the only faithful witness available here — the seat's own `a0`/`a1` move for a
+                // second reason during `withdraw` (the premium is settled into them first), so a
+                // seat-side delta would not be `p0`/`p1`.
+                if (ok) {
+                    uint256 got0 = MockERC20(Currency.unwrap(c0)).balanceOf(owner_) - h0;
+                    uint256 got1 = MockERC20(Currency.unwrap(c1)).balanceOf(owner_) - h1;
+                    if (got0 != 0 || got1 != 0) _refDemote(id);
+                }
             }
             _checkInvariantC("fuzz");
         }

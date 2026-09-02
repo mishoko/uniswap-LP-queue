@@ -1186,17 +1186,28 @@ contract EvacuationTest is QueueFixture {
     ///      inflates the balance they are trying to withdraw by exactly the amount they added), and
     ///      the roster runs to `MAX_SEATS = 32`.
     ///
-    ///      **IT COLLIDES HEAD-ON WITH THE RULE PITFALLS 5.130 PAID FOR.** `test_8_9` establishes
-    ///      that taking PROFIT out must not cost a rank, and the definition of profit it uses is
-    ///      exactly "a withdrawal the float can cover burns no depth". Under that definition,
-    ///      pre-funding the float makes EVERYTHING profit. The two rules cannot both stand as
-    ///      written, and choosing between them changes who keeps rank — so it is recorded here and
-    ///      NOT patched: see the report. What is asserted below is the CURRENT behaviour, named for
-    ///      what it is.
+    ///      **IT COLLIDED HEAD-ON WITH THE RULE PITFALLS 5.130 PAID FOR, AND THAT COLLISION HAS NOW
+    ///      BEEN RESOLVED AGAINST 5.130.** `test_8_9` used to establish that taking PROFIT out must
+    ///      not cost a rank, and the definition of profit it used was exactly "a withdrawal the
+    ///      float can cover burns no depth" — under which pre-funding the float makes EVERYTHING
+    ///      profit. The two rules could not both stand.
+    ///
+    ///      The refinement is WITHDRAWN. `withdraw` now demotes on any payout at all. Every attempt
+    ///      to separate the two cases collapses: "did `s.liquidity` fall" is the same question as
+    ///      "was anything burned" (`_chargeBurn` returns early on `burned == 0`), and every other
+    ///      formulation compares the seat's remaining ledger against the depth it is credited with,
+    ///      which needs a price-dependent valuation of principal — under which an honest front seat
+    ///      is demoted for its MARKOUT LOSSES, i.e. 5.130 one level deeper rather than a fix for it.
+    ///
+    ///      The blanket rule stands on its own merits: the product sells SUBORDINATION, and a holder
+    ///      cannot be subordinate and liquid at the same time. **This test is kept EXACTLY as it was
+    ///      executed, because the manoeuvre is the evidence** — only its final assertion is
+    ///      inverted, and the "bypass engaged" assertion above it is retained deliberately so the
+    ///      test still proves the burn-based rule would have been blind here.
     ///
     ///      It is also the security half of the accounting defect tracked separately in
     ///      `Maturity.t.sol` (a seat's contributed depth outliving the balances that backed it).
-    function test_8_15_prefundingTheFloatKEEPSTheRankThroughAFullWithdrawal() public {
+    function test_8_15_prefundingTheFloatNoLongerKEEPSTheRankThroughAFullWithdrawal() public {
         _use(atkHook, atkKey);
         uint256 victim = atkHook.idAtRank(1); // not the tail: demoting the tail is a no-op
         address holder = atkHook.ownerOf(victim);
@@ -1238,9 +1249,16 @@ contract EvacuationTest is QueueFixture {
         assertGt(MockERC20(Currency.unwrap(c0)).balanceOf(holder), wallet0, "the holder was not actually paid");
         (uint256 z0, uint256 z1) = atkHook.seat(victim);
         assertEq(z0 + z1, 0, "the seat is not empty after withdrawing everything");
+        // **THE BYPASS STILL ENGAGES — THAT IS THE POINT.** Zero depth is burned, so every rule
+        // phrased in terms of the BURN (`_chargeBurn`'s return, or equivalently "did `s.liquidity`
+        // fall") is still blind here. Asserting it keeps this test measuring the actual hole rather
+        // than a state where the hole closed itself.
         assertEq(atkHook.seatLiquidity(victim), depth, "the withdrawal burned depth: the bypass did not engage");
-        assertEq(atkHook.rankOfId(victim), 1, "the float-covered withdrawal DID cost the rank: the door is shut");
-        emit log_string("FOURTH DOOR: full withdrawal, zero burn, rank 1 retained");
+
+        // THE INVERSION. This was `assertEq(rankOfId(victim), 1)` — the door standing open. The
+        // demotion no longer asks what was burned; it asks whether anything was PAID.
+        assertEq(atkHook.rankOfId(victim), N - 1, "FOURTH DOOR STILL OPEN: full withdrawal, zero burn, rank retained");
+        emit log_string("FOURTH DOOR SHUT: full withdrawal, zero burn, rank surrendered anyway");
         emit log_named_uint("token0 taken out  ", p0);
         emit log_named_uint("token1 taken out  ", p1);
         emit log_named_uint("depth still credited to the emptied seat", depth);
@@ -1500,22 +1518,29 @@ contract EvacuationTest is QueueFixture {
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════════
-    // 8.9 — TAKING PROFIT IS NOT LEAVING. The refined demotion rule, asserted directly.
+    // 8.9 — ANY PAYOUT IS LEAVING. The refined rule was exploitable and has been WITHDRAWN.
     // ══════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @notice **A WITHDRAWAL THAT TAKES DEPTH OUT COSTS A RANK. ONE THAT TAKES EARNINGS OUT DOES
-    ///         NOT.** The blanket "any payout demotes" rule closed the attack and punished the
-    ///         holder the mechanism is supposed to be paying: the front seat is where the flow is,
-    ///         so realising a coupon means calling `withdraw`, and a blanket rule charged the seat
-    ///         for collecting what it was owed.
+    /// @notice **INVERTED 2026-09-02. THIS TEST USED TO ASSERT THAT TAKING PROFIT KEPT THE RANK.**
+    ///         The refined rule — demote only when the withdrawal burned into the seat's own
+    ///         contributed depth — is exactly the rule `test_8_15` walks through the front door:
+    ///         `_payOut` spends the FLOAT first and only burns the remainder, so a float-covered
+    ///         payout burns nothing, charges nothing, and demotes nothing while the entire balance
+    ///         leaves. **The scenario below is kept UNCHANGED, because it is the evidence** — it
+    ///         constructs precisely the float-covered "profit" withdrawal the old rule protected,
+    ///         and that is the same observable an evacuator uses.
     ///
-    /// @dev This exists because a mutation said it had to. Restoring the blanket rule
-    ///      (`if (p0 != 0 || p1 != 0) _demoteToTail(...)`) was caught by exactly ONE test in the
-    ///      whole suite — the interleaving cursor fuzz — and only incidentally, through its order
-    ///      witness. A rule whose only detector is a fuzz test's side effect is a rule nobody has
-    ///      actually asserted (AGENTS §3b: a surviving or thinly-caught mutation is a finding, and
-    ///      the honest answer is to write the missing test).
-    function test_8_9_takingProfitDoesNotCostARankButLeavingDoes() public {
+    /// @dev **WHY THERE IS NO THIRD RULE.** "Did `s.liquidity` fall?" is the same question as "was
+    ///      anything burned?" — `_chargeBurn` returns early on `burned == 0`. Every other
+    ///      formulation compares the seat's remaining ledger against the depth it is credited with,
+    ///      which needs a price-dependent valuation of principal, under which an honest front seat
+    ///      is demoted for its MARKOUT LOSSES — PITFALLS 5.130 one level deeper, not a fix for it.
+    ///
+    ///      So the rule is the blanket one, on the merits: **the product sells SUBORDINATION, and a
+    ///      holder cannot be subordinate and liquid at the same time.** The seats behind pay this
+    ///      one to STAND THERE. It cannot be griefed — only the seat holder may call `withdraw`.
+    ///      A holder who wants both leaves earnings in the seat, where they go on earning.
+    function test_8_9_takingProfitAlsoCostsTheRankBecauseTheFloatMakesThemIndistinguishable() public {
         _use(atkHook, atkKey);
         address head = atkRoster[0];
 
@@ -1538,20 +1563,83 @@ contract EvacuationTest is QueueFixture {
         (uint256 p0, uint256 p1) = atkHook.withdraw(0, w0, w1);
         assertGt(p0 + p1, 0, "the profit withdrawal paid nothing: this test proves nothing");
 
-        assertEq(atkHook.seatLiquidity(0), lBefore, "taking profit burned contributed depth");
-        assertEq(atkHook.rankOfId(0), 0, "TAKING PROFIT COST THE HOLDER THEIR RANK");
+        // **THE STATE THAT MADE THE OLD RULE UNSOUND, ASSERTED SO THE INVERSION IS NOT VACUOUS:**
+        // real money left the seat and NOTHING was burned, so the old trigger could not see it.
+        assertEq(atkHook.seatLiquidity(0), lBefore, "the float did not cover it: this is not the case under test");
+
+        // THE INVERSION. This was `assertEq(rankOfId(0), 0)` — profit-taking kept the rank.
+        assertEq(atkHook.rankOfId(0), N - 1, "a payout that moved real value did NOT cost the rank");
         emit log_named_uint("paid out of float, token0", p0);
         emit log_named_uint("paid out of float, token1", p1);
 
-        // ...and the other half of the rule: taking the DEPTH out does cost the rank.
-        (a0, a1) = atkHook.seat(0);
-        vm.prank(head);
-        atkHook.withdraw(0, a0, a1);
-        assertLt(atkHook.seatLiquidity(0), lBefore, "the full withdrawal did not burn contributed depth");
-        assertEq(atkHook.rankOfId(0), N - 1, "LEAVING DID NOT COST THE HOLDER THEIR RANK");
+        // ...and a withdrawal that moves NOTHING still changes nothing. That is the whole of the
+        // remaining exemption, and it is the dust-policy clamp rather than a judgement about
+        // earnings. Seat 1 is used because seat 0 has just been demoted to the tail, where a
+        // "did not move" assertion would hold vacuously (AGENTS §3b).
+        uint256 rank1Before = atkHook.rankOfId(1);
+        assertTrue(rank1Before != N - 1, "seat 1 is already at the tail: the check below is vacuous");
+        vm.prank(atkRoster[1]);
+        (uint256 z0, uint256 z1) = atkHook.withdraw(1, 0, 0);
+        assertEq(z0 + z1, 0, "a zero request paid something");
+        assertEq(atkHook.rankOfId(1), rank1Before, "a withdrawal that paid NOTHING cost the holder their rank");
 
         _checkInvariantL("after profit-then-exit");
         _checkInvariantF("after profit-then-exit", 64);
+    }
+
+    /// @notice **THE RULE HAS TWO LEGS AND EACH ONE IS ASSERTED SEPARATELY.** `withdraw` demotes on
+    ///         `p0 != 0 || p1 != 0`; a mutant that drops either half lets a holder evacuate in the
+    ///         OTHER token and keep their rank.
+    ///
+    /// @dev This exists because a mutation said it had to. `if (p0 != 0)` alone — a rule blind to a
+    ///      token1-only exit — was caught by exactly ONE test in the whole suite, and `if (p1 != 0)`
+    ///      alone by two. **A security rule whose only detector is incidental is a rule nobody has
+    ///      asserted** (AGENTS §3b), and this is the one-rule-two-places family that has now bitten
+    ///      this project eight times (5.37, 5.50, 5.52 twice, 5.73, 5.125, 5.132, and here).
+    ///
+    ///      Each leg is driven on its OWN seat, because the first withdrawal demotes the seat it
+    ///      touches and a second assertion against an already-tail seat would hold vacuously.
+    function test_8_10_eitherLegAloneCostsTheRank() public {
+        _use(atkHook, atkKey);
+        _advSwap(address(this), true, _inputToReach(_target()));
+
+        // **SEATS ARE CHOSEN BY WHAT THEY HOLD, NOT BY RANK.** A zeroForOne fill drains token1
+        // FRONT-FIRST, so the head is exactly the seat with no token1 left — picking by rank made
+        // the first arm fire its own "this proves nothing" guard, which is the guard working.
+        uint256 only1 = type(uint256).max;
+        uint256 only0 = type(uint256).max;
+        for (uint256 r = 1; r < N - 1; r++) {
+            uint256 id = atkHook.idAtRank(r);
+            (uint256 s0, uint256 s1) = atkHook.seat(id);
+            if (s1 != 0 && only1 == type(uint256).max) only1 = id;
+            else if (s0 != 0 && only0 == type(uint256).max) only0 = id;
+        }
+        assertTrue(only1 != type(uint256).max, "no non-tail seat holds token1: this test proves nothing");
+        assertTrue(only0 != type(uint256).max, "no second non-tail seat holds token0: this test proves nothing");
+        assertTrue(only1 != only0, "the two arms share a seat: the second would be vacuous");
+
+        // LEG ONE: pay token1 and nothing else.
+        (, uint256 b1) = atkHook.seat(only1);
+        assertGt(b1, 0, "no token1 to withdraw: this arm proves nothing");
+        vm.prank(atkHook.ownerOf(only1));
+        (uint256 q0, uint256 q1) = atkHook.withdraw(only1, 0, b1);
+        assertEq(q0, 0, "the token1-only arm paid token0: it is not testing one leg");
+        assertGt(q1, 0, "the token1-only arm paid nothing: this arm proves nothing");
+        assertEq(atkHook.rankOfId(only1), N - 1, "a token1-ONLY withdrawal did not cost the rank");
+
+        // LEG TWO: the mirror. Pay token0 and nothing else.
+        (uint256 c0_,) = atkHook.seat(only0);
+        assertGt(c0_, 0, "no token0 to withdraw: this arm proves nothing");
+        uint256 rankBefore = atkHook.rankOfId(only0);
+        assertTrue(rankBefore != N - 1, "the seat is already at the tail: this arm would be vacuous");
+        vm.prank(atkHook.ownerOf(only0));
+        (uint256 r0, uint256 r1) = atkHook.withdraw(only0, c0_, 0);
+        assertEq(r1, 0, "the token0-only arm paid token1: it is not testing one leg");
+        assertGt(r0, 0, "the token0-only arm paid nothing: this arm proves nothing");
+        assertEq(atkHook.rankOfId(only0), N - 1, "a token0-ONLY withdrawal did not cost the rank");
+
+        _checkInvariantL("after single-leg exits");
+        _checkInvariantF("after single-leg exits", 64);
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════════
