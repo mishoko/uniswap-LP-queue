@@ -1,0 +1,122 @@
+====================================================================================================
+THE SHIPPING phi -- measured on the DEPLOYED configuration
+====================================================================================================
+  SEATS = 5, capital 5:4:3:2:1 on a $1,000,000 book (head $333,333 = 33.3%), band +/-10%, fee 0.30%,
+  retail 15/hr, 4 disjoint seed ranges x 30 paths = 120 paths per cell, phi swept 0-9500 step 500.
+
+  NOTE: every previously published crossover (6599 / 4875 / ...) used a $31,250 head.
+  This file uses the shipped $333,333 head. Head size is the dominant economic
+  parameter on this project, so the two are NOT interchangeable.
+
+  wing null (full-band wing of 1/5 the capital == 1/5 of the pool): worst fee 2.73e-03, markout 9.45e-04
+
+====================================================================================================
+1.  THE FRONT -- rank 1 against the alternatives, as phi rises
+====================================================================================================
+  --- BENIGN  life 61.0d  ---   pro-rata LP +5.02%   managed wing (w=5%, L2) +2.00%   static ladder wing +2.39%
+   phi        0     500    1000    1500    2000    2500    3000    3500    4000    4500    5000    5500    6000    6500    7000    7500    8000    8500    9000    9500
+   r1      14.7    13.6    12.4    11.3    10.2     9.1     8.0     6.9     5.7     4.6     3.5     2.4     1.3     0.2    -1.0    -2.1    -3.2    -4.3    -5.4    -6.5
+        rank 1 falls below the managed wing   at phi = 5670
+        rank 1 falls below the static wing    at phi = 5498
+        rank 1 falls below the pro-rata LP    at phi = 4317
+
+  --- NORMAL  life 19.1d  ---   pro-rata LP +0.49%   managed wing (w=5%, L2) -3.46%   static ladder wing -1.43%
+   phi        0     500    1000    1500    2000    2500    3000    3500    4000    4500    5000    5500    6000    6500    7000    7500    8000    8500    9000    9500
+   r1       2.2     1.7     1.3     0.8     0.4    -0.1    -0.5    -1.0    -1.4    -1.9    -2.3    -2.8    -3.2    -3.7    -4.1    -4.6    -5.0    -5.5    -5.9    -6.4
+        rank 1 falls below the managed wing   at phi = 6251
+        rank 1 falls below the static wing    at phi = 3995
+        rank 1 falls below the pro-rata LP    at phi = 1876
+
+  --- TOXIC  life 1.4d  ---   pro-rata LP -2.17%   managed wing (w=5%, L2) -3.41%   static ladder wing -3.83%
+   phi        0     500    1000    1500    2000    2500    3000    3500    4000    4500    5000    5500    6000    6500    7000    7500    8000    8500    9000    9500
+   r1      -3.3    -3.3    -3.4    -3.4    -3.4    -3.5    -3.5    -3.6    -3.6    -3.6    -3.7    -3.7    -3.8    -3.8    -3.9    -3.9    -3.9    -4.0    -4.0    -4.1
+        rank 1 falls below the managed wing   at phi = 1636
+        rank 1 falls below the static wing    at phi = 6707
+        rank 1 falls below the pro-rata LP    at phi = already below at phi=0
+
+====================================================================================================
+2.  THE BACK -- seats 2-5 against an ORDINARY PRO-RATA LP, as phi rises
+====================================================================================================
+  The bar is the LP, not zero. results-tranche.txt section 11 measured the pro-rata LP
+  with equal-or-lower downside deviation than a back seat at equal return, so a back
+  seat that merely returns something positive has not earned its rent, lock or gas.
+
+  --- BENIGN ---   pro-rata LP +5.02%
+   phi         0     500    1000    1500    2000    2500    3000    3500    4000    4500    5000    5500    6000    6500    7000    7500    8000    8500    9000    9500
+   s2       0.2     0.7     1.2     1.8     2.3     2.8     3.4     3.9     4.4     5.0     5.5     6.0     6.6     7.1     7.6     8.2     8.7     9.2     9.7    10.2
+   s3       0.3     0.8     1.4     2.0     2.5     3.1     3.7     4.2     4.8     5.3     5.9     6.4     7.0     7.6     8.1     8.7     9.2     9.8    10.3    10.9
+   s4       0.2     0.8     1.4     1.9     2.5     3.1     3.7     4.3     4.9     5.5     6.0     6.6     7.2     7.8     8.4     9.0     9.6    10.1    10.7    11.3
+   s5      -0.0     0.6     1.2     1.8     2.4     3.0     3.6     4.2     4.9     5.5     6.1     6.7     7.3     7.9     8.5     9.2     9.8    10.4    11.0    11.6
+        first phi at which each seat beats the LP -> s2: 4542  s3: 4228  s4: 4132  s5: 4135
+        ALL of seats 2-5 beat the LP from phi = 4542
+        phi=0     fraction of individual (path, seat) cells in 2-5 that beat the LP: 9.2%
+        phi=5000  fraction of individual (path, seat) cells in 2-5 that beat the LP: 68.1%
+        phi=8500  fraction of individual (path, seat) cells in 2-5 that beat the LP: 99.6%
+
+  --- NORMAL ---   pro-rata LP +0.49%
+   phi         0     500    1000    1500    2000    2500    3000    3500    4000    4500    5000    5500    6000    6500    7000    7500    8000    8500    9000    9500
+   s2      -0.6    -0.4    -0.2     0.1     0.3     0.5     0.7     0.9     1.1     1.3     1.5     1.7     1.9     2.1     2.2     2.4     2.6     2.8     3.0     3.2
+   s3      -0.3    -0.1     0.2     0.4     0.6     0.8     1.1     1.3     1.5     1.8     2.0     2.2     2.5     2.7     2.9     3.1     3.4     3.6     3.8     4.1
+   s4      -0.3    -0.0     0.2     0.5     0.7     0.9     1.2     1.4     1.7     1.9     2.2     2.4     2.7     2.9     3.1     3.4     3.6     3.9     4.1     4.4
+   s5       0.1     0.3     0.6     0.9     1.2     1.4     1.7     2.0     2.2     2.5     2.8     3.1     3.3     3.6     3.9     4.2     4.4     4.7     5.0     5.3
+        first phi at which each seat beats the LP -> s2: 2560  s3: 1726  s4: 1563  s5: 772
+        ALL of seats 2-5 beat the LP from phi = 2560
+        phi=0     fraction of individual (path, seat) cells in 2-5 that beat the LP: 37.9%
+        phi=5000  fraction of individual (path, seat) cells in 2-5 that beat the LP: 84.8%
+        phi=8500  fraction of individual (path, seat) cells in 2-5 that beat the LP: 94.4%
+
+  --- TOXIC ---   pro-rata LP -2.17%
+   phi         0     500    1000    1500    2000    2500    3000    3500    4000    4500    5000    5500    6000    6500    7000    7500    8000    8500    9000    9500
+   s2      -2.6    -2.6    -2.5    -2.5    -2.5    -2.5    -2.5    -2.5    -2.5    -2.5    -2.5    -2.4    -2.4    -2.4    -2.4    -2.4    -2.4    -2.4    -2.4    -2.3
+   s3      -1.5    -1.5    -1.5    -1.5    -1.5    -1.4    -1.4    -1.4    -1.4    -1.4    -1.4    -1.3    -1.3    -1.3    -1.3    -1.3    -1.2    -1.2    -1.2    -1.2
+   s4      -0.7    -0.6    -0.6    -0.6    -0.5    -0.5    -0.5    -0.5    -0.4    -0.4    -0.4    -0.4    -0.3    -0.3    -0.3    -0.2    -0.2    -0.2    -0.2    -0.1
+   s5      -0.0     0.0     0.1     0.1     0.2     0.2     0.3     0.3     0.4     0.4     0.5     0.5     0.6     0.6     0.7     0.7     0.7     0.8     0.8     0.9
+        first phi at which each seat beats the LP -> s2: NEVER  s3: all phi  s4: all phi  s5: all phi
+        ALL of seats 2-5 beat the LP: NOT AT ANY phi -- s2 never does
+        phi=0     fraction of individual (path, seat) cells in 2-5 that beat the LP: 75.4%
+        phi=5000  fraction of individual (path, seat) cells in 2-5 that beat the LP: 75.8%
+        phi=8500  fraction of individual (path, seat) cells in 2-5 that beat the LP: 75.8%
+
+====================================================================================================
+3.  THE FEASIBLE WINDOW -- where both constraints hold at once
+====================================================================================================
+      regime   front needs phi <=                  back needs phi >=                 window
+      BENIGN                 5670                               4542           [4542, 5670]
+      NORMAL                 6251                               2560           [2560, 6251]
+       TOXIC                 1636 NEVER (a seat never clears the LP)                  EMPTY
+
+====================================================================================================
+4.  ITEMISED COST OF THE HEAD'S REAL COMPETITOR, at the SHIPPED head size
+====================================================================================================
+  A managed ATM range holding $333,333, re-minted at spot. % of its own capital,
+  realised over the band's life. Gas reported separately, never folded in.
+
+      regime   width  re-mints       fees    markout   conv fee  conv impact  net ex-gas         L2         L1
+      BENIGN      1%        67    +18.30%    -17.26%     -8.63%      -61.60%     -69.19%    -69.19%    -69.43%
+                  2%        20    +15.88%    -10.16%     -2.68%      -20.20%     -17.17%    -17.17%    -17.24%
+                  5%         3    +11.27%     -4.99%     -0.48%       -3.80%      +2.00%     +2.00%     +1.99%
+
+      NORMAL      1%        49     +7.36%    -15.32%     -6.41%      -46.29%     -60.66%    -60.66%    -60.84%
+                  2%        17     +6.53%     -9.70%     -2.30%      -17.32%     -22.79%    -22.79%    -22.85%
+                  5%         3     +4.69%     -4.64%     -0.40%       -3.11%      -3.46%     -3.46%     -3.47%
+
+       TOXIC      1%         9     +0.77%     -4.45%     -1.23%       -9.79%     -14.70%    -14.70%    -14.73%
+                  2%         4     +0.73%     -3.36%     -0.56%       -4.49%      -7.68%     -7.68%     -7.70%
+                  5%         1     +0.54%     -2.59%     -0.15%       -1.21%      -3.41%     -3.41%     -3.42%
+
+====================================================================================================
+5.  REGIME WEIGHTING -- should TOXIC drive the choice?
+====================================================================================================
+  Excluding TOXIC entirely picks a constant that is optimal only in good states, which
+  is the error this project calls green-number-chasing. Weighting it by the CALENDAR it
+  actually occupies is the honest middle: a band that dies in a day contributes a day.
+
+      regime   mean life   calendar share if equally likely
+      BENIGN       61.0d                             74.9%
+      NORMAL       19.1d                             23.4%
+       TOXIC        1.4d                              1.7%
+
+  A TOXIC band is ~1-2% of the calendar even if a toxic regime is as LIKELY as a benign
+  one, because it dies almost immediately. Its crossover therefore should not set the
+  constant -- but it should not be deleted from the average either.
+====================================================================================================
