@@ -94,6 +94,20 @@ contract HygieneTest is Test {
             shipped,
             "Invariant.t.sol::_premiumBps has drifted from QueueDeployBase.PREMIUM_BPS -- the campaign is NOT running at the shipping phi"
         );
+
+        // THE THIRD MIRROR, found because fixing the second one exposed it. `Gas.t.sol` hardcoded
+        // 8_500 too, so every gas figure this project QUOTES -- the "+119% for every trader"
+        // caveat -- was measured at a phi the deploy script does not ship. Same family, third file.
+        uint256 gas = _uintAfter(
+            vm.readFile("test/queue/Gas.t.sol"),
+            "return ",
+            "function _premiumBps() internal view virtual override returns (uint256) {"
+        );
+        assertEq(
+            gas,
+            shipped,
+            "Gas.t.sol::_premiumBps has drifted from QueueDeployBase.PREMIUM_BPS -- the quoted gas overhead is measured at a phi we do not ship"
+        );
     }
 
     // ------------------------------------------------------------------------------- the plumbing

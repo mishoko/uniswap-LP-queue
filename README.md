@@ -68,7 +68,7 @@ Think of a shop with a **paid counter** and a **public warehouse**.
 - Around today's price (~±10%) sit **32 paid desks**. Desk 1 serves every customer. Desk 32 only serves a customer so large that 1–31 are already empty. You buy a desk. You pay rent to the desks behind you. Anyone can take your desk at the price you posted.
 - **Away from today's price**, anyone can put up cash the ordinary Uniswap way. No desk. No rent. Same old "everyone is hit a little."
 - Every desk that serves a customer hands **85% of the fee it just earned** to the desks still waiting behind it. That is the price of standing in front of them, and it is why desk 32 is worth funding at all.
-- The **customer** still walks in through any Uniswap router, pays the same 0.30% shop fee, and gets the same price. They never talk to the desks. They do pay **~133% more network compute** on a typical swap (162,766 vs 69,970 units). That is a longer checkout, not a worse bill of goods. On an L2 it is cents. Routers that optimise for gas may still skip this pool.
+- The **customer** still walks in through any Uniswap router, pays the same 0.30% shop fee, and gets the same price. They never talk to the desks. They do pay **~119% more network compute** on a typical swap (153,177 vs 69,970 units). That is a longer checkout, not a worse bill of goods. On an L2 it is cents. Routers that optimise for gas may still skip this pool.
 
 It is not sandwich protection. It is not a cheaper trade. It is not Uniswap-for-everyone. If you do not have professional desks that want *first fill* and other capital that wants to be *paid to wait*, this is the wrong product.
 
@@ -105,7 +105,7 @@ The customer on the other side of the pool does not see any of this. They trade 
 
 | Question | Honest answer |
 |---|---|
-| Is it well built? | **Yes, as accounting — and we keep proving that is not the same as correct.** 199 tests. Three real bugs were once found in code that had already passed 135. Most recently the mutation campaign ran **74/74 red, zero survivors**, while an expert panel reading the same source found **four more defects that sailed straight through it** — because the mutations had been written against the same mental model as the tests. One of them (`recenter()`) was deleted rather than patched, then rebuilt — and the rebuild passed all eight of its own tests while failing the invariant campaign, so it is **still not shipped**. This is not an audit. |
+| Is it well built? | **Yes, as accounting — and we keep proving that is not the same as correct.** 316 tests. Three real bugs were once found in code that had already passed 135. Most recently the mutation campaign ran **85/85 red, zero survivors**, while an expert panel reading the same source found **four more defects that sailed straight through it** — because the mutations had been written against the same mental model as the tests. One of them (`recenter()`) was deleted rather than patched, then rebuilt — and the rebuild passed all eight of its own tests while failing the invariant campaign, so it is **still not shipped**. This is not an audit. |
 | Is it interesting? | **Yes, as a missing product.** Uniswap has run one fill rule for seven years. Nobody has been able to price "being first." QUEUE is the first pool where that number exists on-chain. 0 of 662 prior hook submissions sold an ordering over LP capital. |
 | Does it make Uniswap better for ordinary users? | **No.** Same price, same fee, extra network cost, thinner book. The trader is not the customer of this product. |
 | Does it stop MEV / sandwiches? | **No, and claiming it does is mis-selling.** The hackathon theme is two halves. QUEUE can claim **sustainable liquidity** (the right desks can choose to stay). It cannot claim MEV protection. |
@@ -156,7 +156,7 @@ Every Uniswap pool today fills every cash provider a little, in proportion to si
 
 | Player | What they get | What they pay | Do they want this? |
 |---|---|---|---|
-| **Shopper (end user)** | Same tokens out, same 0.30% fee, any Uniswap router. They do not see the queue. | ~133% extra network compute on a typical swap. On an L2: cents. Not 48% of the trade. | **Usually no.** They get nothing extra. Aggregators may route around this pool for that reason. |
+| **Shopper (end user)** | Same tokens out, same 0.30% fee, any Uniswap router. They do not see the queue. | ~119% extra network compute on a typical swap. On an L2: cents. Not 48% of the trade. | **Usually no.** They get nothing extra. Aggregators may route around this pool for that reason. |
 | **Desk at the front** | Every small trade, 100%, on a fraction of the capital. Like paying for the specialist post on the NYSE instead of a microwave tower. | Rent to the desks behind, plus the risk that this trade was informed. | **Yes, if they can hedge elsewhere.** |
 | **Desk at the back / treasury** | Paid to wait. Only hit by trades large enough to empty everyone ahead. | Forgoes most fee income on quiet days. Large trades are often the informed ones — not "safer." | **Yes, only if rent actually shows up.** |
 | **Ordinary Uniswap LP (outside the paid desks)** | Normal Uniswap. No seat, no rent. Filled only when a trade is so large it has already walked through the paid desks. | Nothing extra. | **Yes, as optional extra depth.** They are not buying the product; they are using Uniswap next to it. |
@@ -378,7 +378,7 @@ one swap through each first:
 |---|---|---|
 | Plain Uniswap v4 pool, no hook | 69,970 | — |
 | QUEUE, priority premium off | 131,821 | **+88%** |
-| **QUEUE as shipped (φ = 8,500)** | **162,766** | **+133%** |
+| **QUEUE as shipped (φ = 8,500)** | **153,177** | **+119%** |
 
 So a typical trade through QUEUE costs about **2.3× a hookless pool**. Roughly half of that is the
 book existing at all; the rest is the priority premium — the mechanism that pays the back of the book
@@ -393,9 +393,9 @@ What it actually is:
 | Extra network cost? | **Yes.** Like a slightly longer checkout taking a slightly larger card-processing tick. |
 | Same at 1 seat as at 32? | **Yes, for a normal trade.** Head-only is flat (21-unit spread across the whole roster). The overhead is the cost of the pool *having a book at all*. |
 | Always 2.3×? | **No.** If a single trade is large enough to walk many seats, add ~14,777 units per extra seat. A full 32-seat walk is a ~997,000-unit transaction. That is a large, unusual trade — one that drains the entire book. |
-| Dollars? | This product belongs on an L2. ~93,000 extra units is **cents or less**, not 133% of the notional. On Ethereum mainnet it would be a real bill. **QUEUE is an L2 product.** |
+| Dollars? | This product belongs on an L2. ~93,000 extra units is **cents or less**, not 119% of the notional. On Ethereum mainnet it would be a real bill. **QUEUE is an L2 product.** |
 
-The honest commercial risk is not "customers pay 133% more." It is: **routers pick the pool with the same price and the lower network cost.** If they skip QUEUE, this pool does not see retail flow. Retail flow is the "good" flow the front seat wants. That loop is the adoption problem, and it is not solved.
+The honest commercial risk is not "customers pay 119% more." It is: **routers pick the pool with the same price and the lower network cost.** If they skip QUEUE, this pool does not see retail flow. Retail flow is the "good" flow the front seat wants. That loop is the adoption problem, and it is not solved.
 
 ---
 
@@ -445,7 +445,7 @@ The failure mode the pitch should actually fear: **the 32 collude, post a price 
 
 | Pros | Cons |
 |---|---|
-| Same price. Same trading fee. Any Uniswap router. They never touch the queue. | +133% network compute on a typical swap. A constant, not a slope. |
+| Same price. Same trading fee. Any Uniswap router. They never touch the queue. | +119% network compute on a typical swap. A constant, not a slope. |
 | | A very large trade that walks many seats costs more still. |
 | | **CLOSED.** This objection was real while the hook held a full-range position — roughly 1/200th the depth per dollar of a tight range. The hook now custodies a **concentrated band**, and its half-width is a deployment parameter rather than a constant, so depth at the money is a sizing decision the deployer makes. What remains true, and is stated below, is that the pool is only routed if it is genuinely the deepest venue for the pair. |
 
@@ -573,7 +573,7 @@ Measured against a **real** Uniswap v4 PoolManager and a real router. Never a mo
 
 - That a liquid market in seats will form. It does not exist. The "toxicity signal" is only as good as that market.
 - That professional LPs will pay for this versus running JIT bots on ordinary pools.
-- That routers will send flow to a pool whose typical swap costs +133% compute.
+- That routers will send flow to a pool whose typical swap costs +119% compute.
 - That the lease works when the front is worth less than zero. It cannot express that.
 
 Both "the head seat prices near zero" and "the head seat prices high" are results. Claiming to know which in advance is the thing that would make this uninteresting.
@@ -592,7 +592,7 @@ Both "the head seat prices near zero" and "the head seat prices high" are result
 | "Sweeps are free / O(1)." | They cost 14,777 compute units per seat walked. |
 | "This is price–time priority." | It is not. Rank goes to willingness to pay rent, not to arrival. |
 | "A queue is obviously better than pro-rata." | We do not know. That is the experiment. |
-| "The overhead is negligible." | It is +133% vs a bare pool on a typical swap (and +88% even with the premium off). The defensible claim is that it is a **constant a router can price**, not that it is small. |
+| "The overhead is negligible." | It is +119% vs a bare pool on a typical swap (and +88% even with the premium off). The defensible claim is that it is a **constant a router can price**, not that it is small. |
 
 The longer form of every row, with numbers, is in [`BUSINESS.md`](BUSINESS.md).
 

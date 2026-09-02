@@ -55,7 +55,7 @@ contract GasTest is QueueFixture {
     ///      the same class of mistake as measuring gas inside a test body (LAW 4). This is
     ///      `QueueDeployBase.PREMIUM_BPS`.
     function _premiumBps() internal view virtual override returns (uint256) {
-        return 8_500;
+        return 5_100; // QueueDeployBase.PREMIUM_BPS -- pinned by Hygiene.t.sol test_7_8
     }
 
     /// @dev The depths §B.9 tabulated, capped at `MAX_SEATS`. 50 is no longer reachable: Phase 3
