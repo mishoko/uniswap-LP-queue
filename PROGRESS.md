@@ -18,9 +18,56 @@ Newest entry first. Never delete an entry — supersede it.
 | 4 | Harberger rent variant ◀ **SUBMITTABLE** | **COMPLETE 2026-08-27** | **YES** — 125 tests, all 10 §D.6 criteria plus 16 added, **53 mutations red, 0 survivors** |
 | 5 | Gas + scale | **COMPLETE 2026-08-28** | **YES** — 135 tests, all 6 §D.7 criteria, **61 mutations red, 0 survivors**. The O(1) redesign is **NOT SHIPPED** (§B.11) |
 | 6 | Adversarial + invariant campaign | **COMPLETE 2026-08-28** | **YES** — 163 tests, all 5 §D.8 criteria, **66 mutations red, 0 survivors**. **FOUND AND FIXED THREE REAL BUGS** (PITFALLS 5.73, 5.74, 5.76/5.77) |
-| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-01** | **PARTLY** — 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
+| 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-02** | **PARTLY** — 224 tests. **THE MECHANISM IS SOUND AND THE BUSINESS CASE IS MISSING** — the 32 seats share one LP position, so they can at best TIE with not using the hook; the priority premium fixed the distribution (29/32 losing → 0/32) but creates no reason to participate. Next session is a BRAINSTORM for an outside payer, not a build. See `docs/research/seat-economics/VALUE.md`. Earlier note: 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## 2026-09-02 — the business question, asked plainly and answered honestly: there is no value proposition yet.
+
+**No production code changed. `forge test` → 224 passed, 0 failed, 1 skipped.** The deliverable is
+`docs/research/seat-economics/VALUE.md` and a handoff rewritten around finding a buyer.
+
+### The owner's question
+
+Paraphrased: *apart from the drawbacks, who actually makes money? Right now it looks like a burden
+for the end user and almost all seat takers lose or do not earn. Participants are not motivated.*
+
+**That reading is correct, and the arithmetic behind it is an identity rather than a measurement.**
+The 32 seats share ONE Uniswap position, so their returns sum to what one ordinary LP would have
+earned. The hook decides the split and cannot create a dollar. The ceiling for all 32 together is to
+TIE with not using the hook — and then they have paid a lock, contract risk, a closed roster and an
+unrollable band for the tie.
+
+**The priority premium shipped the day before fixed the DISTRIBUTION and not the PROPOSITION.** It
+took the book from 24–29 of 32 seats losing money to 0 of 32 — a real fix to a real defect — by
+equalising everyone to the pool average. Which is what they would have earned anyway.
+
+### What was established
+
+* Nine ideas have now been tried. Three tried to grow the pie (inventory recycling, toxic-flow
+  detection, an LVR-reducing curve) and all three are proven impossible. The other six redistribute
+  it. **Nothing tested so far brings money in from outside the pool.** Full table in `VALUE.md` §3.
+* The only structure that can motivate every seat is **an outside party paying rent for first fill,
+  for a reason that is not the seat's own trading P&L.** Then the seats behind earn pool return PLUS
+  rent, which beats an ordinary LP. That is not redistribution — it is an inflow.
+* Four candidate payers named and left UNTESTED: a protocol replacing liquidity-mining emissions
+  (strongest — named buyer, existing budget, acknowledged problem), a treasury working inventory, a
+  market maker buying deterministic turnover, and depth sold to the pair. `VALUE.md` §4.
+* **The swapper is pure cost** — same price, same fee, +133% network compute. The only honest case
+  for them is indirect and conditional on the above, and must not be claimed until it holds.
+
+### What this means
+
+The engineering is sound and adversarially tested; the mechanism now distributes fairly; the business
+case is missing, and no further mechanism design will produce it because the pie is fixed. The next
+session is a BRAINSTORM, not a build: two panel rounds against the four hypotheses, with a stop
+condition (a named payer, a budget line, a number, and a reason they cannot buy it cheaper) and an
+explicit licence to return a negative result.
+
+`README.md` and `BUSINESS.md` still read as though seat holders make money. They tie. Flagged in the
+handoff rather than silently patched, because the replacement text has to be true.
 
 ---
 
