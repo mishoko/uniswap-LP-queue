@@ -112,8 +112,15 @@ contract InvariantTest is QueueFixture {
     ///      a real defect every time it was pointed somewhere new, and it has never been pointed
     ///      here. It now runs at the SHIPPING φ, which is also the only configuration that exercises
     ///      `_settlePremium`, the payer exclusion, and the premium's half of `_syncSeat`.
+    ///      **THE LITERAL BELOW HAD ALREADY DRIFTED, AND ITS COMMENT ASSERTED THE THING THAT WAS
+    ///      FALSE.** It read `return 8_500; // QueueDeployBase.PREMIUM_BPS` while the deploy script
+    ///      held 7,900 — so the campaign was NOT running at the shipping φ, in the one place that
+    ///      claimed to. It is now 5,100 (PITFALLS 5.178: the constant was re-derived on the premium
+    ///      basis this contract actually implements). `Hygiene.t.sol` `test_7_8` pins the two
+    ///      against each other by reading both source files, because a comment naming its source is
+    ///      exactly the interlock that failed here — prose is not an interlock (PITFALLS 5.86).
     function _premiumBps() internal view virtual override returns (uint256) {
-        return 8_500; // QueueDeployBase.PREMIUM_BPS
+        return 5_100; // QueueDeployBase.PREMIUM_BPS -- pinned by Hygiene.t.sol test_7_8
     }
 
     function setUp() public {

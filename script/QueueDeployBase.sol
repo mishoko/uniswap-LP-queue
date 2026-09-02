@@ -117,23 +117,56 @@ abstract contract QueueDeployBase is CommonBase {
     ///          conversion fee and price impact at the widths that actually compete. The front stops
     ///          beating that alternative at φ = 8,312.  =>  φ <= 8312
     ///
-    ///      Intersection [7455, 8312], midpoint **7,900**. It also sits inside the 45%-vol window
-    ///      [4114, 8921], so a more volatile pair widens the window downward and 7,900 stays valid.
-    ///      A pair calmer than 25% vol raises the lower bound and is the untested edge.
+    ///      **⚠ THE TWO BOUNDS ABOVE (7,455 and 8,312) ARE SUPERSEDED. THEY WERE MEASURED ON A
+    ///      PREMIUM WEIGHTING THIS CONTRACT REPLACED IN PHASE 8 — PITFALLS 5.178.** `sim.py:66`
+    ///      defaults `PREM_WEIGHT = 'inventory'` (the pot divided over seats' POST-FILL holdings of
+    ///      the outgoing token) and `report_shipping.py` never overrode it. This hook divides by
+    ///      CONTRIBUTED LIQUIDITY WITH THE PAYERS EXCLUDED — `_claims` reads `s.liquidity`
+    ///      (`QueueHook.sol:1356`), the denominator is `standingL - excludedL` (`:1154`), and
+    ///      `_settlePremium` advances the payers' marks so they do not claim the pot they generated.
+    ///      So the intersection [7455, 8312] whose midpoint gave 7,900 describes a rule this
+    ///      contract does not implement.
     ///
-    ///      **THE SENSITIVITY THAT DECIDES THE PRODUCT, stated here because it is not a detail.**
+    ///      **RE-MEASURED 2026-09-02 on the contract's own basis** (`results-shipping-basis.txt`,
+    ///      produced by `report_shipping_basis.py`, which imports `report_shipping.py` UNCHANGED and
+    ///      differs from it in the weight vector and nothing else):
+    ///
+    ///          regime     old window (inventory)     NEW window (this contract's basis)
+    ///          BENIGN          [7455, 8312]                   [4542, 5670]
+    ///          NORMAL          [4114, 8921]                   [2560, 6251]
+    ///          TOXIC              EMPTY                          EMPTY  (s2 never clears the LP)
+    ///
+    ///      Intersection **[4542, 5670]**, midpoint 5,106, rounded to **5,100** by the same
+    ///      convention that rounded 7,883.5 to 7,900. The old value sat **2,230 bps above the top
+    ///      of the real window**: at 7,900 on this contract's own rule the front seat in BENIGN is
+    ///      below the pro-rata LP (crossover 4,317), below the static wing (5,498) AND below the
+    ///      managed wing (5,670) — every alternative at once, which is not what the derivation
+    ///      above intends.
+    ///
+    ///      **THE CONTROL THAT MAKES THE RE-MEASUREMENT BELIEVABLE:** at φ = 0 no premium is
+    ///      withheld and the weight vector is never read, so the φ = 0 column MUST be identical
+    ///      between the two runs. It is, in every row of every table, both sides, all three regimes.
+    ///
+    ///      **AND THE DIVERGENCE IS NOT ALL BAD NEWS.** This contract's real weighting is
+    ///      materially BETTER at moving value backward than the basis we had been measuring: all of
+    ///      seats 2-5 clear the LP from φ = 4,542 in BENIGN (was 7,455) and 2,560 in NORMAL (was
+    ///      4,114). Less premium buys more subordination than we thought.
+    ///
+    ///      **THE SENSITIVITY THAT DECIDES THE PRODUCT, stated here because it is not a detail, and
+    ///      IT SURVIVES THE RE-MEASUREMENT UNCHANGED — which is itself a consistency check.**
     ///      Hold the front to the PASSIVE-LP bar instead of the managed-wing bar and it falls below
-    ///      at φ = 6,397 — below the 7,455 the back needs — so **both windows are empty and no
-    ///      shipping constant exists.** The window is non-empty only because re-anchoring is worth
-    ///      something to the front. What it COSTS to replicate is measured; what a buyer will PAY
-    ///      for it is not, and no simulator can say.
+    ///      at φ = 4,317 — below the 4,542 the back needs — so **both windows are empty and no
+    ///      shipping constant exists.** (On the old basis the same comparison was 6,397 against
+    ///      7,455.) The window is non-empty only because re-anchoring is worth something to the
+    ///      front. What it COSTS to replicate is measured; what a buyer will PAY for it is not, and
+    ///      no simulator can say.
     ///
     ///      TOXIC is excluded by calendar weight rather than by deletion: a toxic band dies in ~1.4
     ///      days against ~61 benign, so it is ~1.7% of the calendar even at equal likelihood.
     ///
-    ///      Reproduce: `python3 docs/research/seat-economics/report_shipping.py`. The sweep is
-    ///      checked in — which, before 2026-09-02, this comment claimed while it was not.
-    uint256 internal constant PREMIUM_BPS = 7_900;
+    ///      Reproduce: `python3 docs/research/seat-economics/report_shipping_basis.py`. Both sweeps
+    ///      are checked in, so the divergence can be diffed rather than taken on trust.
+    uint256 internal constant PREMIUM_BPS = 5_100;
 
     /// @dev The canonical deterministic CREATE2 proxy. Verified to have code on Unichain Sepolia.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;

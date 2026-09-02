@@ -11,6 +11,11 @@ fs_permissions = [
     {access = "read-write", path = ".forge-snapshots/"},
     {access = "read", path = "src/"},
     {access = "read", path = "frontend/"},
+    # test_7_8 reads both source files to pin the campaign's phi against the deploy
+    # script's PREMIUM_BPS. They had already drifted (8,500 vs 7,900) behind a comment
+    # that named its source and was wrong about it -- PITFALLS 5.86: prose is not an interlock.
+    {access = "read", path = "script/"},
+    {access = "read", path = "test/"},
 ]
 libs = ["lib"]
 out = "out"

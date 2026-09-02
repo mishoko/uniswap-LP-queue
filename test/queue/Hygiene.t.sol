@@ -59,7 +59,81 @@ contract HygieneTest is Test {
         );
     }
 
+    /// @notice test_7_8 — the invariant campaign runs at the φ the deploy script actually ships.
+    ///
+    /// @dev **THIS IS AN INTERLOCK FOR A DRIFT THAT ALREADY HAPPENED AND WENT UNNOTICED FOR TWO
+    ///      PHASES.** `Invariant.t.sol::_premiumBps` read `return 8_500; //
+    ///      QueueDeployBase.PREMIUM_BPS` while `QueueDeployBase` held `7_900`. The comment NAMED its
+    ///      source and was wrong about it, so the one campaign claiming to run at the shipping φ was
+    ///      running at a φ nothing ships — and the docblock two lines above it made exactly that
+    ///      claim. That is the one-rule-two-places family (PITFALLS 5.37, 5.50, 5.52 twice, 5.73,
+    ///      5.125, 5.168, 5.176) with a comment standing in for the interlock, which is precisely
+    ///      what 5.86 says does not work: prose is not an interlock.
+    ///
+    ///      It reads both SOURCE FILES rather than comparing two Solidity constants, because the
+    ///      deploy constant is `internal` and the point is to catch an edit to either literal. A
+    ///      test that imported the constant would only prove the two agree at compile time in the
+    ///      one file that already imports it.
+    ///
+    ///      Reads FAIL if: either literal is edited without the other. Verified capable of firing
+    ///      by temporarily changing one — it names both values and both files.
+    function test_7_8_theCampaignRunsAtTheShippedPremium() public view {
+        uint256 shipped = _uintAfter(vm.readFile("script/QueueDeployBase.sol"), "PREMIUM_BPS = ");
+        // ANCHOR ON THE FUNCTION SIGNATURE, NOT ON THE NAME. The first draft anchored on
+        // `_premiumBps` and picked up `return 8_500;` out of the DOCBLOCK that quotes the old
+        // drifted line -- reading a number from a comment while the live binding said something
+        // else. That is exactly what `_assertSelector` below already warns about, and it is why
+        // this test went red on its first run for a reason that was real but not the one intended.
+        uint256 campaign = _uintAfter(
+            vm.readFile("test/queue/Invariant.t.sol"),
+            "return ",
+            "function _premiumBps() internal view virtual override returns (uint256) {"
+        );
+        assertEq(
+            campaign,
+            shipped,
+            "Invariant.t.sol::_premiumBps has drifted from QueueDeployBase.PREMIUM_BPS -- the campaign is NOT running at the shipping phi"
+        );
+    }
+
     // ------------------------------------------------------------------------------- the plumbing
+
+    /// @dev Parses `<marker><digits with optional _ separators>` and returns the number. Solidity
+    ///      literals here are written `5_100`, so underscores are skipped rather than rejected.
+    function _uintAfter(string memory src, string memory marker) internal pure returns (uint256) {
+        return _uintAt(bytes(src), _find(bytes(src), bytes(marker), 0), bytes(marker).length, marker);
+    }
+
+    /// @dev Same, but the marker is searched for only AFTER `anchor`, so a generic marker like
+    ///      `return ` can be pinned to one function.
+    function _uintAfter(string memory src, string memory marker, string memory anchor) internal pure returns (uint256) {
+        bytes memory hay = bytes(src);
+        uint256 a = _find(hay, bytes(anchor), 0);
+        require(a != type(uint256).max, string.concat("anchor not found: ", anchor));
+        return _uintAt(hay, _find(hay, bytes(marker), a), bytes(marker).length, marker);
+    }
+
+    function _uintAt(bytes memory hay, uint256 at, uint256 skip, string memory marker)
+        internal
+        pure
+        returns (uint256 v)
+    {
+        require(at != type(uint256).max, string.concat("marker not found: ", marker));
+        uint256 i = at + skip;
+        uint256 digits;
+        while (i < hay.length) {
+            uint8 c = uint8(hay[i]);
+            if (c == 0x5f) {
+                i++;
+                continue;
+            } // '_'
+            if (c < 0x30 || c > 0x39) break;
+            v = v * 10 + (c - 0x30);
+            digits++;
+            i++;
+        }
+        require(digits != 0, string.concat("no digits after marker: ", marker));
+    }
 
     /// @dev Matches the LIVE BINDING `const <name> = '0x........'`, not merely the presence of the
     ///      selector somewhere in the file — which would pass while the constant in use was wrong
