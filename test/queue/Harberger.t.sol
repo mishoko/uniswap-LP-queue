@@ -458,9 +458,18 @@ contract HarbergerTest is QueueFixture {
         assertEq(escrowed, escBefore - due, "the withheld rent is being double-counted as escrow");
         _checkInvariantR("4.3 held");
 
-        // Now give the tail some currency0 and settle again. The held pot is folded in and paid out
+        // Now make the tail ELIGIBLE and settle again. The held pot is folded in and paid out
         // together with the new charge — the identity spans both settlements.
-        _addTo(DAVE, 3, 500e18, 0);
+        //
+        // **ELIGIBILITY IS CONTRIBUTED DEPTH, NOT A currency0 BALANCE, AND THE FIXTURE SAYS SO
+        // EXPLICITLY.** This line used to be `_addTo(DAVE, 3, 500e18, 0)` — a single-token deposit,
+        // which under the old `a0` weighting made DAVE the whole denominator. Rent is now weighted
+        // by the depth a seat contributed and has not withdrawn, and an in-range single-token
+        // deposit mints essentially NO liquidity, so that line would leave the pot held for a second
+        // time and this test would assert the release of something never released. Two tokens mint
+        // real depth, which is what "somebody is standing behind you" now means.
+        _addTo(DAVE, 3, 500e18, 500e18);
+        assertGt(hook.seatLiquidity(3), 0, "the tail still contributes no depth: it is not an eligible recipient");
         vm.warp(block.timestamp + 3_153_600);
 
         uint256 due2 = hook.rentDue(0);
@@ -1170,10 +1179,18 @@ contract HarbergerTest is QueueFixture {
 
     // ============================ 4.14 — a flash loan cannot capture rent it was not there for
 
-    /// @dev The distribution weights read `a0` AT SETTLEMENT, and funding a seat is the only way a
-    ///      holder can raise that number at will. `addToSeat` therefore settles every seat ahead
-    ///      FIRST. Without that line the tail can deposit, poke, and withdraw in one transaction —
-    ///      with borrowed money, so the share goes to almost everything.
+    /// @dev The distribution weights read the seat's CONTRIBUTED DEPTH at settlement, and funding a
+    ///      seat is the only way a holder can raise that number at will. `addToSeat` therefore
+    ///      settles every seat ahead FIRST. Without that line the tail can deposit, poke, and
+    ///      withdraw in one transaction — with borrowed money, so the share goes to almost
+    ///      everything.
+    ///
+    ///      **THE WEIGHT USED TO BE `a0` AND THE CHANGE MADE THIS ATTACK STRICTLY HARDER**, which is
+    ///      worth recording as a security property rather than leaving as a silently-weaker test:
+    ///      an in-range SINGLE-TOKEN deposit mints essentially no liquidity, so the cheapest form of
+    ///      this grab — borrow one token, deposit, poke, withdraw — now moves no weight whatsoever.
+    ///      The grabber must post BOTH tokens and actually add depth, and under the withdrawal rule
+    ///      taking it back out again costs the seat its rank. See `_rentGrabAttempt`.
     function test_4_14_flashLoanCannotCaptureAccruedRent() public {
         // Production.
         uint256 honest = _rentGrabAttempt(true);
@@ -1237,11 +1254,21 @@ contract HarbergerTest is QueueFixture {
         // The grabber is seat 1, which holds 60e18 of the 960e18 behind the payer — 6.25% of the
         // pot honestly. A seat that already dominates the weights has nothing to gain from a loan,
         // so choosing the SMALL tail seat is what makes the control demonstrate anything at all.
+        // **THE BORROWED DEPOSIT IS TWO-TOKEN, AND THAT IS NOT COSMETIC — IT IS WHAT KEEPS THIS
+        // CONTROL ABLE TO FIRE.** It used to be `(100_000e18, 0)`, because the weights read `a0`
+        // and a single-token currency0 deposit moved them enormously. Since rent is weighted by
+        // CONTRIBUTED DEPTH, an in-range single-token deposit mints essentially no liquidity, so
+        // that deposit no longer moves the weight at all: measured, the grab returned EXACTLY the
+        // honest share (51369863013698630 both ways), i.e. the attack died and the control silently
+        // stopped demonstrating anything. **A control that can no longer fail is not a control**
+        // (LAW 5), so it is re-armed against the attack that still exists rather than relaxed to fit
+        // the one that does not. A two-token deposit mints real liquidity, which is real weight,
+        // which is the thing `_settleAhead` has to be standing in front of.
         uint256 before = _escrow(1);
-        _fund(BOB, 100_000e18, 0);
+        _fund(BOB, 100_000e18, 100_000e18);
         vm.startPrank(BOB);
-        if (settleAhead) hook.addToSeat(1, 100_000e18, 0);
-        else NoSettleAheadHook(payable(address(hook))).addToSeatNoSettle(1, 100_000e18, 0);
+        if (settleAhead) hook.addToSeat(1, 100_000e18, 100_000e18);
+        else NoSettleAheadHook(payable(address(hook))).addToSeatNoSettle(1, 100_000e18, 100_000e18);
         hook.settleRent(0);
         vm.stopPrank();
         gained = _escrow(1) - before;

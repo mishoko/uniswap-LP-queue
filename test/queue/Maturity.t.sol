@@ -1009,34 +1009,84 @@ contract MaturityTest is QueueFixture {
     ///      100% currency0 and the weights are real. That is the whole point of running this in both
     ///      directions: the rent mechanism is proportional in one terminal state and degenerate in
     ///      the mirrored one, and a single-direction test reports whichever half it happens to pick.
-    function test_M9b_aDustWeightTakesTheWholeRentAboveTheBand() public {
+    /// @notice **INVERTED 2026-09-02. THIS TEST USED TO ASSERT THE DEFECT AS AN IDENTITY** — that a
+    ///         seat holding a few wei of currency0 took the ENTIRE rent pot above the band. The
+    ///         executed defect is kept as the evidence the fix was needed, and the assertion now
+    ///         pins the fix instead: rent is split by CONTRIBUTED DEPTH, which front-first
+    ///         allocation cannot destroy, so the dust balance buys nothing.
+    ///
+    /// @dev The fixture is deliberately unchanged: the same terminal state, the same seat, the same
+    ///      dust. It is the WEIGHT that moved, so keeping the state identical is what makes the
+    ///      before/after comparable at all.
+    ///
+    ///      The claim is an IDENTITY, not a bound (AGENTS §3b): the seat receives exactly the pot
+    ///      scaled by its share of the depth standing behind the payer, computed from the
+    ///      CONTRACT's own `seatLiquidity`, never from a fixture-side quantity (PITFALLS 5.34).
+    function test_M9b_aDustWeightTakesOnlyItsDepthShareAboveTheBand() public {
         _matureUp();
 
         // Establish the state first, or the claim below is about a fixture nobody can place.
         uint256 dusty = type(uint256).max;
         uint256 weight;
+        uint256 depthBehind;
         for (uint256 i = 1; i < 5; i++) {
             uint256 id = hook.idAtRank(i);
             (uint256 a0, uint256 a1) = hook.seat(id);
             weight += a0;
+            depthBehind += hook.seatLiquidity(id);
             if (a0 != 0 && dusty == type(uint256).max) dusty = id;
             assertGt(a1, 1e17, "a seat behind the payer holds no real capital at all");
         }
         assertTrue(
             dusty != type(uint256).max, "no seat behind holds any currency0: this is the w == 0 case, not this one"
         );
-        assertLt(weight, 1_000, "the recipients' total weight is not dust: this test proves nothing");
+        // THE STATE THAT USED TO BE FATAL, asserted so the test still proves it was reached.
+        assertLt(weight, 1_000, "the recipients' currency0 weight is not dust: this test proves nothing");
+        assertGt(depthBehind, 0, "nobody behind contributes depth: this is the w == 0 case, not this one");
 
-        (, uint256 e0,,,) = hook.leaseOf(dusty);
+        uint256[4] memory before_;
+        for (uint256 i = 1; i < 5; i++) {
+            (, before_[i - 1],,,) = hook.leaseOf(hook.idAtRank(i));
+        }
         (uint256 credited, uint256 unalloc) = _chargeRentAtRankZero();
-        (, uint256 e1,,,) = hook.leaseOf(dusty);
 
         assertEq(unalloc, 0, "the rent was held rather than distributed: wrong branch");
-        // THE IDENTITY: the dust holder took the WHOLE pot, not merely most of it.
-        assertEq(e1 - e0, credited, "the dust holder did not take the entire rent pot");
         assertGt(credited, 1e17, "nothing happened: no rent was charged, this test proves nothing");
+
+        // **THE EXACT IDENTITY IS THE SUM, NOT THE PER-SEAT FLOOR.** `Allocation`'s remainder line
+        // closes the split to the wei against the total, so one seat absorbs the residue of four
+        // floored divisions — measured here as 2 wei. Asserting a per-seat `floor(pot*Li/W)` would
+        // therefore be WRONG by exactly that residue, and widening it to an approximate match would
+        // be a tolerance chosen to pass. So: the SUM is pinned exactly, each seat is pinned to its
+        // floor from BELOW, and the whole residue is bounded by what the floors actually left over —
+        // every one of those three numbers comes from the CONTRACT (`seatLiquidity`), never from a
+        // fixture-side measurement (PITFALLS 5.34).
+        uint256 paid;
+        uint256 floors;
+        uint256 got;
+        uint256 gotFloor;
+        for (uint256 i = 1; i < 5; i++) {
+            uint256 id = hook.idAtRank(i);
+            (, uint256 e1,,,) = hook.leaseOf(id);
+            uint256 g = e1 - before_[i - 1];
+            uint256 f = (credited * hook.seatLiquidity(id)) / depthBehind;
+            assertGe(g, f, "a seat behind was paid LESS than its floored depth share");
+            paid += g;
+            floors += f;
+            if (id == dusty) {
+                got = g;
+                gotFloor = f;
+            }
+        }
+        assertEq(paid, credited, "the distribution did not sum to the pot");
+        assertLe(got - gotFloor, credited - floors, "one seat absorbed more than the whole floor residue");
+
+        // THE INVERSION. This assertion was `assertEq(got, credited)` — the ENTIRE pot to the seat
+        // holding a few wei of currency0. It now cannot exceed a quarter of it.
+        assertLt(got, credited, "the dust holder still took the entire rent pot: the weight did not move");
         console.log("currency0 weight (wei)", weight);
-        console.log("rent captured by it   ", credited);
+        console.log("pot                   ", credited);
+        console.log("captured by dust seat ", got);
     }
 
     /// @notice The `w == 0` branch itself, reached deliberately: charge the TAIL, which has nobody
@@ -1451,9 +1501,7 @@ contract MaturityTest is QueueFixture {
         bytes memory reason = _expectSwapRevert(
             false, 1e20, bytes4(keccak256("QueueUnderflow(uint256)")), "the control did NOT brick: test_M7f cannot fail"
         );
-        assertApproxEqAbs(
-            uint256(bytes32(_word(reason))), owed0, 1_000, "the shortfall is not the stranded premium"
-        );
+        assertApproxEqAbs(uint256(bytes32(_word(reason))), owed0, 1_000, "the shortfall is not the stranded premium");
     }
 
     /// @notice **THE STANDING GUARD ON THE INVARIANT L BRANCH. Delete line ~1987 of

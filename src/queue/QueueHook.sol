@@ -2648,14 +2648,44 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         uint256 ord = order;
         uint256 r = rankOfId(payerId);
 
+        // **WEIGHTED BY CONTRIBUTED DEPTH, NOT BY `a0`, AND THAT IS A CORRECTNESS FIX.**
+        //
+        // Rent used to be split pro-rata by each recipient's `currency0` BALANCE. That is the one
+        // quantity front-first allocation is designed to destroy: above the band every seat has
+        // been converted out of currency0, so the weights collapse to dust and **a seat holding ONE
+        // WEI of currency0 took the ENTIRE pot** — measured, as an identity rather than a bound, by
+        // `test_M9b`. Below the band the identical code paid out perfectly, because there every
+        // seat is 100% currency0; a single-direction test reports whichever half it happens to pick.
+        //
+        // `fundRent`'s own docblock already argues against `a0` for the rent SOURCE. Nobody had
+        // applied the same argument to the SINK. `liquidity` is the depth the seat contributed and
+        // has not withdrawn — it survives conversion, which is exactly why the premium was moved
+        // onto it in Phase 8 (PITFALLS 5.124/5.126).
+        //
+        // A `w == 1` special case was considered and REJECTED: it patches the symptom, no
+        // principled threshold exists, and an attacker simply sits one wei above it.
+        //
+        // **UNITS: the split is now (liquidity ratio) x tokens, a cross-dimension divide.** That is
+        // the 5.124 bug class, so it is tested at 18/6 decimals in BOTH directions rather than at
+        // the 18/18 fixture that hid the identical error in `_accruePremium` (LAW 1 as amended).
+        // The shape is precedented, not novel: `_accruePremium` already divides a token pot by a
+        // liquidity weight.
+        //
+        // **CORRELATED FAILURE, stated because it is a real cost of this fix:** rent and premium
+        // are now weighted by the same kind of quantity, so one wrong `standingL`-shaped number
+        // corrupts BOTH streams at once, where before an error in one was visible against the
+        // other. `invariant_I9` is the guard that makes that acceptable, and it had to land first.
         uint256 w;
         for (uint256 i = r + 1; i < n; i++) {
-            w += q[_idAt(ord, i)].a0;
+            w += q[_idAt(ord, i)].liquidity;
         }
 
         if (w == 0) {
-            // Nobody behind holds any currency0. The money has LEFT the payer's escrow, so it must
-            // be accounted somewhere or the balance identity breaks and a wei is stranded.
+            // Nobody behind CONTRIBUTED ANY DEPTH — every seat behind the payer has withdrawn its
+            // liquidity, which is the honest reading of "there is nobody to pay". (It used to mean
+            // "nobody behind holds currency0", which above the band was true of a fully funded
+            // roster.) The money has LEFT the payer's escrow, so it must be accounted somewhere or
+            // the balance identity breaks and a wei is stranded.
             escrowTotal -= amount;
             unallocatedRent0 = pot;
             emit RentSettled(payerId, amount, 0, pot);
@@ -2665,9 +2695,11 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         Allocation.State memory st = Allocation.init(pot, w);
         for (uint256 i = r + 1; i < n && st.remaining > 0; i++) {
             uint256 id = _idAt(ord, i);
-            uint256 bal = q[id].a0;
+            uint256 bal = q[id].liquidity;
             if (bal == 0) continue;
-            // `(0, 0)` — rent is split pro-rata by balance and has no price curve. See `Rent`.
+            // `(0, 0)` — rent is split pro-rata by contributed depth and has no price curve. The
+            // weight loop above and this one must read the SAME field: a numerator and denominator
+            // that disagree is precisely the 5.124 defect, and this rule lives in two places.
             (, uint256 give) = Allocation.step(st, bal, 0, 0);
             lease[id].escrow += give;
         }
