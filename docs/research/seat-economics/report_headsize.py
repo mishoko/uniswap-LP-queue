@@ -37,10 +37,16 @@ IF IT IS NOT MONOTONE IN c1, THAT REFUTES THE MODEL OF THE MECHANISM AND IS THE 
 --------------------------------------------------------------------------------------------------
 WHAT THIS FILE DOES *NOT* MODEL, AND IT IS A WHOLE TRANSFER CHANNEL
 --------------------------------------------------------------------------------------------------
-`sim.py` HAS NO RENT.  Zero references; grepped.  The deployed hook charges Harberger rent at
-`RENT_BPS = 1_000` (10% per `RENT_PERIOD = 365 days`) on each seat's posted self-price, and that
-rent is a SECOND transfer channel between the seats which no economic number in this directory --
-this file included -- contains.  As of this session the rent's DIRECTION has been reversed in the
+`sim.py` HAS NO RENT.  Verified here, not taken on trust: `grep -ic rent sim.py` returns 1 and
+that single hit is the substring inside the word "CURRENT" on line 202.  The simulator models the
+premium and nothing else.
+
+The deployed hook, by contrast, charges Harberger rent on each seat's posted self-price.  The rate
+was reported to this file's author as `RENT_BPS = 1_000` (10% per `RENT_PERIOD = 365 days`); it is
+attributed rather than asserted, because `src/` was off-limits while a mutation campaign held a
+mutant on disk (PITFALLS 5.79) and this author therefore did not read the constant.  Whatever its
+exact value, rent is a SECOND transfer channel between the seats which no economic number in this
+directory -- this file included -- contains.  As of this session the rent's DIRECTION has been reversed in the
 contract so that it flows FORWARD: the back seats pay the front seat for the subordination it
 supplies.  That runs OPPOSITE to the premium.
 
@@ -132,8 +138,12 @@ MW = (0.01, 0.02, 0.05)
 GAS = {"L2": 0.02, "L1": 12.00}
 
 # c1 as EXACT rationals so the weight vector is integral and c1 = 1/3 reproduces SHIP bit for bit
-HEADS = (Fraction(1, 3), Fraction(2, 5), Fraction(9, 20), Fraction(1, 2),
-         Fraction(11, 20), Fraction(3, 5), Fraction(2, 3))
+HEADS = (Fraction(1, 3), Fraction(7, 20), Fraction(3, 8), Fraction(2, 5), Fraction(9, 20),
+         Fraction(1, 2), Fraction(11, 20), Fraction(3, 5), Fraction(2, 3))
+# 35% and 37.5% were added AFTER the first seven ran, because the coarse grid only bounded the
+# minimum viable head share to (33.3%, 40%] and the head share IS the subsidiser's capital
+# requirement -- every point of it is treasury money locked, so the minimum is the business
+# question, not a rounding detail.  Stages are cached per-c1, so this cost two stages, not nine.
 NS = tuple(int(x) for x in os.environ.get("HS_NS", "5").split(","))
 CACHE = os.environ.get("HS_CACHE", "/tmp/queue-headsize")
 NPROC = int(os.environ.get("HS_PROCS", "4"))       # a mutation campaign owns the other cores
@@ -313,6 +323,7 @@ class Rep:
             with os.fdopen(fd, "w") as f:
                 f.write(body)
             os.replace(tmp, path)
+            os.chmod(path, 0o644)   # mkstemp makes 0600; match the other results-*.txt
         except BaseException:
             if os.path.exists(tmp):
                 os.unlink(tmp)
@@ -358,6 +369,33 @@ def published_phi0():
                 out[(cur, k)] = float(t.split()[1])
             except ValueError:
                 pass
+    return out
+
+
+def published_crossovers():
+    """The published per-seat crossovers and the published front bound.
+
+    STRONGER THAN THE phi = 0 COLUMN, and the reason is worth stating.  The published file prints
+    phi = 0 returns to ONE decimal, so that control can only ever agree to 0.05pp.  These are
+    LINEARLY INTERPOLATED crossover phis printed to the unit -- 4 or 5 significant figures each --
+    and each one is a function of the whole mean curve, the LP bar and the wing bar together.
+    Agreeing on twelve of them to the unit is much harder to do by accident than agreeing on a
+    rounded column, so this is the control that actually pins the harness."""
+    out = {}
+    if not os.path.exists(PUB):
+        return out
+    cur = None
+    for line in open(PUB).read().splitlines():
+        t = line.strip()
+        if t.startswith("--- "):
+            cur = t[4:].split()[0]
+        if cur and "first phi at which each seat beats the LP" in t:
+            for tok in t.split("->", 1)[1].replace(":", " ").split("  "):
+                q = tok.split()
+                if len(q) >= 2 and q[0].startswith("s"):
+                    out[(cur, q[0])] = " ".join(q[1:])
+        if cur and "rank 1 falls below the managed wing" in t:
+            out[(cur, "front")] = t.split("=")[-1].strip()
     return out
 
 
@@ -425,8 +463,10 @@ def main():
     r(f"  {NPROC} worker processes (a mutation campaign owned the rest of the machine).")
     r()
     r("  *** EVERY WINDOW IN THIS FILE IS RENT-FREE. ***  sim.py models no Harberger rent at all")
-    r("  (grepped: zero references), while the deployed hook charges RENT_BPS = 1_000 per")
-    r("  RENT_PERIOD on each seat's self-price and -- as of this session -- pays it FORWARD, from")
+    r("  (verified: its only 'rent' match is the substring in 'CURRENT'), while the deployed hook")
+    r("  charges Harberger rent on each seat's self-price -- reported as RENT_BPS = 1_000 per")
+    r("  RENT_PERIOD, attributed not verified, since src/ was off-limits to this author during a")
+    r("  live mutation campaign -- and -- as of this session -- pays it FORWARD, from")
     r("  the back seats to the front.  That is a second transfer channel running OPPOSITE to the")
     r("  premium.  These windows are therefore a LOWER bound on what the front can bear and an")
     r("  UPPER bound on what the back keeps.  A back seat clearing the LP by less than its rent")
@@ -505,7 +545,38 @@ def main():
         ok2 = ok2 and a
         r(f"  {rn:>8} {ws:>20} {p:>20} {('YES' if a else 'NO'):>8}")
     r()
-    r("  " + ("ALL THREE REPRODUCE -- the harness is the published harness" if ok2 else
+    r("  AND THE TWELVE UNDERLYING CROSSOVERS, which is the sharper form of the same control:")
+    r("  the phi = 0 column above is printed to one decimal and can only agree to 0.05pp, whereas")
+    r("  each crossover below is an interpolated phi to the unit -- a function of the whole mean")
+    r("  curve, the LP bar and the wing bar at once.  Twelve of those agreeing to the unit is not")
+    r("  something that happens by accident.")
+    r()
+    pc = published_crossovers()
+    r(f"  {'regime':>8} {'which':>7} {'computed':>12} {'published':>12} {'agree':>8}")
+    ok2b, n2b = True, 0
+    for rn, _, _ in REG:
+        R = m(n0, Fraction(1, 3), rn)
+        _, mwv, _ = bar(n0, Fraction(1, 3), rn)
+        rows = [("front",) + cross(PHIS, R[:, 0], mwv)]
+        for i in range(1, n0):
+            rows.append((f"s{i+1}",) + cross(PHIS, R[:, i], LPm[rn]))
+        for nm_, v, st in rows:
+            comp = ("NEVER" if st == 'never' else
+                    ("all phi" if st == 'always' and nm_ != "front" else
+                     ("never in range (still above at phi=9500)" if st == 'always'
+                      else f"{v:.0f}")))
+            p = pc.get((rn, nm_))
+            if p is None:
+                continue
+            n2b += 1
+            a = comp == p
+            ok2b = ok2b and a
+            r(f"  {rn:>8} {nm_:>7} {comp:>12} {p:>12} {('YES' if a else 'NO'):>8}")
+        r()
+    r(f"  {n2b} published crossovers checked, all reproduced: {'YES' if ok2b else 'NO'}")
+    r()
+    r("  " + ("ALL THREE WINDOWS AND EVERY CROSSOVER REPRODUCE -- the harness is the published "
+             "harness" if (ok2 and ok2b) else
              "FAIL -- STOP: this run is not comparable to the published file"))
     if not ok2:
         r("  *** THE REPRODUCTION CONTROL FAILED.  Report this, do not continue past it. ***")
@@ -769,6 +840,41 @@ def main():
     else:
         r("  There is no recommended (c1, phi): section 6 found no non-empty intersection.")
         r()
+
+    # ------------------------------------------- the closed form (NOT an independent check)
+    r.rule("8b.  THE CLOSED FORM -- why the head share is the lever, algebraically")
+    r("  PITFALLS 5.178 records the one quantity immune to the premium-basis question:")
+    r()
+    r("      the back's excess per unit of back capital  =  c1 * (LP - r1) / (1 - c1)")
+    r()
+    r("  It follows from sum_i c_i r_i = LP -- the premium is a transfer INSIDE the book, so it")
+    r("  cannot change the pool's total -- and therefore holds under ANY weighting.")
+    r()
+    r("  READ THIS AS ALGEBRA, NOT AS EVIDENCE.  It is a rearrangement of the SAME identity that")
+    r("  section 9 checks, so the agreement below is guaranteed by section 9 passing and could not")
+    r("  read FAIL for any reason section 9 would not already have caught.  LAW 5: a control whose")
+    r("  baseline is derived from the same quantity as its numerator is not a control.  It is")
+    r("  printed because it EXPLAINS the mechanism -- the factor c1/(1 - c1) goes from 0.50 at")
+    r("  c1 = 33.3% to 2.00 at c1 = 66.7%, a 4x amplification of whatever the head gives up --")
+    r("  and not because it corroborates anything.")
+    r()
+    for n in NS:
+        r(f"  --- N={n} ---   at phi = {PHI_T}")
+        r(f"  {'regime':>8} {'c1':>7} {'c1/(1-c1)':>10} {'LP - r1':>9} {'predicted':>10}"
+          f" {'actual back':>12} {'resid pp':>10}")
+        for rn, _, _ in REG:
+            for c1 in HEADS:
+                A = at_t(n, c1, rn)
+                cp = caps_for(weights_for(n, c1))
+                c1f = cp[0] / BOOK
+                r1 = float(A[:, 0].mean())
+                bw_ = sum(cp[1:])
+                actual = float((A[:, 1:] * np.array(cp[1:])).sum(axis=1).mean()) / bw_
+                pred = c1f * (LPm[rn] - r1) / (1 - c1f) + LPm[rn]
+                r(f"  {rn:>8} {hlabel(c1):>7} {c1f/(1-c1f):>10.2f} "
+                  f"{100*(LPm[rn]-r1):>+8.2f}p {pct(pred):>10} {pct(actual):>12}"
+                  f" {100*(actual-pred):>+9.4f}p")
+            r()
 
     # ---------------------------------------------------------------- identity
     r.rule("9.  CONTROL -- the identity")

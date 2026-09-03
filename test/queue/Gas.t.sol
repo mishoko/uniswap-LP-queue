@@ -262,9 +262,14 @@ contract GasTest is QueueFixture {
         (rankHook, rankKey) = (hook, k);
     }
 
-    /// @dev The `addToSeat` worst case: a full roster, every seat ahead of the depositor priced,
-    ///      metered and 30 days unsettled, so `_settleAhead` must charge all 31 of them and each
-    ///      charge must be distributed over every funded seat behind it.
+    /// @dev The `addToSeat` extremes: a full roster, EVERY seat priced, metered and 30 days
+    ///      unsettled, so a deposit must charge all 31 others and distribute each charge.
+    ///
+    ///      **THERE ARE TWO EXTREMES SINCE PHASE 12, NOT ONE.** `addToSeat` now walks the roster in
+    ///      BOTH directions (`_settleAhead` for the promotion it performs, `_settleBehind` because
+    ///      the reversed rent means the seats that can pay INTO a depositor stand behind it). So
+    ///      depositing at the TAIL maximises one walk and ZEROES the other, and depositing at rank
+    ///      0 does the reverse. `test_5_6` measures the first; `test_5_6b` measures the second.
     function _buildDepositRoster() internal {
         _deployHookUnfunded(0xBA00, _syntheticRoster(32));
         _initPool();
@@ -282,6 +287,10 @@ contract GasTest is QueueFixture {
         // Mint and approve the deposit itself here too: an approval written in the test body would
         // be a same-transaction write and would price the transfer's allowance read wrongly.
         _fund(address(uint160(0x5EA700 + 31)), 5e18, 1e18);
+        // ...and seat 0's holder too, for the MIRROR worst case (`test_5_6b`). Phase 12 gave
+        // `addToSeat` a second walk in the OPPOSITE direction, so "31 priced ahead" is no longer
+        // the only extreme.
+        _fund(address(uint160(0x5EA700 + 0)), 5e18, 1e18);
 
         (depositHook, depositKey) = (hook, k);
     }
@@ -795,6 +804,41 @@ contract GasTest is QueueFixture {
         // regression loud. It fits a 30M block eight times over.
         assertLt(cost, 3_000_000, "the worst-case deposit cost has regressed");
         _checkInvariantR("5.6");
+    }
+
+    /// @notice **THE MIRROR EXTREME, AND IT EXISTS BECAUSE PHASE 12 MOVED THE WORST CASE.**
+    ///
+    /// @dev `test_5_6` deposits into the TAIL of a 32-seat roster: worst case for `_settleAhead`
+    ///      (31 seats to charge) and BEST case for `_settleBehind` (zero seats behind it). When
+    ///      `_settleBehind` was added, that test went on reporting a number that did not measure
+    ///      the new walk at all — it rose by 13,103 gas, and every one of those was a REDUNDANT
+    ///      `rankOfId` scan rather than the walk itself. The walk was invisible.
+    ///
+    ///      This measures the other end: a deposit at RANK 0, where `_settleAhead` does nothing and
+    ///      `_settleBehind` must charge all 31 seats behind — and each of those settlements then
+    ///      distributes its rent FORWARD over up to 31 recipients. That is the quadratic corner of
+    ///      the whole contract, and it had no measurement.
+    ///
+    ///      **A CEILING, NOT A CORRECTNESS ASSERTION.** Its job is to make a regression loud, and
+    ///      to make the real shape of `MAX_SEATS = 32` visible: the README states that 32 is a
+    ///      STORAGE fact rather than an economic endorsement, and this is the gas number that says
+    ///      the same thing.
+    function test_5_6b_theMirrorWorstCaseDepositCostIsMeasured() public {
+        _warmUp();
+        hook = depositHook;
+        k = depositKey;
+
+        address first = address(uint160(0x5EA700 + 0));
+        assertEq(hook.rankOfId(0), 0, "seat 0 is not at rank 0: this measures the wrong extreme");
+        vm.cool(address(hook));
+        vm.prank(first);
+        uint256 g = gasleft();
+        hook.addToSeat(0, 5e18, 1e18);
+        uint256 cost = g - gasleft();
+        emit log_named_uint("mirror worst-case addToSeat (32 seats, 31 priced BEHIND)", cost);
+
+        assertLt(cost, 30_000_000, "the mirror worst-case deposit cost does not fit a block");
+        _checkInvariantR("5.6b");
     }
 
     /// @dev **WHAT QUEUE COSTS A TRADER, AGAINST NO HOOK AT ALL. MEASURED: +41,586 gas, +48%.**

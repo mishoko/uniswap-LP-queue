@@ -178,7 +178,9 @@ seventeen seats are underwater.
 > **So `MAX_SEATS = 32` advertises a capability the economics do not support.** It is there because
 > 32 ranks fit in one storage word, which is a real engineering win on the hot path. It is not a
 > claim that a 32-seat book works. **Stated here rather than left to be discovered**, along with the
-> measured cost: the worst-case `addToSeat` at 32 seats with 31 priced ahead is **2,586,639 gas.**
+> measured cost at 32 seats, both extremes of the deposit path — **2,573,921 gas** with 31 priced
+> *ahead* of the depositor, and **2,638,319** with 31 priced *behind* it, which is the quadratic
+> corner of the whole contract. Both fit a block; neither is a number you want on a hot path.
 
 **A 5-seat book is realistic for the thing we are selling** — one sponsor at the front and a handful
 of sized allocations behind it is exactly how a subordinated facility is syndicated. It is not
