@@ -143,11 +143,7 @@ abstract contract QueueFixture is BaseTest {
         returns (QueueHook.Governance memory)
     {
         return QueueHook.Governance({
-            rentBps: bps,
-            rentPeriod: period,
-            firmWindow: window,
-            premiumBps: phi,
-            minTenure: _minTenure()
+            rentBps: bps, rentPeriod: period, firmWindow: window, premiumBps: phi, minTenure: _minTenure()
         });
     }
 
@@ -181,7 +177,14 @@ abstract contract QueueFixture is BaseTest {
         refPhi = premiumBps;
         refFee = FEE;
         return abi.encode(
-            poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, _gov(RENT_BPS, RENT_PERIOD, FIRM_WINDOW, premiumBps)
+            poolManager,
+            c0,
+            c1,
+            FEE,
+            SPACING,
+            BAND_HALF_WIDTH,
+            roster,
+            _gov(RENT_BPS, RENT_PERIOD, FIRM_WINDOW, premiumBps)
         );
     }
 
@@ -193,8 +196,9 @@ abstract contract QueueFixture is BaseTest {
     {
         refPhi = _premiumBps();
         refFee = FEE;
-        return
-            abi.encode(poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, _gov(bps, period, window, _premiumBps()));
+        return abi.encode(
+            poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, _gov(bps, period, window, _premiumBps())
+        );
     }
 
     Currency c0;

@@ -24,11 +24,96 @@ Newest entry first. Never delete an entry — supersede it.
 | 11 | Handoff §3.2/§3.3 closed + the economics re-measured on the contract's own premium rule | **COMPLETE 2026-09-02** | **YES** — 316 tests, 0 failed. INVARIANT W (5.175, closes 5.164); campaign aimed at the premium (5.133 closed); solvency meter repaired (5.176); `results-book.txt` was the EMPTY BLOB and 5.160 partly does not reproduce (5.177); **every published φ number was on a replaced basis (5.178) so `PREMIUM_BPS` was re-derived 7,900 → 5,100 (5.180)**; the flagship application is takeable for gas (5.181); a third φ mirror made the quoted gas figure wrong (5.182). `src/` untouched throughout |
 | 12 | Rent reversed + the TERM + c₁ 33.3→45% + docs rewritten | **CODE COMPLETE 2026-09-03** | **PARTLY** — 319 tests, 0 failed. Two mechanisms found pointing the wrong way and both fixed at the root (5.183, 5.185); `README.md` rewritten from scratch; `BUSINESS.md` §6B–6D give the per-seat P&L in dollars. **THE FULL MUTATION CAMPAIGN HAS NOT RUN AGAINST EITHER FIX — until it does, `_settleBehind` and `MIN_TENURE` are UNPROVEN**, and `M21` is a known equivalent mutant needing re-pointing first |
 | 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-02** | **PARTLY** — 224 tests. **THE MECHANISM IS SOUND AND THE BUSINESS CASE IS MISSING** — the 32 seats share one LP position, so they can at best TIE with not using the hook; the priority premium fixed the distribution (29/32 losing → 0/32) but creates no reason to participate. Next session is a BRAINSTORM for an outside payer, not a build. See `docs/research/seat-economics/VALUE.md`. Earlier note: 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
+| 13 | Free lane closed + the seat-count claim overturned + every doc realigned | **CODE COMPLETE 2026-09-03** | **PARTLY** — 324 tests, 0 failed. **A REAL FREE LANE FOUND AND CLOSED** (5.188): self-foreclosure was a zero-cost evacuation to the best seat, reachable inside a live term and escapable in ONE transaction. The confounded depth sweep is **RESOLVED and the claim OVERTURNED** (5.189) — the seat count was never the binding constraint, the head share was. `BUSINESS.md`, `README.md` and the frontend rebuilt on the shipped configuration, which no document had described. **THE MUTATION CAMPAIGN STILL HAS NOT RUN** — M21 re-pointed off a proven equivalent mutant, M29g/M29h newly registered, and all of `_settleBehind`, `MIN_TENURE` and the foreclosure arming remain UNPROVEN by it |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
 
 ---
 
+## PHASE 13 — 2026-09-03 — a free lane in the contract, and a confound in our own evidence
+
+**324 tests, 0 failed, 1 skipped** (was 321). `src/` changed, so **the mutation campaign is INVALID
+until re-run** — and it had not run against Phase 12 either. That is still the most important line
+in this entry.
+
+### 1. THE FREE LANE — the one open item from Phase 12, and the handoff's argument was wrong
+
+Phase 12 fixed two of the three mechanisms still encoding the pre-Phase-7 "front = good" reading and
+left **foreclosure-as-punishment** open, arguing it was *"partly self-correcting"* because the tail
+pays the most rent. The handoff added, correctly: *"that is an argument, not an assertion."*
+**Writing the assertion killed the argument.**
+
+`settleRent` is permissionless and a holder may call it on their **own** seat, so reaching
+foreclosure needs nothing but a meter they chose not to fund. It is a **voluntary demotion with
+extra steps**, and it reaches the tail — now the *best* seat — from inside a live `MIN_TENURE` term,
+which guards `withdraw` and nothing else.
+
+I expected the Harberger layer to price it, since foreclosure zeroes `selfPrice`. **It did not.**
+`_setPrice` only honours an old price when `old != 0`, and foreclosure had just made `old` zero, so
+the defaulter's next call armed **no window at all**. `buyPrice` read `5000e18` immediately.
+`test_4_45` executes the realistic form — one contract calling `settleRent` then `setSelfPrice` in
+**one transaction** — so nobody ever gets a block in which to take the seat. **The punishment was
+exactly zero.**
+
+**The fix is an asymmetry closed, not a new rule.** `_onSeatTransfer` already armed a firm quote at
+zero for the identical reason and said so in its own comment. Foreclosure was the one door where the
+same argument had never been applied. `_settleSeat` now arms it, extending and never shortening.
+Gating foreclosure with the term was considered and rejected as strictly worse — a delinquent would
+be immune to collection for seven days. All three controls were run against the unarmed contract
+first and go RED by name. PITFALLS 5.188.
+
+### 2. THE CONFOUND — our own "five seats is the maximum" evidence moved two variables
+
+`results-depth-basis.txt` §3 is the sole support for that claim, and it lets the head share fall
+from 66.7% to 6.1% as the seat count grows. 5.187 had already established head share as the
+dominant parameter. **So the table only ever supported "a small head fails", which we knew.**
+
+Re-run with `c₁` held at the shipped 45%: **in BENIGN and NORMAL every back seat beats a plain LP at
+every depth up to 32 seats, under both ladder shapes.** The only failure anywhere is rank 2 in a
+crash. Eight seats has a non-empty all-regime window on the shipped ladder, which the old table
+called EMPTY. **The seat count was never the binding constraint.**
+
+The control is a **known-answer** control and it passed on four independent numbers. A first draft
+at 24 paths with an equal back-split read 4092 against the published 3777 — **chasing that near-miss
+is what identified both fixture differences, and it was discarded rather than published.**
+PITFALLS 5.189, `results-depth45-fixedhead.txt`.
+
+### 3. NO DOCUMENT DESCRIBED THE PRODUCT WE SHIP
+
+Every headline in `BUSINESS.md` was measured at `c₁ = 33.3%`, φ = 5,100 and capital 5:4:3:2:1. We
+ship 45%, 5,500 and 90:44:33:22:11. §6B's per-seat table was the old configuration end to end and
+**warned readers about a toxic-regime hole that the 45% adoption had closed.**
+
+`report_shipped45.py` regenerates it on the contract's own premium basis, behind four controls. The
+result changed the story rather than the digits: **strip the coupon and the back seats collapse** —
+at φ = 0 they return +0.02% / +0.44% / +0.07% / −0.00% against a plain LP's +5.02%. *The back seats
+are not better LPs; they are worse LPs who are PAID.* §6B now leads with that.
+
+**Two errors found that ran in our own favour.** §6C priced a seat at `excess/τ`; the correct rule is
+`excess/(τ+k)` — a 3.4× overstatement, and self-defeating, because `excess/τ` drives both the
+sponsor's cost and the LPs' gain to exactly zero. And the frontend's slider caught a rounding error
+in §6C that I had just written (13.5% against a true 13.4467%) and **reported it instead of matching
+it**, which is the only correct behaviour.
+
+### 4. WHAT IS DONE, AND WHAT IS NOT
+
+* **DONE** — the free lane closed with three red-first controls; the confound resolved; `AGENTS.md`
+  §8 and `PLAN.md` §A.5 redefined against a real-world bar; every hackathon reference stripped from
+  the live documents; `BUSINESS.md` §6B/6C/6E and §3/§4 rebuilt; `README.md` §1–9 rebuilt; the
+  frontend rebuilt with **three hand-computed slider tests**, two of which I re-verified by
+  executing the page's own code in node.
+* **NOT DONE, and it is the next session's first task** — **the mutation campaign**. M21 was a
+  proven equivalent mutant and is re-pointed; M29g/M29h are new. Until it runs, `_settleBehind`,
+  `MIN_TENURE` and the foreclosure arming are **UNPROVEN**.
+* **NOT DONE** — the testnet broadcast, which is to be done with the owner.
+
+### 5. THE OPERATIONAL MISTAKE, RECORDED
+
+`git add -A` swept the frontend agent's in-progress work into a commit whose message described only
+documentation. Caught by reading the commit's own `--stat`. No remote exists, so the commit was
+split and re-made honestly. **The rule: never `git add -A` while a subagent is writing to the tree.**
+
+---
 ## PHASE 12 — 2026-09-03 — the mechanism was pointing the wrong way in three places; two are now fixed
 
 **319 tests, 0 failed, 1 skipped.** `src/` changed, so **the 85-case mutation campaign is INVALID

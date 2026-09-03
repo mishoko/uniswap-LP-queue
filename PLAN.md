@@ -14,7 +14,7 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 
 ---
 
-# ⬛ BUILD STATUS — updated 2026-09-02 (Phase 10)
+# ⬛ BUILD STATUS — updated 2026-09-03 (Phase 13)
 
 **This table is the authoritative answer to "what is done".** Each completed phase also carries a
 ✅ block at its own §C section, and each exit criterion in those sections is ticked individually.
@@ -33,15 +33,27 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 | **8** | Evacuation + premium hold branch | ✅ **COMPLETE** 2026-09-02 | — | 248 tests; five defects found and fixed; 80 mutations RED, 0 survivors; invariant campaign green at φ > 0 for the first time. **Left TWO evacuation doors OPEN — PITFALLS 5.123** |
 | **10** | Value question CLOSED; all four open defects fixed | ✅ **COMPLETE** 2026-09-02 | — | **311 tests, 0 failed.** The bricked pool + the premium erasure were ONE bug; rent re-weighted to contributed depth; the fourth evacuation door shut. 11 tests INVERTED, 3 added. **The constrained-buyer door — the last one Phase 9 left open — closed by MEASUREMENT: priority costs its holder ~476 bps** (PITFALLS 5.160) |
 | **9** | The value question, answered in closed form | ✅ **COMPLETE** 2026-09-02 | — | **`SLACK = c₁·(LP − B₁)`** derived and confirmed to 2.4e-16 — the mechanism's entire value, independent of `N`, the ordering rule and φ (PITFALLS 5.137, `docs/research/seat-economics/FRONTIER.md`). The published φ windows were measured against a **handicapped competitor** (5.136) and the shipped φ = 7,900 sat in an empty one. Security: a **THIRD** evacuation door found and executed (sybil buyout, +267 bps); **INVARIANT L breaks by 20% of the position on an ordinary buyout, in band, on committed HEAD**; the exit path of a fixed-term instrument had zero coverage until this phase |
+| **11** | Handoff items closed + economics re-measured on the contract's own premium rule | ✅ **COMPLETE** 2026-09-02 | — | 316 tests. INVARIANT W; the solvency meter repaired; `results-book.txt` found to be an EMPTY BLOB; **every published φ number had been measured on a rule the contract replaced two phases earlier**, so `PREMIUM_BPS` was re-derived 7,900 → 5,100 |
+| **12** | Rent reversed + the TERM + c₁ 33.3% → 45% | ✅ **COMPLETE** 2026-09-03 | — | 321 tests. Two of three inverted mechanisms fixed at the root (5.183 rent direction, 5.185 the 7-day term). c₁ → 45% and φ → 5,500, closing the toxic hole at t = +5.4. **The third — foreclosure — was left open, and Phase 13 found it was a live free lane** |
+| **13** | The free lane closed + the seat-count claim overturned + every doc realigned | 🟨 **CODE COMPLETE** 2026-09-03 | — | **324 tests, 0 failed.** Self-foreclosure was a ZERO-COST evacuation to the best seat, reachable inside a live term and escapable in ONE transaction — closed by arming the firm quote foreclosure creates, with three controls that go RED first (5.188). The "five seats is the maximum" result was **CONFOUNDED** and is overturned: at a fixed 45% head every back seat clears at every depth to 32 in BENIGN and NORMAL (5.189). `BUSINESS.md`, `README.md` and the frontend rebuilt on the shipped configuration, which **no document had described**. **⚠ THE MUTATION CAMPAIGN HAS STILL NOT RUN** — M21 re-pointed off a proven equivalent mutant, M29g/M29h new |
 
 **⚠ THE TWO NUMBERS BELOW WERE STALE FOR TWO PHASES — 183 was the Phase 7 count and this dashboard
 still carried it after Phase 8 took the suite to 248. Recorded rather than quietly corrected, because
 a status board nobody updates is worse than no status board: §4 says this table is the authoritative
 answer to "what is done", and for two phases it was not.**
 
-**Whole suite as of 2026-09-02 (start of Phase 9): `forge test` → 248 passed, 0 failed, 1 loudly
-skipped (the fork suite, which needs `QUEUE_FORK=true`). Mutation campaign 80 RED, 0 SURVIVED,
-0 NO-COMPILE, 0 BAD-PATTERN. Invariant campaign 13/13 at φ > 0 — but its handler is premium-blind,
+**Whole suite as of 2026-09-03 (end of Phase 13): `forge test` → 324 passed, 0 failed, 1 loudly
+skipped (the fork suite, which needs `QUEUE_FORK=true`).**
+
+**⚠ THE MUTATION CAMPAIGN IS STALE AND HAS BEEN FOR THREE PHASES.** Its last clean run was 85 RED /
+0 SURVIVED at Phase 11. `src/` has changed in Phases 12 and 13, so that result does NOT cover
+`_settleBehind`, `MIN_TENURE`, or the foreclosure firm-quote arming — all three are **UNPROVEN by
+mutation** and every document says so. 96 cases are registered. Running it is the next session's
+first task.
+
+*(Superseded, kept because §4 says a status board nobody updates is worse than none —* the
+2026-09-02 line read: 248 passed, mutation campaign 80 RED, 0 SURVIVED, 0 NO-COMPILE,
+0 BAD-PATTERN.)* Invariant campaign 13/13 at φ > 0 — but its handler is premium-blind,
 so that is not the coverage it looks like (PITFALLS 5.133), and INVARIANT L is not in it at all,
 which is why the 20%-of-position break above went unseen.**
 

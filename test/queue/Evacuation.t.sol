@@ -1891,7 +1891,6 @@ contract EvacuationTest is QueueFixture {
         _checkInvariantR("after a sweep that minted");
     }
 
-
     /// @notice **THE SENIORITY FREE LANE — is the TAIL reachable for the price of gas?**
     ///
     /// @dev Every other evacuation test in this file asks whether a holder can DODGE a fill while
