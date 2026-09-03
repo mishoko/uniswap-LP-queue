@@ -120,7 +120,7 @@ contract InvariantTest is QueueFixture {
     ///      against each other by reading both source files, because a comment naming its source is
     ///      exactly the interlock that failed here — prose is not an interlock (PITFALLS 5.86).
     function _premiumBps() internal view virtual override returns (uint256) {
-        return 5_100; // QueueDeployBase.PREMIUM_BPS -- pinned by Hygiene.t.sol test_7_8
+        return 5_500; // QueueDeployBase.PREMIUM_BPS -- pinned by Hygiene.t.sol test_7_8
     }
 
     function setUp() public {

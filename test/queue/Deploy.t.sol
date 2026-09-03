@@ -325,7 +325,7 @@ contract DeployTest is BaseTest, QueueDeployBase {
         // The buyer pays the ask AND replaces the depth, in one call. Without the funding the
         // buyout would deliver an EMPTY seat at the TAIL, because a change of holder evacuates the
         // seat and rank is backed by depth (PITFALLS 5.123a, `Harberger.t.sol::test_4_4`).
-        _buySeatAndFund(d, 1, 0, ask, 250e18, 1_000e18, 4_000e6, 0);
+        _buySeatAndFund(d, 1, 0, ask, 250e18, 2_000e18, 8_000e6, 0);
 
         assertEq(d.hook.ownerOf(0), actor[1], "the buyout did not move the seat");
         assertGe(d.hook.seatLiquidity(0), depthBefore, "the buyer did not replace the depth: the beat is vacuous");

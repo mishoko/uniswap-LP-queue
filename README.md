@@ -354,9 +354,9 @@ python3 docs/research/seat-economics/report_depth_basis.py       # roster size v
 **The gas table, freshly measured on this tree:**
 
 ```
-   plain v4 pool, same tokens/fee/price          69,992 gas
-   QUEUE, premium OFF                           140,991 gas   (+101%)
-   QUEUE as shipped (φ = 5,100)                 153,132 gas   (+119%)
+   plain v4 pool, same tokens/fee/price          69,970 gas
+   QUEUE, premium OFF                           140,969 gas   (+101%)
+   QUEUE as shipped (φ = 5,100)                 153,110 gas   (+119%)
    ─────────────────────────────────────────────────────────────────
    ▶ +119% network compute per swap. On an L2 this is cents; on mainnet
      it is a real bill. QUEUE IS AN L2 PRODUCT.

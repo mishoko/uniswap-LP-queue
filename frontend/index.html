@@ -331,9 +331,9 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
       <div class="card">
         <div class="k">Network cost, not a trading fee</div>
         <div class="v">+119%</div>
-        <div class="n">Same price, same 0.30%. Extra compute on a typical swap: <b>153,132</b>
-          vs <b>69,992</b> with no hook at all. Flat in roster depth &mdash; a constant a trader can
-          price, not something that grows with the book. On an L2 this is cents; on mainnet it is a real bill, so QUEUE is an L2 product. A full walk of the shipped roster is 620,690.</div>
+        <div class="n">Same price, same 0.30%. Extra compute on a typical swap: <b>153,110</b>
+          vs <b>69,970</b> with no hook at all. Flat in roster depth &mdash; a constant a trader can
+          price, not something that grows with the book. On an L2 this is cents; on mainnet it is a real bill, so QUEUE is an L2 product. A full walk of the shipped roster is 620,668.</div>
       </div>
       <div class="card">
         <div class="k">Roster</div>
@@ -714,9 +714,9 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
           That is the mechanism behaving correctly, and it is also the point at which the price signal is
           censored. Unsolved, and not solvable inside this design.</p></div>
       <div class="lim"><h4>A typical swap costs 119% more compute &mdash; not 119% more of the trade</h4>
-        <p>Measured on the shipped configuration: <b>153,132</b> vs <b>69,992</b> on an identical pool with no hook. That is extra network work &mdash; not a worse price and not a higher trading fee.
+        <p>Measured on the shipped configuration: <b>153,110</b> vs <b>69,970</b> on an identical pool with no hook. That is extra network work &mdash; not a worse price and not a higher trading fee.
           It is flat in roster depth, so it is a constant a trader can price rather than something that grows with the book. Walking the whole SHIPPED roster is a different bill:
-          <b>620,690</b>, at ~18,450 per seat walked. On an L2 this is cents; on mainnet it is a real bill. Aggregators may route around the pool for the gas alone &mdash; a real commercial risk.</p></div>
+          <b>620,668</b>, at ~18,450 per seat walked. On an L2 this is cents; on mainnet it is a real bill. Aggregators may route around the pool for the gas alone &mdash; a real commercial risk.</p></div>
       <div class="lim"><h4>32 seats — a professional venue, not every pool</h4>
         <p>32 desks can empty the book the way any thin market-maker list can pull quotes. They cannot
           seize it, pause it, or trap withdrawals — taking money out does not destroy the seat.

@@ -119,7 +119,7 @@ contract DeployQueue is Script, QueueDeployBase {
         _logSeats(d, "BEAT 5a - the head seat posts its own price of 100e18");
         // The buyer replaces the depth in the same call. A plain buyout would hand them an EMPTY
         // seat at the TAIL — a change of holder evacuates the seat, and rank is backed by depth.
-        _buySeatAndFund(d, 1, 0, 100e18, 250e18, 1_000e18, 4_000e6, 0); // rank 0 or nothing
+        _buySeatAndFund(d, 1, 0, 100e18, 250e18, 2_000e18, 8_000e6, 0); // rank 0 or nothing
         _logSeats(d, "BEAT 5b - the head seat was TAKEN at the price its holder set, and REFUNDED");
 
         // --------------------------------------------------- BEAT 6: rent, front to back, in real time

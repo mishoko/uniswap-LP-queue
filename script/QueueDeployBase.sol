@@ -187,7 +187,45 @@ abstract contract QueueDeployBase is CommonBase {
     ///
     ///      Reproduce: `python3 docs/research/seat-economics/report_shipping_basis.py`. Both sweeps
     ///      are checked in, so the divergence can be diffed rather than taken on trust.
-    uint256 internal constant PREMIUM_BPS = 5_100;
+    uint256 internal constant PREMIUM_BPS = 5_500;
+
+    /// @notice **THE CAPITAL SCHEDULE — 90 : 44 : 33 : 22 : 11, i.e. a 45% head.**
+    ///
+    /// @dev **THE HEAD SHARE `c₁` IS THE DOMINANT ECONOMIC PARAMETER ON THIS PROJECT, AND IT MOVED
+    ///      IN PHASE 12 FROM 33.3% TO 45%.** Source: `docs/research/seat-economics/results-headsize.txt`,
+    ///      nine head shares x three regimes x 120 paths on the contract's own premium basis.
+    ///
+    ///      **WHAT IT BUYS: a φ window that holds in ALL THREE regimes at once.** At the old 33.3%
+    ///      the TOXIC window was EMPTY — seat 2 never cleared a passive LP at any φ — so the
+    ///      programme had a regime in which it did not deliver. At 45% the intersected window is
+    ///      `[3777, 7340]` and `PREMIUM_BPS` above is its midpoint.
+    ///
+    ///      **WHY NOT 40%, WHICH ALSO "WORKS".** Its intersected window `[5668, 6447]` is non-empty
+    ///      on the POINT ESTIMATE only: at that window's own midpoint the binding seat clears by
+    ///      `+0.010pp` against a paired standard error of `0.032pp` — **t = +0.3, a coin flip.**
+    ///      Shipping the first `c₁` whose point estimate crosses zero is precisely the
+    ///      green-number-chasing `AGENTS.md` §2 calls the first sin. At 45% the binding seat clears
+    ///      by `+0.209pp` at **t = +5.4**. 35% and 37.5% do not work at all.
+    ///
+    ///      **AND THE FIX IS REAL RATHER THAN AN ARTEFACT, WHICH HAD TO BE CHECKED SEPARATELY.** A
+    ///      bigger head could have made seat 2 "clear" by making it IDLE — an unreached seat scores
+    ///      exactly zero and beats a losing benchmark by doing nothing (PITFALLS 5.186a). It does
+    ///      not: **rank 2's zero-turnover share in TOXIC is 0.0% at every head share from 33.3% to
+    ///      66.7%.** The window opens because the head absorbs the move ahead of seat 2.
+    ///
+    ///      **WHAT IT COSTS, STATED HERE BECAUSE IT IS THE REAL PRICE OF THE DECISION:** the sponsor
+    ///      locks 45% of the book instead of 33.3%, and the annual subsidy roughly 2.5x. The
+    ///      external LPs' boost rises by about the same factor — this is a BIGGER programme, not
+    ///      the same one costing more.
+    ///
+    ///      The weights sum to 200 so that 45% is exact in integers rather than a repeating
+    ///      decimal, and the back keeps the 4:3:2:1 shape it always had.
+    uint256[5] internal SEAT_WEIGHTS = [uint256(90), 44, 33, 22, 11];
+
+    /// @dev Token amounts are `weight x UNIT0 / UNIT1`. The 1:4 ratio is preserved from the
+    ///      original schedule, which matters: `AGENTS.md` LAW 1 forbids a 1:1 fixture.
+    uint256 internal constant UNIT0 = 10e18;
+    uint256 internal constant UNIT1 = 40e6;
 
     /// @dev The canonical deterministic CREATE2 proxy. Verified to have code on Unichain Sepolia.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
@@ -442,8 +480,8 @@ abstract contract QueueDeployBase is CommonBase {
     ///      seat forecloses and permutes the roster while somebody is looking at it.
     function _fundAndPriceRoster(Deployment memory d) internal {
         for (uint256 i; i < SEATS; i++) {
-            uint256 mul = SEATS - i;
-            _fundSeat(d, 0, i, mul * 100e18, mul * 400e6);
+            uint256 w = SEAT_WEIGHTS[i];
+            _fundSeat(d, 0, i, w * UNIT0, w * UNIT1);
             // SAME ACTOR, SAME SEQUENCE, IMMEDIATELY: an unpriced seat is a free take.
             _setSelfPrice(d, 0, i, (i + 1) * SEAT_PRICE_STEP);
             _fundRent(d, 0, i, RENT_ESCROW);
