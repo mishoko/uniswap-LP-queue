@@ -139,6 +139,23 @@ MUTS = [
     ("M25", HOOK, "the held pot is not cleared after being paid out (double spend)",
      "        unallocatedRent0 = 0;\n        emit RentSettled(payerId, amount, pot, 0);",
      "        emit RentSettled(payerId, amount, pot, 0);"),
+    # ------------------------------------------------------- FORECLOSURE ARMS ITS OWN FIRM QUOTE
+    # NEW 2026-09-03 (Phase 13). A REAL FREE LANE FOUND AND CLOSED THIS SESSION, so both lines get
+    # a case. Foreclosure zeroes `selfPrice`, and `_setPrice`'s middle branch only honours an old
+    # price when `old != 0` -- so before this fix the defaulter's very next call armed NO window and
+    # the ask was live again in the SAME BLOCK. Under the post-Phase-12 economics the tail is the
+    # best seat, so "stop paying rent" was a FREE voluntary demotion straight through a live term.
+    ("M29g", HOOK, "foreclosure does not arm the firm quote (the self-foreclosure free lane, re-opened)",
+     "            uint64 firmTo = uint64(block.timestamp + FIRM_WINDOW);\n"
+     "            if (firmTo > l.firmUntil) l.firmUntil = firmTo;\n            l.firmPrice = 0;",
+     "            // MUT"),
+    # The `if` is the "EXTENDS, NEVER SHORTENS" rule. Writing unconditionally lets a foreclosure CUT
+    # an already longer window short, which is a new escape rather than a closed one -- so it needs
+    # its own case, and a suite that only tests the unarmed seat will not catch it.
+    ("M29h", HOOK, "foreclosure SHORTENS an already longer firm window instead of extending it",
+     "            if (firmTo > l.firmUntil) l.firmUntil = firmTo;",
+     "            l.firmUntil = firmTo;"),
+
     ("M26", HOOK, "the escrow aggregate is not moved by a distribution",
      "        escrowTotal = escrowTotal - amount + pot;", "        // MUT"),
     ("M27", HOOK, "the held pot is never folded into the next distribution",

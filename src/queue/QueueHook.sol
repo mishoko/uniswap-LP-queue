@@ -2759,6 +2759,34 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
         if (short_) {
             l.selfPrice = 0;
+            // **FORECLOSURE MUST ARM ITS OWN FIRM QUOTE, AND WITHOUT THIS THE PUNISHMENT IS ZERO.**
+            //
+            // Zeroing `selfPrice` alone does not make a seat takeable for any useful length of
+            // time. `_setPrice`'s middle branch only honours an old price when `old != 0`, and
+            // foreclosure has just made `old` zero — so the defaulter's very next call opens NO
+            // window, and `buyPrice` is back at whatever they ask. `settleRent` is permissionless
+            // and `setSelfPrice` is one more call, so a holder can foreclose themselves and reprice
+            // IN THE SAME BLOCK. Nobody ever gets a chance to take the seat.
+            //
+            // That matters because under the post-Phase-12 economics a demotion to the tail is an
+            // UPGRADE, and foreclosure is reachable at a moment of the holder's choosing simply by
+            // not funding the meter. Unarmed, "stop paying rent" is a FREE voluntary demotion that
+            // walks straight through a live `MIN_TENURE` term and hands the defaulter the best seat
+            // in the book — the exact free lane AGENTS.md §5 exists to hunt.
+            //
+            // `_onSeatTransfer` already applies this discipline for the same reason, and says so:
+            // handing a seat to your own second address to get a clean slate "leaves it firm at
+            // zero, i.e. free for anyone to take". Foreclosure was the one door where the identical
+            // argument had not been applied. This is that asymmetry closed.
+            //
+            // EXTENDS, NEVER SHORTENS. Writing the deadline unconditionally could CUT an already
+            // longer window short, which would be a new escape rather than a closed one.
+            // casting to 'uint64' is safe: a uint64 holds unix seconds for ~5.8e11 years, and
+            // FIRM_WINDOW is bounded at 365 days by the constructor.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint64 firmTo = uint64(block.timestamp + FIRM_WINDOW);
+            if (firmTo > l.firmUntil) l.firmUntil = firmTo;
+            l.firmPrice = 0;
             emit Foreclosed(seatId, due, charged, _demoteToTail(seatId));
         }
     }

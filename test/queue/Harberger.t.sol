@@ -258,6 +258,25 @@ contract BuyoutReentrancyAttacker {
 /// separate holes close here and all three were open in the submittable Phase 3 state: the founding
 /// roster was an endowment (PITFALLS 5.8), the tail had no compensation channel at all (5.19), and
 /// rank-then-run was free (5.9).
+/// @notice The realistic attacker for `test_4_45`: one contract, one transaction, both calls.
+///
+/// @dev `settleRent` is permissionless and `setSelfPrice` is a second external call, so a holder
+///      does not need two blocks to foreclose themselves and reprice — they need one contract.
+///      Written as a real caller rather than two `vm.prank`s so the claim "in the same
+///      transaction" is executed rather than argued from a shared timestamp.
+contract SelfForecloser {
+    QueueHook immutable H;
+
+    constructor(QueueHook h) {
+        H = h;
+    }
+
+    function evacuateAndReprice(uint256 seatId, uint256 newPrice) external {
+        H.settleRent(seatId); // demotes me to the tail, which is the seat I wanted
+        H.setSelfPrice(seatId, newPrice); // ...and I am safe again before anyone can act
+    }
+}
+
 contract HarbergerTest is QueueFixture {
     address constant ALICE = address(0xA11CE); // seat 0
     address constant BOB = address(0xB0B); // seat 1
@@ -1455,7 +1474,6 @@ contract HarbergerTest is QueueFixture {
         gained = _escrow(0) - before;
     }
 
-
     // ============================================ 4.15 — τ is a governance choice, not a constant
 
     /// @dev §B.10: do not defend a value of τ. Show the mechanism at several, and let the reader see
@@ -1729,9 +1747,7 @@ contract HarbergerTest is QueueFixture {
         vm.prank(EVE);
         hook.buySeat(3, 100e18, 200e18);
         _evacuateRef(3);
-        assertEq(
-            _escrow(0) + _escrow(1) + _escrow(2) - aheadBefore, 10e18, "the buyout wrote off the seller's bill"
-        );
+        assertEq(_escrow(0) + _escrow(1) + _escrow(2) - aheadBefore, 10e18, "the buyout wrote off the seller's bill");
         _checkInvariantR("4.25");
     }
 
@@ -2087,6 +2103,178 @@ contract HarbergerTest is QueueFixture {
     }
 
     // ================================================ edges, couplings and the costs of the design
+
+    // ====== 4.43/4.44 — THE RENT LAPSE IS A VOLUNTARY DEMOTION, AND HARBERGER IS WHAT PRICES IT
+
+    /// @dev Empty a seat and re-fund it, so it is inside a FRESH term. `_addTo` deliberately ages
+    ///      past the term it arms, so it cannot be used here — this is the raw call.
+    ///      Note the side effect, which the caller must plan around: the withdrawal demotes the
+    ///      seat to the TAIL, so re-arming seats front-to-back leaves them in reverse order.
+    function _rearmTerm(address who, uint256 seatId) internal {
+        (uint256 a0, uint256 a1) = hook.seat(seatId);
+        vm.prank(who);
+        hook.withdraw(seatId, a0, a1); // legal: the fixture's roster has served its term
+        _refDemote(seatId); // a payout costs the rank, and the witness has to see it too
+        _fund(who, a0, a1);
+        vm.prank(who);
+        hook.addToSeat(seatId, a0, a1); // funded FROM EMPTY, so this arms a term
+        assertGt(hook.unlockAt(seatId), block.timestamp, "the re-funding did not arm a term");
+    }
+
+    /// @dev **THE THIRD SYMPTOM OF PHASE 12's INVERSION, ASSERTED RATHER THAN ARGUED.**
+    ///
+    ///      Phases 7-8 established that being FIRST is worth negative money, so the TAIL is the
+    ///      economically best seat to hold. Three mechanisms still encoded the old "front = good"
+    ///      reading. Two were fixed: rent was reversed to flow FORWARD (PITFALLS 5.183), and the
+    ///      one-wei withdrawal that bought a demotion was closed by `MIN_TENURE` (5.185).
+    ///
+    ///      **THE THIRD IS THIS ONE, AND THE TERM DOES NOT CLOSE IT — BY DESIGN.** Foreclosure
+    ///      demotes a defaulter to the tail, which under the current economics is an UPGRADE. And
+    ///      a holder can reach it whenever they like: `settleRent` is permissionless, the holder
+    ///      may call it on their own seat, and the only precondition is a meter they chose not to
+    ///      fund. **"Stop paying rent" is therefore a VOLUNTARY DEMOTION WITH EXTRA STEPS, and it
+    ///      walks straight through a live `MIN_TENURE` term.**
+    ///
+    ///      **GATING FORECLOSURE WITH THE TERM WOULD BE STRICTLY WORSE** — a delinquent would then
+    ///      be immune to collection for seven days, and PLAN §B.8 requires the evacuation path to
+    ///      stay unblockable. So the answer is not to close the door; it is to PRICE it, which is
+    ///      what the Harberger layer is for. This test asserts the price is actually charged.
+    ///
+    ///      WHAT WOULD MAKE THIS READ FAIL: a `MIN_TENURE` that silently blocked foreclosure
+    ///      (claim 2 goes red), or a foreclosure that left the seat with a live ask so the dodge
+    ///      cost nothing (claims 3-4). Both are single-line changes to production code.
+    function test_4_43_aRentLapseReachesTheTailInsideTheTermAndCostsAZeroAsk() public {
+        _four();
+        // Re-arm BOB's term. The withdrawal inside `_rearmTerm` sends seat 1 to the tail, so
+        // re-arming CARL afterwards pushes seat 1 back UP to rank 2 with a live term and seat 2
+        // behind it — which is what makes the demotion below an actual movement.
+        _rearmTerm(BOB, 1);
+        _rearmTerm(CARL, 2);
+        assertEq(hook.rankOfId(1), 2, "fixture: seat 1 is not where this test needs it");
+        assertEq(hook.rankOfId(2), 3, "fixture: nothing is behind seat 1, so a demotion cannot show");
+
+        // ---- (1) THE TERM IS LIVE. Without this every claim below holds for the wrong reason.
+        uint256 unlock = hook.unlockAt(1);
+        assertGt(unlock, block.timestamp, "the term is not live: this test proves nothing");
+        (uint256 held0, uint256 held1) = hook.seat(1);
+        assertGt(held0 + held1, 0, "the seat holds nothing: the refusal below would be vacuous");
+        vm.prank(BOB);
+        vm.expectRevert(abi.encodeWithSelector(QueueHook.SeatWithinTerm.selector, uint256(1), unlock, block.timestamp));
+        hook.withdraw(1, held0 > 0 ? 1 : 0, held0 > 0 ? 0 : 1);
+        assertEq(hook.rankOfId(1), 2, "the refused withdrawal moved the rank anyway");
+
+        // ---- (2) AND YET THE RENT LAPSE WALKS THROUGH IT, INTO THE BEST SEAT IN THE BOOK.
+        //      No meter at all, so the bill is unpayable the moment anybody looks — the dodge does
+        //      NOT need to outwait the term, which is precisely why the term cannot price it.
+        _setPrice(BOB, 1, 1000e18);
+        vm.warp(block.timestamp + 1 days);
+        assertGt(hook.rentDue(1), _escrow(1), "the meter still covers the bill: no foreclosure to test");
+        assertGt(hook.unlockAt(1), block.timestamp, "the term expired on its own: the dodge is not being tested");
+
+        vm.prank(BOB); // THE HOLDER'S OWN CALL. Nothing here is anybody else's doing.
+        hook.settleRent(1);
+        _refDemote(1);
+        assertEq(hook.rankOfId(1), 3, "the lapse did not reach the tail");
+        assertEq(hook.ownerOf(1), BOB, "foreclosure took the seat away: it is a demotion, not a seizure");
+
+        // ---- (3) THE PRICE OF IT: the seat is now free for anyone to take.
+        assertEq(_price(1), 0, "the self-price survived foreclosure");
+        assertEq(hook.buyPrice(1), 0, "the foreclosed seat is not free to take");
+
+        // ---- (4) AND THE HOLDER CANNOT REPRICE OUT OF IT. Raising the ask cannot escape the zero
+        //      quote, because foreclosure ARMED that quote. Without the arming, `_setPrice`'s
+        //      `old != 0` predicate reads the price foreclosure just wiped, declines to open a
+        //      window, and the ask is live again in the very next call — see the docblock.
+        _setPrice(BOB, 1, 5000e18);
+        assertEq(_price(1), 5000e18, "the new self-price did not stick");
+        assertEq(hook.buyPrice(1), 0, "REPRICING ESCAPED THE PUNISHMENT: the dodge is free");
+
+        // ---- (5) THE EXPOSURE IS BOUNDED, AND WE SAY BY HOW MUCH. Exactly FIRM_WINDOW, once.
+        vm.warp(block.timestamp + FIRM_WINDOW + 1);
+        assertEq(hook.buyPrice(1), 5000e18, "the zero ask outlived FIRM_WINDOW");
+
+        _checkInvariantC("4.43");
+        _checkInvariantR("4.43");
+    }
+
+    /// @dev Claim (3) of `test_4_43` asserts a QUOTE. A quote nobody can act on is not a price, and
+    ///      the whole "foreclosure is priced rather than blocked" argument rests on the seat
+    ///      actually changing hands. So: EXECUTE the buyout a stranger would do, and confirm the
+    ///      defaulter loses the rank it just helped itself to, for nothing.
+    function test_4_44_aStrangerActuallyTakesTheForeclosedSeatForNothing() public {
+        _four();
+        _setPrice(CARL, 2, 1000e18);
+        vm.warp(block.timestamp + 1 days);
+
+        vm.prank(CARL);
+        hook.settleRent(2);
+        _refDemote(2);
+        assertEq(hook.ownerOf(2), CARL, "precondition: the defaulter still holds the seat");
+        assertEq(hook.buyPrice(2), 0, "precondition: the seat is not free to take");
+
+        // EVE pays NOTHING and declares her own ask. `maxPrice = 0` is also a slippage bound the
+        // call would revert against, so the zero is asserted twice: once as a read, once as a bound.
+        uint256 eveBefore = _bal(c0, EVE);
+        vm.prank(EVE);
+        hook.buySeat(2, 0, 400e18);
+
+        assertEq(hook.ownerOf(2), EVE, "the free seat did not change hands");
+        assertEq(_bal(c0, EVE), eveBefore, "the buyer paid something for a zero-priced seat");
+
+        _checkInvariantC("4.44");
+        _checkInvariantR("4.44");
+    }
+
+    /// @dev **THE FREE LANE, EXECUTED AS ONE TRANSACTION.** `test_4_43` proves the pieces; this
+    ///      proves the attack, because "you are exposed until you reprice" is only a punishment if
+    ///      somebody gets a block in which to act. Here nobody does: the same contract forecloses
+    ///      itself and reprices in a single call, and the assertion is that the seat is STILL
+    ///      takeable at zero when that call returns.
+    ///
+    ///      WHAT WOULD MAKE THIS READ FAIL: deleting the two lines in `_settleSeat` that arm the
+    ///      firm quote. That is exactly the state the contract was in before this test was written,
+    ///      and this assertion was RED against it.
+    function test_4_45_selfForeclosingAndRepricingInOneTransactionDoesNotEscape() public {
+        _four();
+        address atk = address(new SelfForecloser(hook));
+
+        // Hand the seat to the attacking contract. The transfer itself evacuates it to the tail,
+        // so DAVE then steps aside to push it back up — without that the demotion under test would
+        // be a seat moving from the tail to the tail, and the assertion would hold vacuously.
+        vm.prank(CARL);
+        hook.transfer(atk, 2, 1);
+        assertEq(hook.ownerOf(2), atk, "the seat did not reach the attacker");
+        _refDemote(2);
+        (uint256 d0, uint256 d1) = hook.seat(3);
+        vm.prank(DAVE);
+        hook.withdraw(3, d0, d1); // legal: the fixture's roster has served its term
+        _refDemote(3);
+
+        vm.prank(atk);
+        hook.setSelfPrice(2, 1000e18);
+        vm.warp(block.timestamp + 1 days); // no meter was ever funded: the bill is now unpayable
+        assertGt(hook.rentDue(2), _escrow(2), "the seat is not delinquent: this test proves nothing");
+        uint256 rankBefore = hook.rankOfId(2);
+
+        SelfForecloser(atk).evacuateAndReprice(2, 5000e18);
+        _refDemote(2);
+
+        // It got what it wanted — the tail — and it does NOT get to keep it for free.
+        assertEq(hook.rankOfId(2), 3, "the evacuation did not reach the tail");
+        assertTrue(rankBefore != 3, "the seat began at the tail: the demotion is vacuous");
+        assertEq(_price(2), 5000e18, "the reprice did not land");
+        assertEq(hook.buyPrice(2), 0, "THE FREE LANE IS OPEN: self-foreclosure escapes in one tx");
+
+        // And the exposure is real, not just quoted: anyone may take it, right now, for nothing.
+        uint256 eveBefore = _bal(c0, EVE);
+        vm.prank(EVE);
+        hook.buySeat(2, 0, 400e18);
+        assertEq(hook.ownerOf(2), EVE, "the zero-priced seat could not actually be taken");
+        assertEq(_bal(c0, EVE), eveBefore, "the buyer paid for a seat quoted at zero");
+
+        _checkInvariantC("4.45");
+        _checkInvariantR("4.45");
+    }
 
     /// @dev `order` packs one seat id per BYTE, so the roster bound and the word are the same fact.
     ///      Raising `MAX_SEATS` past 32 would silently truncate the queue's order rather than fail,
