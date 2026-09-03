@@ -311,6 +311,12 @@ in **every** regime, and the shipped 5,500 is the midpoint of what survives.
 **§6E has the full sweep, the head shares that produce no window at all, and — the part that
 matters — why the 40% head was rejected even though its point estimate crosses.**
 
+> **⚠ AND ONE CLAIM WE ARE WALKING BACK.** This document has said that five seats is *near the
+> measured maximum*. The evidence for that sweeps the seat count while the head share collapses
+> alongside it — two variables, one attribution — and head share is the dominant parameter. **That
+> five seats is a CEILING is UNPROVEN**; the mechanism AT five is what is measured. `PITFALLS.md`
+> §5.189, and `README.md` §5 states it in full.
+
 **The sensitivity that decides the product, and we state it ourselves:** the upper bound exists only
 because *re-anchoring is worth something to the front.* Hold the front to the **passive-LP** bar
 instead of the managed-range bar and the ceiling collapses. What the managed alternative costs to

@@ -183,35 +183,66 @@ why a 40% head was rejected even though its point estimate crosses, is `BUSINESS
 
 ## 5. WHY FIVE SEATS — and is that realistic?
 
-**Yes, and it is not a demo shortcut: five is near the measured maximum.** Source:
-`docs/research/seat-economics/results-depth-basis.txt`.
+**Five is what we ship and what every number in this repository was measured on.** Whether it is
+also a hard *ceiling* is a claim we are currently walking back, and this section says exactly what
+is proven and what is not.
+
+### What is measured
 
 ```
    N     head    BENIGN window    NORMAL window   TOXIC window   binding seat
    ─────────────────────────────────────────────────────────────────────────
     2   66.7%   [2104, 9500+]    [788, 9500+]    [0, 9500+]     rank 2   ✓
-    5   33.3%   [4542, 5670]     [2565, 6252]    EMPTY          rank 2   ← SHIPPED
+    5   33.3%   [4542, 5670]     [2565, 6252]    EMPTY          rank 2
     8   22.2%   EMPTY (crossed)  [3170, 3960]    EMPTY          rank 2
    16   11.8%   EMPTY            EMPTY           EMPTY          ranks 2-5
    32    6.1%   EMPTY            EMPTY           EMPTY          ranks 2-17
+   ─────────────────────────────────────────────────────────────────────────
+   Source: docs/research/seat-economics/results-depth-basis.txt §3
 ```
 
-**Why deeper rosters fail, mechanically.** Every seat pays the coupon on fills it takes and receives
-it on fills it misses, so **each seat is subordinate to everything behind it — it is a ladder, not
-two tiers.** Widen the ladder and the head shrinks to 6% of the book, at which point the front is
-*extracting* from the back (+80% return on 6% of capital) rather than subsidising it, and the first
-seventeen seats are underwater.
+### ⚠ AND THAT TABLE IS CONFOUNDED. We are saying so before anyone else does.
 
-> **So `MAX_SEATS = 32` advertises a capability the economics do not support.** It is there because
-> 32 ranks fit in one storage word, which is a real engineering win on the hot path. It is not a
-> claim that a 32-seat book works. **Stated here rather than left to be discovered**, along with the
-> measured cost at 32 seats, both extremes of the deposit path — **2,573,921 gas** with 31 priced
-> *ahead* of the depositor, and **2,638,319** with 31 priced *behind* it, which is the quadratic
-> corner of the whole contract. Both fit a block; neither is a number you want on a hot path.
+```
+   LOOK AT THE HEAD COLUMN. It COLLAPSES as N grows:
 
-**A 5-seat book is realistic for the thing we are selling** — one sponsor at the front and a handful
-of sized allocations behind it is exactly how a subordinated facility is syndicated. It is not
-realistic as "open LPing for everyone", and we do not claim it is.
+        seats      2       5       8      16      32
+        head    66.7%   33.3%   22.2%   11.8%    6.1%
+                  ▲                                ▲
+                  └──── TWO variables moved, not one ────┘
+
+   And we separately PROVED that head share is the dominant parameter:
+   at N = 5, moving the head 33.3% → 45% turns an EMPTY all-regime
+   window into a working one, [3777, 7340].   (§6E of BUSINESS.md)
+```
+
+> **So the only claim this table actually supports is "more seats *with a ladder shape that shrinks
+> the head* do not work" — which is close to a tautology.** Nobody has run 32 seats at the shipped
+> 45% head. This is the project's own *hold one variable at a time* rule, broken in the experiment
+> that justifies a headline, and it survived because the confound runs in the direction that
+> flatters us. Logged as `PITFALLS.md` §5.189; the un-confounded sweep is running.
+>
+> **UNPROVEN: that five seats is a ceiling.** What *is* proven is the mechanism at five.
+
+### What we can say with confidence, mechanically
+
+Every seat pays the coupon on fills it takes and receives it on fills it misses, so **each seat is
+subordinate to everything behind it — it is a ladder, not two tiers.** Shrink the head and the front
+stops subsidising the back and starts *extracting* from it (at a 6% head the front returns +80% on
+6% of the capital). **That is a statement about the head, not about the seat count** — which is
+precisely why the two need separating.
+
+### And is five realistic for the product?
+
+**Yes, and this part does not depend on the sweep at all.** One sponsor at the front and a handful
+of sized allocations behind it is exactly how a subordinated facility is syndicated in any market.
+It is *not* realistic as "open LPing for everyone", and we do not claim it is — the roster is
+**closed**, and capital joins by funding an existing seat or buying one.
+
+> **`MAX_SEATS = 32` is a STORAGE FACT, not an economic endorsement.** Thirty-two ranks fit in one
+> 32-byte word, which is a real win on the hot path. The measured cost at that depth is the
+> quadratic corner of the whole contract: **2,573,921 gas** to deposit with 31 seats priced *ahead*,
+> **2,638,319** with 31 priced *behind*. Both fit a block; neither is a number you want routinely.
 
 ---
 
