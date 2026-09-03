@@ -228,6 +228,23 @@ contract DeployTest is BaseTest, QueueDeployBase {
             assertEq(ids[r], r, "founding order is the identity permutation");
             (uint256 a0, uint256 a1) = d.hook.seat(r);
             assertTrue(a0 != 0 && a1 != 0, "a founding seat was not funded");
+
+            // **THE 5.181 GUARD, AND IT IS THE ASSERTION THAT WAS MISSING WHEN THE HOLE SHIPPED.**
+            // A never-priced seat quotes ZERO and `buySeat(id, 0, 0)` funds nothing, so it is free
+            // for any stranger to take — and taking the FRONT seat evacuates the sponsor's capital,
+            // drops the pool's depth and promotes whoever was second into the first-loss position.
+            // Funding a roster without pricing it is therefore not "incomplete setup", it is a live
+            // vulnerability, and it survived six phases because nothing here asserted otherwise.
+            assertGt(d.hook.buyPrice(r), 0, "A FOUNDING SEAT IS FREE TO TAKE: PITFALLS 5.181 is live");
+            (, uint256 esc,,,) = d.hook.leaseOf(r);
+            assertGt(esc, 0, "a priced seat has no rent escrow: it forecloses on the first settlement");
+        }
+
+        // ...and the assessments RISE with rank, which is the Phase 12 economics made visible: the
+        // deep seats are the protected ones, so they carry the dearest assessment and pay the most
+        // rent FORWARD to the seats absorbing the losses. A flat schedule would assert the opposite.
+        for (uint256 r = 1; r < SEATS; r++) {
+            assertGt(d.hook.buyPrice(r), d.hook.buyPrice(r - 1), "the seat schedule is not rising with rank");
         }
 
         // ---- BEAT 2: A SMALL SWAP FILLS THE HEAD AND NOBODY ELSE. The headline claim.
@@ -265,6 +282,15 @@ contract DeployTest is BaseTest, QueueDeployBase {
         assertTrue(t0 != 0 || t1 != 0, "seat 4 is empty: the transfer beat would prove nothing");
         uint256 sellerBal0 = d.token0.balanceOf(actor[0]);
         uint256 sellerBal1 = d.token1.balanceOf(actor[0]);
+        // **THE UNSPENT RENT METER RIDES OUT WITH THE SELLER, AND IT IS PART OF "MADE WHOLE".**
+        // `_onSeatTransfer` sends `p0 + esc` — the seat's capital plus whatever prepaid rent it had
+        // not yet burned. Before Phase 12 the founding roster was UNPRICED, so every seat's escrow
+        // was zero and this term was invisible; pricing the roster at BEAT 1 (PITFALLS 5.181) makes
+        // it real. Settle first so `escAtSale` is what the seat actually owns at the instant of
+        // sale rather than a stale figure with rent still accrued against it.
+        d.hook.settleRent(4);
+        (, uint256 escAtSale,,,) = d.hook.leaseOf(4);
+        assertGt(escAtSale, 0, "the seat carries no meter: the escrow term below is vacuous");
         _transferSeat(d, 0, actor[1], 4);
 
         assertEq(d.hook.ownerOf(4), actor[1], "rank did not change hands");
@@ -274,7 +300,11 @@ contract DeployTest is BaseTest, QueueDeployBase {
         (uint256 pend0, uint256 pend1) = d.hook.pendingOf(actor[0]);
         // Paid on the spot where the position could release it, claimable where it could not. The
         // sum is what the seat held; splitting it between the two is the §E.4 dust policy.
-        assertEq(d.token0.balanceOf(actor[0]) - sellerBal0 + pend0, t0, "seller was not made whole in currency0");
+        assertEq(
+            d.token0.balanceOf(actor[0]) - sellerBal0 + pend0,
+            t0 + escAtSale,
+            "seller was not made whole in currency0 (capital + the unspent meter)"
+        );
         assertEq(d.token1.balanceOf(actor[0]) - sellerBal1 + pend1, t1, "seller was not made whole in currency1");
         // **A FUNDED TRANSFER NOW COSTS THE RANK** (PITFALLS 5.123a), and seat 4 is the TAIL, so
         // the demotion is a no-op here and this assertion cannot see it either way — stated rather
@@ -326,10 +356,16 @@ contract DeployTest is BaseTest, QueueDeployBase {
         // recipient at all and would land in the held pot, which is correct but demonstrates
         // nothing.
         uint256 payer = d.hook.ranking()[3];
+        // Settle at the OLD price first, so the meter this beat measures starts from a known
+        // figure. Since BEAT 1 prices the whole roster (PITFALLS 5.181), every seat arrives here
+        // already metered and already owing — this used to be a fresh, unpriced seat.
+        d.hook.settleRent(payer);
         _setSelfPriceAs(payer, 250e18);
+        (uint256 escPotBefore,) = d.hook.rentTotals();
         _fundRent(d, _holderIndexOf(payer), payer, 50e18);
         (uint256 escBefore,) = d.hook.rentTotals();
-        assertEq(escBefore, 50e18, "escrow did not arrive");
+        // A DELTA, not an absolute: the pot holds the whole roster's meters now.
+        assertEq(escBefore - escPotBefore, 50e18, "escrow did not arrive");
         assertEq(d.hook.rentDue(payer), 0, "rent accrued before any time passed");
 
         _advanceTime(30 days);
@@ -445,10 +481,12 @@ contract DeployTest is BaseTest, QueueDeployBase {
     /// @dev Descending capital down the queue, so a sweep visibly exhausts seats one after another
     ///      rather than all at once. Every wei arrives through `addToSeat`, the only path
     ///      production has.
+    /// @dev **DELEGATES TO THE BASE, WHICH IS THE WHOLE POINT OF `Deploy.t.sol` EXISTING.** This
+    ///      used to be a second copy of the broadcast script's funding loop — so the test could
+    ///      pass while the script did something else, which is precisely what PITFALLS 5.81 says a
+    ///      deploy test is for. One implementation, two callers, differing only in the identity
+    ///      seam (`_as` / `_stopActing`).
     function _fundRoster() internal {
-        for (uint256 i; i < SEATS; i++) {
-            uint256 mul = SEATS - i;
-            _fundSeat(d, 0, i, mul * 100e18, mul * 400e6);
-        }
+        _fundAndPriceRoster(d);
     }
 }

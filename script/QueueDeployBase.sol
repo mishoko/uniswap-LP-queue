@@ -410,6 +410,53 @@ abstract contract QueueDeployBase is CommonBase {
         _stopActing();
     }
 
+    /// @notice **FUND, PRICE AND METER EVERY FOUNDING SEAT — the ONE implementation, called by
+    ///         both the broadcast script and `Deploy.t.sol`.**
+    ///
+    /// @dev **THIS EXISTS BECAUSE OF PITFALLS 5.181, AND IT IS A DEPLOYMENT BLOCKER, NOT A POLISH
+    ///      ITEM.** `buyPrice` quotes ZERO for a never-priced seat and `buySeat(id, 0, 0)` funds
+    ///      nothing, so **any stranger can take an unpriced seat for the price of gas.** Taking the
+    ///      FRONT seat evacuates the sponsor's capital out of the position, drops the pool's depth,
+    ///      demotes the emptied seat to the tail — **and promotes whoever was second into the
+    ///      first-loss position.** An external LP who bought a subordinated BACK seat is moved into
+    ///      the seat that eats the losses, by a stranger, for gas.
+    ///
+    ///      Until this function existed the roster was funded here and priced only at BEAT 5, so
+    ///      **every seat sat takeable for the whole demo** — and on a testnet left up for judging,
+    ///      indefinitely. The remedy 5.181 names is exactly this: price the seat in the transaction
+    ///      that funds it, and pay rent on it thereafter.
+    ///
+    ///      **IT WAS ALSO DUPLICATED.** The funding loop lived in `DeployQueue.s.sol` AND in
+    ///      `Deploy.t.sol::_fundRoster`, which is the rule-in-two-places shape that has been wrong
+    ///      four times on this project (PITFALLS 5.37, 5.50, 5.52 twice) and the specific reason
+    ///      5.81 demands the sequence live in a base both callers execute.
+    ///
+    ///      **PRICES RISE WITH RANK, AND THAT IS THE POINT RATHER THAN A DEFAULT.** Since the
+    ///      Phase 12 rent reversal the DEEP seats are the valuable ones — they are protected by
+    ///      everything in front of them and they are paid the premium — so the tail carries the
+    ///      highest assessment and pays the most rent, forward, to the seats absorbing the losses.
+    ///      A flat schedule would quietly assert the opposite.
+    ///
+    ///      The escrow is sized so the demo roster survives being left running: at the top price of
+    ///      `SEATS * SEAT_PRICE_STEP` and τ = 10%/yr, `RENT_ESCROW` covers well over a year, so no
+    ///      seat forecloses and permutes the roster while somebody is looking at it.
+    function _fundAndPriceRoster(Deployment memory d) internal {
+        for (uint256 i; i < SEATS; i++) {
+            uint256 mul = SEATS - i;
+            _fundSeat(d, 0, i, mul * 100e18, mul * 400e6);
+            // SAME ACTOR, SAME SEQUENCE, IMMEDIATELY: an unpriced seat is a free take.
+            _setSelfPrice(d, 0, i, (i + 1) * SEAT_PRICE_STEP);
+            _fundRent(d, 0, i, RENT_ESCROW);
+        }
+    }
+
+    /// @dev The founding assessment of rank `i` is `(i+1) * SEAT_PRICE_STEP`, so the tail is dearest.
+    uint256 internal constant SEAT_PRICE_STEP = 100e18;
+
+    /// @dev Prepaid rent per founding seat. At the dearest seat's price and τ = 10%/yr this is over
+    ///      a year of cover, so the demo roster does not foreclose while it is being looked at.
+    uint256 internal constant RENT_ESCROW = 60e18;
+
     function _setSelfPrice(Deployment memory d, uint256 who, uint256 seatId, uint256 price) internal {
         _as(who);
         d.hook.setSelfPrice(seatId, price);

@@ -97,11 +97,10 @@ contract DeployQueue is Script, QueueDeployBase {
 
         // ------------------------------------------------------------------------ STEP 4-5: capital
         _fundActors(d, 5_000_000e18, 20_000_000e6);
-        for (uint256 i; i < SEATS; i++) {
-            uint256 mul = SEATS - i;
-            _fundSeat(d, 0, i, mul * 100e18, mul * 400e6);
-        }
-        _logSeats(d, "BEAT 1 - five founding seats, funded, in the founding order");
+        // Funds, PRICES and meters every seat. Never split these: an unpriced seat is free for any
+        // stranger to take, and taking the front one reverses the subsidy (PITFALLS 5.181).
+        _fundAndPriceRoster(d);
+        _logSeats(d, "BEAT 1 - five founding seats: funded, PRICED and metered, in founding order");
 
         // ------------------------------------------------------- BEAT 2: a small swap fills the head
         _swap(d, 1, true, 1e18);
