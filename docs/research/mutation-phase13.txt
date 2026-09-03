@@ -1,0 +1,20 @@
+M21   RED        (44 failing)  the credit loop stops one rank short of the weight loop (last recipient skipped, escrowTotal still advanced by the whole pot)
+M20b  RED        (58 failing)  rent flows BACKWARD again — the pre-Phase-12 direction, restored
+M21b  RED        (48 failing)  the CREDIT loop flows backward while the WEIGHT loop still runs forward
+M29g  RED        (4 failing)  foreclosure does not arm the firm quote (the self-foreclosure free lane, re-opened)
+M29h  SURVIVED   (0 failing)  foreclosure SHORTENS an already longer firm window instead of extending it
+M29c  RED        (6 failing)  a seat can voluntarily give up its rank inside its term
+M29d  RED        (8 failing)  funding a seat from empty never arms a term
+M29e  RED        (6 failing)  every deposit re-arms the term (an honest LP is locked by topping up)
+M29f  RED        (10 failing)  the term is checked on the FUNCTION rather than on the demotion (a zero-payout withdrawal is punished as an exit)
+M28b  RED        (2 failing)  funding a seat does not settle the seats BEHIND it (the flash grab, re-opened)
+M28c  RED        (2 failing)  a FUNDED BUYOUT does not settle the seats behind it
+M29b  SURVIVED   (0 failing)  settleBehind skips a seat when a foreclosure slides the ranks up under it
+
+==== SUMMARY ====
+SURVIVED: 2
+    M29h  foreclosure SHORTENS an already longer firm window instead of extending it
+    M29b  settleBehind skips a seat when a foreclosure slides the ranks up under it
+NO-COMPILE: 0
+BAD-PATTERN: 0
+RED: 10
