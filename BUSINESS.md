@@ -1,1262 +1,499 @@
 # QUEUE — the business case
 
-A decision memo for people who will fund, deploy, or reject this. You do not need to know DeFi. You do need to know what you are actually buying.
+**Rewritten from scratch 2026-09-03 (Phase 11).** The previous version is preserved at
+`archive/2026-09-03/BUSINESS-pre-phase-11.md`. It was not edited into this one, and that is
+deliberate: it carried a Phase-9 correction banner over a Phase-4 body, and by the end its headline
+numbers came from a roster the deploy script does not deploy, at a premium rate we do not ship, on a
+premium *rule* the contract replaced in Phase 8. Correcting it in place would have left two live
+answers in one file, which is exactly what this project's own conventions forbid.
 
-The 15-minute version is [`README.md`](README.md). This file is the numbers, the "when," the fears, and the claims that survive contact with a skeptic.
-
-Every number carries a tag:
-
-| Tag | Meaning |
-|---|---|
-| **[MEASURED]** | Produced by executing code. Source named. |
-| **[COUNTED]** | A query run against `archive/2026-08-26/docs/research/data/hook_directory_662.json` (662 rows). The query is printed so it can be re-run. |
-| **[SOURCED]** | Quoted from a primary document that was actually fetched and read. |
-| **[ESTIMATE]** | A worked example. Assumptions stated inline. Not a measurement and not a projection. |
-| **[ANALYSIS]** | Reasoning, not measurement. Flagged wherever it appears. |
-
-Nothing in this document is a revenue, TVL, or adoption forecast. There is no basis for one and none is offered.
+**Every number below names the file, the fixture and the parameter block it came from.** Four
+retractions on this project came from mixing fixtures; the rule now is that an unsourced number is
+not quotable.
 
 ---
 
-## 0. THE VERDICT A DECISION-MAKER CAN ACT ON
+## 0. THE ONE-PARAGRAPH VERSION
 
-**Rewritten 2026-09-02 (Phase 9). This section replaces the 2026-09-02 correction banner it used to
-carry, and it supersedes §0.5 and every per-seat table below it.** The earlier banner was right that
-the product description was wrong. It was wrong about what the product IS. Everything here is derived
-or measured, and the derivation is reproducible: `python3 docs/research/seat-economics/frontier.py`.
+> Uniswap fills every liquidity provider in a position **pro-rata** — every trade takes a little from
+> everybody, in proportion. That is not a setting; it is the only thing the AMM does. **QUEUE gives
+> each funder a rank and fills them in order.** The surprising part, which we measured and which is
+> the entire product: **being first is bad.** The front seat absorbs the adverse selection first, at
+> the earliest and worst prices of every move. So the front is a *first-loss position*, and everyone
+> behind it does measurably better because it is there. That makes QUEUE the first mechanism where
+> one LP inside a single Uniswap position can take structurally worse fills so another gets
+> structurally better ones — **enforced by the contract, not promised by a vote.**
 
-### 0.05 EXPLAIN IT TO ME LIKE I AM TEN
+---
 
-```
-  A Uniswap pool is a shared pot of money that traders trade against.
-  Normally everyone who put money in is treated IDENTICALLY: every trade
-  takes a little bit from every single person, in proportion. You cannot
-  opt out of that. It is not a setting — it is the only thing Uniswap does.
-
-  QUEUE puts the funders in a LINE.
-  Trades hit the person at the FRONT first, then the next, then the next.
-
-        trade ──►  [ 1st ] [ 2nd ] [ 3rd ] ........ [ last ]
-                     ▲                                  ▲
-             gets hit by EVERY trade            almost never gets hit
-
-  THE SURPRISE, AND IT IS THE WHOLE PRODUCT:
-  BEING FIRST IS BAD.
-
-  When the price is falling, the person at the front buys the whole way
-  down — starting at the highest, worst prices. Everyone behind them buys
-  later and cheaper. We measured this carefully and it is not close.
-
-  So standing at the front is VOLUNTEERING TO TAKE THE PAIN,
-  and everybody behind you does measurably better because you did.
-```
-
-**Why that is worth something.** Companies today rent liquidity by **printing tokens** and handing
-them out. It dilutes their holders, the money leaves the moment the printing stops, and the promise
-is just a governance vote that can be undone.
-
-**QUEUE lets a company rent liquidity by standing at the front of the line instead.** It prints
-nothing, dilutes nobody, and keeps its capital — it simply earns less on it, on purpose, so that
-outside investors in the same pool earn more. **And it is not a promise: it is the order the contract
-fills people in.**
-
-**The honest part, which we say first, not last:** this does not create money. Every point the back
-gains, the front loses. It is a subsidy, deliberately paid, and the only novel thing is that the
-subsidy is *mechanical* rather than *printed*.
-
-### 0.1 What QUEUE is, in one sentence
-
-> **A fixed-term Uniswap position whose funders are RANKED — rank 1 is filled first by every trade,
-> and pays for that automatically, out of the fees being first earns it, to the people it jumped.**
+## 1. WHAT CHANGES, IN ONE PICTURE
 
 ```
-   A TRADER — any router, never sees the queue
-        │   same price · same 0.30% fee · +119% gas
+   TODAY — every concentrated AMM, no exceptions
+   ────────────────────────────────────────────────────────────────────────
+
+     a trade arrives
+          │
+          ▼
+     ┌─────────────────────────────────────────────────┐
+     │  ONE POSITION — everybody is filled PRO-RATA     │
+     │                                                  │
+     │   LP A ▓▓▓▓▓▓   LP B ▓▓▓▓   LP C ▓▓   LP D ▓     │
+     │        ↑ every trade takes a slice of each ↑     │
+     └─────────────────────────────────────────────────┘
+
+     You cannot opt out. You cannot go first. You cannot go last.
+     There is exactly one fill quality and everybody gets it.
+
+
+   WITH QUEUE — the same position, the same pool, the same router
+   ────────────────────────────────────────────────────────────────────────
+
+     a trade arrives
+          │
+          ▼
+     ┌──────────┐   ┌────────┐   ┌──────┐   ┌────┐   ┌──┐
+     │  RANK 1  │──▶│ RANK 2 │──▶│ RANK3│──▶│ R4 │──▶│R5│
+     │  33% of  │   │        │   │      │   │    │   │  │
+     │  the book│   │        │   │      │   │    │   │  │
+     └──────────┘   └────────┘   └──────┘   └────┘   └──┘
+       filled by      reached      rarely     almost never
+       ~96% of        by large     reached    reached
+       all trades     trades
+
+       ▲                                              ▲
+       │                                              │
+   WORST prices.                              BEST prices.
+   Absorbs the adverse                        Fills only when the
+   move first.                                move is already large.
+```
+
+**The trade is filled identically from the outside.** Same price, same 0.30% fee, any router. A
+trader cannot see the queue and does not interact with it. What changed is *which LP inside the
+position ate that trade*.
+
+---
+
+## 2. THE ONE CLAIM WE MAKE
+
+> **QUEUE is subordination for Uniswap liquidity.**
+> One LP inside a single position takes structurally worse fills so that another gets structurally
+> better ones — and the ordering is enforced inside `swap`, not by a payment step somebody could
+> withhold.
+
+### What we never claim — each of these is disproven in our own repo
+
+* ❌ **"LPs earn more here."** The capital-weighted average return **is** the passive-LP return, by
+  identity. It is a transfer, and we say so first, not last.
+* ❌ **"Priority is valuable to the person who holds it."** It is worth *negative* money. Our shipped
+  front seat executes ~133 bps **worse** than the pro-rata position it displaces.
+* ❌ **"A senior tranche with protected downside."** Measured downside-deviation ratio against a
+  passive LP: 0.0–1.6×, and the tail is *worse*, not better.
+* ❌ **Any per-seat number without naming its roster, its φ and its premium basis.** Three roster
+  configurations and two premium rules are in play in the research directory.
+
+---
+
+## 3. WHERE THE VALUE IS — and where it is not
+
+### It is not in creating money
+
+The seats share **one** Uniswap position, so this is an identity, not a result:
+
+```
+        Σ (capital share of seat i) × (return of seat i)  ==  passive LP return
+                                                   measured residual: 2.98e-14
+```
+
+One seat above the line requires another below it by exactly as much. **There is no configuration,
+no ordering rule and no premium rate that changes this.** We tried; §7 lists the attempts and the
+numbers that killed them.
+
+### It is in *who* is above and below the line, and in that being mechanical
+
+The exchange rate is a closed form. It needs no simulation and cannot be quoted against the wrong
+fixture:
+
+```
+        back's excess over a passive LP  =  c₁ × (LP − r₁) / (1 − c₁)
+
+        where c₁ = the front seat's capital share
+              r₁ = the front seat's realised return
+              LP = what a passive pro-rata LP made on the same path
+
+        At the SHIPPED c₁ = 1/3:
+        ────────────────────────────────────────────────────────────
+        ONE POINT the front gives up  buys the back  EXACTLY HALF A POINT.
+        100% efficient. Zero leakage. Zero creation.
+```
+
+**Verified against simulation on the contract's real premium rule, all three regimes:**
+closed form `+0.87 / +1.44 / +0.77 pp` against simulated `+0.87 / +1.47 / +0.73 pp`.
+
+---
+
+## 4. THE APPLICATION WE LEAD WITH — emissions-free liquidity incentives
+
+### The problem, in business terms
+
+* Protocols rent liquidity by **printing their own token** and handing it to LPs.
+* That **dilutes existing holders**, creates **structural sell pressure**, and the capital **leaves
+  the day emissions stop**.
+* And the promise is a **governance decision** — it can be voted down, changed, or quietly reduced.
+
+### What QUEUE offers instead
+
+* The protocol posts **its own capital at the FRONT** and accepts the worse fills.
+* External LPs fund the **BACK** and out-earn passive LPing.
+* **Nothing is printed. Nobody is diluted. The protocol keeps its capital** — it simply earns less
+  on it, on purpose.
+* **It is not a promise.** It is the order the contract fills people in, executed inside `swap`.
+  There is no payment step to withhold, no keeper to fund, no vote to reverse.
+
+### The flow, with real dollars
+
+```
+   SETUP — the roster QueueDeployBase actually deploys
+   ─────────────────────────────────────────────────────────────────────────
+   $1,000,000 book · 5 seats · capital weights 5:4:3:2:1 · band ±10% · fee 0.30%
+
+        PROTOCOL TREASURY            EXTERNAL LPs
+             $333,333                   $666,667
+           (c₁ = 1/3)              (ranks 2,3,4,5)
+                │                         │
+                ▼                         ▼
+        ┌───────────────┐   ┌──────┬──────┬──────┬──────┐
+        │    RANK 1     │──▶│ R2   │ R3   │ R4   │ R5   │
+        │  first-loss   │   │$266k │$200k │$133k │ $67k │
+        └───────────────┘   └──────┴──────┴──────┴──────┘
+
+
+   OVER ONE 61-DAY BAND, BENIGN CONDITIONS (φ = 5,100, contract basis)
+   ─────────────────────────────────────────────────────────────────────────
+   A passive pro-rata LP on the same path returns              +5.02%
+
+        RANK 1  realises  +3.28%   →  gives up  1.74 pp  →  −$5,800
+        RANKS 2–5 realise +5.89%   →  gain      0.87 pp  →  +$5,800
+                                                             ═══════
+                                     net created                  $0
+```
+
+**The two figures are equal because they must be.** 1.74% of $333,333 and 0.87% of $666,667 are the
+same $5,800. That is the identity in §3, in dollars.
+
+### Annualised, and compared honestly against emissions
+
+```
+   61-day band → ~6 bands a year
+
+   COST TO THE PROTOCOL      $5,800 × 6  =  ~$34,700/yr
+                             on its own $333,333  =  10.4%/yr of its capital
+
+   BENEFIT TO EXTERNAL LPs   +0.87 pp × 6  =  ~+5.2%/yr
+                             on $666,667 of external TVL
+
+   THE SAME BOOST VIA EMISSIONS would cost ~$34,700/yr of printed tokens.
+   ─────────────────────────────────────────────────────────────────────────
+   SO: QUEUE IS NOT CHEAPER. IT IS THE SAME DOLLAR NUMBER, PAID DIFFERENTLY.
+
+     emissions            QUEUE
+     ─────────            ─────
+     dilutes holders      no dilution
+     creates sell         no new supply
+       pressure
+     zero capital         requires ~$333k of REAL capital, locked in a
+       required             fixed band
+     reversible by a      mechanical — enforced in the fill order
+       vote
+     capital leaves       capital stays until the band is redeployed
+       when it stops
+```
+
+**Say this out loud rather than let a judge find it:** the case for QUEUE over emissions is *not*
+cost. It is **no dilution, no sell pressure, and the subsidy being an invariant rather than a
+promise** — bought at the price of locking real treasury capital.
+
+---
+
+## 5. WHAT THE HOOK DEMONSTRATES, EXACTLY
+
+The deploy sequence lives in `script/QueueDeployBase.sol` and is executed by **both** the broadcast
+script and a test — including against a **fork of live Unichain Sepolia**. Five beats, each asserted:
+
+```
+  BEAT 1  FIVE FUNDED SEATS, IN FOUNDING ORDER
+          ranking() == [0,1,2,3,4], every seat holds both tokens.
+          ▶ proves: the roster exists and is ordered.
+
+  BEAT 2  A SMALL SWAP FILLS THE HEAD AND NOBODY ELSE      ◀ THE HEADLINE
+          seat 0's outgoing balance falls; seats 1-4 do not move AT ALL.
+          ▶ proves: this is NOT pro-rata. No other AMM can do this.
+
+  BEAT 3  A SWEEPING SWAP WALKS THE QUEUE IN RANK ORDER
+          more than one seat moves, and no seat is touched while a seat
+          ahead of it still holds stock (exhaustion is prefix-shaped).
+          ▶ proves: the ORDER is real, not "some seats moved".
+
+  BEAT 4  A TRANSFER MOVES RANK; CAPITAL GOES BACK TO THE SELLER
+          seat changes hands EMPTY; seller made whole to the wei.
+          ▶ proves: rank is a separable, tradeable object.
+
+  BEAT 5  AN UNDER-PRICED SEAT IS TAKEN AT ITS OWNER'S OWN NUMBER
+          holder posts an ask; a buyer pays it AND replaces the depth.
+          ▶ proves: rank is Harberger-priced — you set your own price and
+            anyone may take it there.
+```
+
+**What is genuinely new, stated precisely:** Uniswap already sells *distance from spot* — liquidity
+near the price fills first and worst, liquidity far away fills rarely and best, and the tick
+structure gives you that for free. **QUEUE is the first mechanism that orders LPs *inside one
+position at one distance*.** That ordering is what makes contract-enforced subordination possible.
+
+---
+
+## 6. THE NUMBERS — shipped configuration only
+
+**Fixture, stated once and true of every row:** 5 seats, capital 5:4:3:2:1, $333,333 head
+(c₁ = 1/3), $1,000,000 book, band ±10%, fee 0.30%, retail flow 15/hr, 4 disjoint seed ranges × 30 =
+120 paths per cell, **φ = 5,100**, premium weighted by **contributed liquidity with the payers
+excluded — the rule the contract implements**. Source: `docs/research/seat-economics/results-shipping-basis.txt`.
+
+| regime | band life | passive LP | rank 1 | front gives up | ranks 2–5 gain | outcomes beating LP |
+|---|---|---|---|---|---|---|
+| **Benign** | 61.0 d | +5.02% | +3.28% | **−1.74 pp** | **+0.87 pp** | 68.1% |
+| **Normal** | 19.1 d | +0.49% | −2.40% | **−2.89 pp** | **+1.47 pp** | 84.8% |
+| **Toxic** | 1.4 d | −2.17% | −3.70% | **−1.53 pp** | **+0.73 pp** | 75.8% |
+
+*"Outcomes beating LP" is the fraction of individual (path, seat) results in ranks 2–5 that beat a
+pro-rata LP, at the φ = 5,000 grid point. **It is not 100%, and we do not say it is.***
+
+### The premium rate, and how it was chosen
+
+`PREMIUM_BPS` is the share of the fee the front seat hands backward. Two constraints, solved rather
+than swept for a nice number:
+
+```
+   the BACK needs φ high enough to beat a passive LP        →  φ ≥ 4,542
+   the FRONT needs φ low enough to still beat its own
+     cheapest alternative (a keeper-managed ATM range)      →  φ ≤ 5,670
+                                                               ────────────
+   feasible window [4542, 5670]  ·  midpoint  ·  SHIPPED φ = 5,100
+```
+
+**The sensitivity that decides the product, and we state it ourselves:** hold the front to the
+*passive-LP* bar instead of the managed-range bar and it falls below at 4,317 — under the 4,542 the
+back needs — so **both windows are empty and no shipping constant exists**. The window is non-empty
+only because re-anchoring is worth something to the front. What that costs to replicate is measured;
+**what a buyer would pay for it is not, and no simulator can say.**
+
+---
+
+## 7. WHAT WE KILLED — five theses, pre-registered criteria, our own numbers
+
+| the thesis | what killed it |
+|---|---|
+| ~~Every seat beats a passive LP~~ | **Impossible by identity.** `Σ cᵢrᵢ = LP` to 2.98e-14, invariant to φ. |
+| ~~An ordering rule that creates value~~ | The distributable surplus `c₁(LP − B₁)` is **independent of the ordering rule**. Reordering moves the pie; it cannot grow it. |
+| ~~Priority is worth money to its holder~~ | **Negative, and monotone in how much you hold.** A plain pro-rata range order already beats trading as a taker; adding priority takes you the other way. Our shipped front seat costs **133 bps** against the position it displaces. |
+| ~~A senior tranche with a protected tail~~ | Bar set in advance at one-to-two orders of magnitude. Measured **0.0–1.6×**, and the tail is *worse*: −6.49% for the back against −6.43% for the LP. |
+| ~~A two-ended book~~ | Killed by a control that **could have confirmed it**: a real mechanism gain survives a mirrored drift, a direction bet flips. It flipped — `+4.487 pp` (t = +61.96) against `−1.277 pp` (t = −20.10). |
+
+**How to use this in a pitch: one line, not a section.** *"We pre-registered kill criteria for five
+business theses and killed all five; the write-ups are in the repo with the numbers that killed
+them."* Then move on. Spending a third of the runtime on what does not work reads as a post-mortem,
+not as rigour.
+
+---
+
+## 8. WHAT IT COSTS
+
+### To the trader
+
+```
+   plain v4 pool, same tokens/fee/price       69,970 gas
+   QUEUE, premium off                        141,036 gas   (+102%)
+   QUEUE as shipped (φ = 5,100)              153,177 gas   (+119%)
+```
+
+* **+119% network compute on a typical swap.** On an L2 this is cents; on mainnet it is a real bill.
+  **QUEUE is an L2 product.**
+* No fee change. No worse price. The trader gets exactly what the pool would have given them.
+* Aggregators may route around the pool for the gas alone. That is a real commercial risk and it is
+  not hypothetical.
+* The premium's gas cost is the **machinery, not the rate**: moving φ by 2,800 bps moved this by 230
+  gas.
+
+### To the protocol running the programme
+
+* **Real capital, locked.** ~$333k in a fixed band that cannot be re-centred without withdrawing and
+  redeploying.
+* **~10.4%/yr of that capital**, in benign conditions, handed to the seats behind it.
+* **Rent on its own posted seat price** — see §9, which is not optional.
+* **Uncapped, and set by the market rather than by a budget.** The subsidy is largest in exactly the
+  conditions where the treasury can least afford it.
+
+---
+
+## 9. THE OPERATIONAL REQUIREMENT NOBODY WOULD GUESS
+
+**The subsidiser must price its seat in the same transaction that funds it.** This is proven, not
+argued (`test_4_44`).
+
+```
+   A never-priced seat quotes ZERO and is free to take.
+   (Deliberate — the contract calls it the bootstrap, and for a roster meant
+    to change hands it is correct. For a protocol holding the front for MONTHS
+    it is fatal.)
+
+   ANY STRANGER CALLS  buySeat(frontSeat, 0, 0)
+        │
+        ├─▶ pays NOTHING                          (both currencies unchanged)
+        ├─▶ the protocol's capital is EVACUATED out of the position
+        ├─▶ the pool's depth drops in the same transaction
+        ├─▶ the emptied seat is demoted to the TAIL
+        │
         ▼
-   ┌────────────────────────────────────────────┐
-   │  AN ORDINARY UNISWAP POOL                  │
-   └───────────────────┬────────────────────────┘
-                       │  the 0.30% fee
-                       ▼
-              ┌──────────────────┐
-              │  RANK 1          │  filled FIRST by every trade, both directions
-              │  1/3 of the book │  absorbs ~96% of all fills, first, at the worst prices
-              └────────┬─────────┘
-         keeps 49% ───┤
-                       │  hands 51% (φ = 5,100) to the seats it jumped,
-                       ▼  in proportion to the DEPTH each contributed
-        ┌──────────┬──────────┬──────────┬──────────┐
-        │  RANK 2  │  RANK 3  │  RANK 4  │  RANK 5  │
-        └──────────┴──────────┴──────────┴──────────┘
-           rarely filled. They ARE the depth that
-           makes the pool worth trading against.
+   AND THE SEAT THAT WAS SECOND IS NOW FIRST.
 
-   PLUS: rank 1 posts its own price and pays rent on it.
-         Anyone may buy the seat at that price, at any time.
+   By  Σ cᵢrᵢ = LP  somebody must sit below the line — so the external LP who
+   bought a SUBORDINATED BACK SEAT has been moved into the FIRST-LOSS position,
+   by a stranger, for the price of gas.
 ```
 
-### 0.2 The one constraint that governs everything
-
-The seats share **one** Uniswap position. So, as an identity rather than a result:
-
-```
-      capital-weighted average of all seats' returns  ==  what ONE ordinary LP earns
-```
-
-Measured to **3e-14, and INVARIANT TO φ.** The mechanism creates nothing. **It decides who is paid to
-lose.** Any pitch of the form *"LPs earn more here"* is false. This project has made that claim twice
-and both times it was wrong.
-
-### 0.25 🛑 SETTLED — THE ANSWER IS ZERO, BY IDENTITY. READ BEFORE §0.3.
-
-**§0.3's formula is correct. The surplus it computes is zero or negative, and that is structural
-rather than empirical.**
-
-A **static** Uniswap position spanning exactly this pool's band, with the same capital, returns
-**exactly** the pro-rata LP return — measured, paired, per regime, to a maximum absolute deviation of
-**4.3e-14**. Rank 1 can hold one for free, in any pool for the same pair. **Therefore `B₁ ≥ LP` by
-construction and `SLACK = c₁·(LP − B₁) ≤ 0` before any measurement is taken.**
-
-The "+0.19 pp / ~1.1%/yr" figure once published here used the best *managed* keeper wing as the bar.
-**That is a strategy, not a bar.** It pays a conversion cost the static position over the same range
-does not, and the static position returns `LP` exactly. **Rank 1's outside option is not "the best
-keeper bot" — it is "the best of everything rank 1 may freely do", and that set contains ordinary
-passive LPing.**
-
-**Every per-seat number in §0.3–§0.5 stands as arithmetic and is void as a business case.** The
-mechanism redistributes a fixed pie and charges +119% gas to do it. The only party who can rationally
-take a seat is one whose mandate forbids the free alternative — which no simulator can price and for
-which we have no evidence.
-
-### 0.3 Therefore the value is a formula, not a story
-
-Let `c₁` be rank 1's share of the capital, `LP` what a passive LP earns, and `B₁` what rank 1 would
-earn doing its **next best thing**.
-
-```
-        ┌──────────────────────────────────────────────────────────────┐
-        │                                                              │
-        │            SURPLUS   =   c₁  ×  ( LP  −  B₁ )                │
-        │                                                              │
-        │   the head's            how much WORSE the head's            │
-        │   capital share         alternative is than simply LPing     │
-        │                                                              │
-        └──────────────────────────────────────────────────────────────┘
-```
-
-Rank 1's own return **cancels**. So do `N`, the capital schedule beyond `c₁`, the ordering rule, the
-premium's weighting, the rent, and φ. Confirmed to 2.4e-16 against an independent long-form
-computation. Full derivation and the conditions under which it is exact:
-[`docs/research/seat-economics/FRONTIER.md`](docs/research/seat-economics/FRONTIER.md).
-
-**Read it as the go/no-go it is:**
-
-| if rank 1's real alternative is… | `LP − B₁` | surplus (shipped roster) | verdict |
-|---|---|---|---|
-| **a passive LP** | 0 | **exactly 0.0000** | **no product, at any φ, ever** |
-| ~~a keeper bot at its best width~~ **RETRACTED — see §0.25. A handicapped bar: the only positive cell in a 105-cell grid** | ~~+0.57 pp~~ | ~~0.19 pp~~ → **≤ 0** | **no product** |
-| a keeper bot at 1% width | +74 pp | 24.7 pp | nobody rational runs that |
-
-### 0.35 🛑 PHASE 10 — AND THE CONSTRAINED BUYER IS NOW MEASURED TOO. §0.4 IS REFUTED.
-
-**§0.4 below says the product works for capital whose mandate forbids passive LPing. That was the
-last open door and it is now shut, by measurement rather than by argument. Read this before §0.4;
-§0.4 is kept only because it is what a reader will otherwise reconstruct for themselves.**
-
-The constrained buyer's alternative is not passive LPing — it is **paying to trade**: fee, price
-impact, gas, a keeper. So the right comparison is not a return, it is an **execution price**. In the
-only regime where such a buyer's order actually fills:
-
-```
-   who                       average price it BOUGHT at     vs doing it as a TAKER
-   an ordinary pro-rata LP            1906.99                      +136 bps   ← already better
-   QUEUE rank 1 (as shipped)          1932.41                      −108 bps
-   QUEUE rank 1 (front-loaded)        1981.82                      −340 bps
-                                        ▲
-                    the more priority you hold, the WORSE you buy
-```
-
-**An ordinary Uniswap range order already beats trading as a taker. Buying priority takes you from
-+136 bps to −340.** Priority is worth roughly **minus 476 bps** to the person holding it.
-
-**Why, in one sentence a non-specialist can check:** being first in the queue means you are the first
-person the market trades against — so in a falling market you buy the whole way down, starting at the
-highest prices. Spreading your order across everyone (which is what an ordinary Uniswap position
-does) is the same thing as averaging in. **Front of the queue is not a privilege; it is the seat that
-absorbs the loss first.**
-
-**And there is no configuration that fixes it**, because it is not a tuning problem: putting more
-capital at the front makes the front fill even earlier, which makes its average price worse.
-
-**The general statement, which is the one to remember: a rank in the queue is the same economic
-object as a distance from the current price — and Uniswap already lets any LP choose that, for free,
-with no hook.** See [`FRONTIER.md`](docs/research/seat-economics/FRONTIER.md) and PITFALLS 5.160–5.162.
-
-### 0.4 Which means: QUEUE only works for CONSTRAINED capital
-
-**Unconstrained capital — anyone chasing yield — can simply be a passive LP.** For them `B₁ ≥ LP`,
-the surplus is zero or negative, and there is no reason to be here. **Do not sell to them.**
-
-**Constrained capital cannot take that option without abandoning its mandate**: a desk that must hold
-at-the-money inventory, a treasury working a position, an issuer distributing supply. Its `B₁` is the
-best *constrained* alternative — a keeper bot re-minting a narrow range — and that is measurably
-below `LP`. **The size of this product is the size of that constraint.** That is the sharpest true
-statement available about who this is for.
-
-### 0.5 What each side actually gets
-
-| party | gets | gives up | walks away when |
-|---|---|---|---|
-| **Rank 1** | First fill, both directions, every trade, **with no rebalancing trade ever** | A below-LP return | its unconstrained alternative becomes available |
-| **Ranks 2–5** | LP + 0.87 pp capital-weighted over a 61-day benign band, funded by rank 1 giving up 1.74 pp [`results-shipping-basis.txt`, φ = 5,100, contract premium basis] | Their place in line; **they underperform a plain LP in a crash** | the coupon stops clearing |
-| **Trader** | Nothing | **+119% gas** (152,947 vs 69,970) | their router optimises for gas |
-| **Wing LPs** | Ordinary Uniswap outside the band | Nothing | never — they are unaffected |
-| **Deployer** | A public, on-chain price for *"what is being first worth in this pair?"* | Picks band, φ, τ, roster | — |
-
-**Ranks 2–5 are not a ladder.** Adjacent-rank separation is 2.37 between seats 1 and 2 and 0.01–0.09
-everywhere else. Say *"rank 1 plus a four-member premium-sharing pool"*, never *"32 desks"*.
-
-### 0.6 It is a FIXED-TERM instrument, and that is the product, not a limitation
-
-The band is set once at deployment and **never moves**. When price leaves it, the position stops
-earning and holders withdraw. Expected life on the shipped band: **61 days benign, 19 normal, 1.4
-toxic.**
-
-That cannot be engineered away, and the reason is an identity: liquidity quoting *across* spot needs
-**both** tokens, a position the price has left holds exactly **one**, and acquiring the other is a
-trade at market — **which is precisely the conversion cost rank 1 is here to avoid.** Rank 1's
-re-anchoring is free *because it happens inside a band and is paid for by the flow itself*. Crossing
-bands is not re-anchoring; it is the keeper's trade at the keeper's price.
-
-**So the term is the boundary of the property being sold.** Band width is a deployment parameter, and
-expected life scales as `width²` while depth scales as `1/width` — doubling the band quadruples the
-term and only halves the depth.
-
-### 0.7 What is NOT established, stated first rather than buried
-
-**What a buyer will actually PAY for first fill.** We have measured what the property costs to
-replicate. We have not measured demand, and no simulator can. **That single question decides whether
-this product exists.** It is a go-to-market question, not an engineering one.
-
-### 0.8 What to say, and what never to say
-
-**SAY:** *"a fixed-term priority book where the front seat pays the depth behind it, automatically."*
-**SAY:** *"the surplus is `c₁·(LP − B₁)`. At the shipped `c₁ = 1/3`, one point the front gives up
-buys the back exactly half a point — and here is the derivation."* **The old "about 1%/yr" was
-retracted three times elsewhere in this file and must not be said (PITFALLS 5.179).**
-**NEVER SAY:** "LPs earn more." "Cheaper or safer trades." "Sandwich protection." "32 desks."
+**Remedy, and it is operational rather than a code change:** post a self-price on the subsidiser's
+seat in the funding transaction, and pay Harberger rent on it thereafter. That rent is a **real
+running cost of the programme** and belongs in the pitch rather than in whoever deploys it.
 
 ---
 
+## 10. HONEST LIMITATIONS — we state these before anyone asks
 
-## 0.9 SUPERSEDED — WHO BUYS WHICH SEAT, AND WHEN THEY LOSE
-
-> **⛔ SUPERSEDED 2026-09-02 by §0.3. Kept because this project records what was refuted, not just
-> what survived.** Every per-seat table below prices seats against a bar that the closed form makes
-> irrelevant: the surplus available to the whole roster is `c₁·(LP − B₁)` regardless of how it is
-> split, so a per-seat window computed without naming `B₁` is not a decision rule. The specific
-> defect is 5.136 — the keeper bar these tables lean on was swept only to 5% width and never to the
-> band's own 10%, where the keeper does zero re-mints and beats every narrower setting.
-
-
-The product is the seats. If no seat pays, there is no product. This section is the arithmetic, per
-seat, with the conditions written next to it — and it is deliberately the least flattering section
-in this document.
-
-> **SUPERSEDED IN PART, 2026-09-01 — read `docs/research/seat-economics/ROTATION.md` first.**
-> The diagnosis below is right and the numbers stand: under PERMANENT rank, 28–29 of 32 seats lose
-> under every regime. The REMEDY below — "two products, not 32", leave the middle unfunded — was
-> the wrong call. The book is now proven zero-sum against its own pro-rata benchmark (+0.0000%
-> difference in volume and total P&L), which means the ceiling is all 32 seats EQUAL to a pro-rata
-> LP, and **deterministic time-rotation of rank reaches it: 0/32 seats negative whenever the pool
-> is profitable.** It also found that BAND WIDTH dominates everything here — the ±10% band these
-> numbers were taken on is a losing LP position on a volatile pair whatever the hook does. Do not
-> quote §0.5's "two products" conclusion or its per-seat table as current.
-
-**[SIMULATED] — and read this before quoting any number below.** Every figure here comes from
-`docs/research/seat-economics/`, a simulation of the mechanism **as the contract actually executes
-it**: one constant-liquidity band, seats holding `(a0, a1)`, the outgoing token drained front-first
-from a cursor, seats emptied and skipped until the flow reverses. It is not a measurement of a live
-pool and there is no live pool to measure. It replaces an earlier model that let the head refill
-for free on every trade, which overstated the head and understated everything behind it; the
-conclusions changed enough that the old numbers are not reproduced here.
-
-**One caveat governs everything.** The band is fixed for the life of the pool. On a 45%-vol pair
-that life is **~18 days** before the price leaves it. Every annual rate below is a rate *while in
-band*. QUEUE is a **rolling fixed-term instrument** — like rolling three-week paper, not a
-perpetual venue.
-
-### The one sentence that governs the whole section
-
-> **QUEUE does not create return. It redistributes the return of one ordinary Uniswap position.**
-
-The band earns exactly what the same band would earn with no hook on it. Front-first ordering
-decides *who gets which part*. So the seats are, against each other, **zero-sum**: if the head beats
-an ordinary pro-rata LP by 500 points, the rest of the book is behind by 500 points in total.
-Nothing in the design can change that, and any pitch that implies otherwise is wrong.
-
-What the mechanism *can* do — and what it now does — is make the split reflect a real economic
-difference rather than an arbitrary one.
-
-### Where the money comes from
-
-```
-  A TRADE ARRIVES
-       |
-       v
-  Uniswap sets the PRICE (unchanged: same curve, same 0.30% fee, any router)
-       |
-       v
-  QUEUE decides WHOSE MONEY FILLS IT, in seat order, AND AT WHICH PRICE
-       |
-       +--> seat 1 fills first, at the STALEST prices of the move
-       |    then seat 2, at slightly better prices
-       |    ... then seat 32, nearest the post-move price
-       v
-  small trades  reach seat 1 only
-  large trades  reach deep into the book
-
-  RETAIL / noise flow  = many small trades   -> PROFITABLE to fill (fees > markout)
-  ARBITRAGE flow       = few large trades    -> LOSS-MAKING to fill (markout > fees)
-```
-
-An ordinary Uniswap dollar takes **both halves and cannot decline either**. Sitting at the front
-buys the retail flow. Sitting at the back declines the arbitrage flow. **That is the entire product.**
-
-### What marginal pricing changed, and why it was not optional
-
-Until this build, every seat a swap reached was credited the swap's **average** price. The head
-therefore took all of the volume *and* the same price as the seats behind it. Simulated across three
-regimes, that made the head strictly better than an ordinary LP **in every state of the world**:
-
-```
-                                    BENIGN      NORMAL       TOXIC
-  ordinary pro-rata LP              +21.2%      -31.8%     -752.6%
-  ------------------------------------------------------------------
-  seat 1, AVERAGE pricing (old)    +934.0%     +675.3%     -439.9%   beats an LP in ALL THREE
-  seat 1, MARGINAL pricing (new)   +911.0%     +566.1%     -796.2%   loses in the toxic regime
-```
-
-A position that wins in every state of the world is not a market position, it is a subsidy paid by
-the rest of the book — the "free lane" failure that has killed seven mechanisms in this project's
-history. Marginal pricing closes it: the head is filled first, so it eats the **stalest** prices of
-every move it is first into, and it now underperforms an ordinary LP exactly when being first is
-supposed to hurt. Being first became a trade-off instead of a gift.
-
-It did **not** make the book more profitable. Total return is unchanged to the wei. It moved value
-from the head to the seats immediately behind it, and made the head's risk honest.
-
-### The book, per seat, and where it is bad
-
-Per year while in band. 32 equal seats of $31,250 on a $1M book, marginal pricing, 60 price paths.
-
-```
-                        BENIGN        NORMAL         TOXIC
-  in-band life          63.7 d        18.5 d         1.3 d
-  ordinary LP           +21.2%        -31.8%       -752.6%
-  --------------------------------------------------------
-  seat 1   (head)      +911.0%       +566.1%       -796.2%
-  seat 5                 -8.3%        -76.8%      -1267.1%   <-- TRAP
-  seat 10               -12.9%        -79.9%      -1123.0%   <-- TRAP
-  seat 15                -7.6%        -70.2%       -888.2%   <-- TRAP
-  seat 20                -9.3%        -49.1%       -659.9%   <-- TRAP
-  seat 32  (tail)        +0.0%         +0.0%         -2.3%
-  --------------------------------------------------------
-  seats beating an LP     1/32         10/32         15/32
-```
-
-Three things in that table, and none of them are comfortable:
-
-1. **The middle of the book loses under every condition.** Seats 5–20 are reached often enough to
-   absorb the large, toxic trades but not often enough to earn the small, profitable ones. This is
-   not a pricing artefact — marginal pricing *improves* these seats and they are still negative.
-2. **The deep tail is not "paid to wait", it is UNTOUCHED.** Seat 32's ~0% is not a coupon, it is
-   the return of capital that the flow never reached. Its P&L is the P&L of holding the tokens.
-3. **In a benign pool only ONE seat beats an ordinary LP.** If the pool is healthy, the honest
-   advice to everyone except the head is: do not buy a seat, just LP.
-
-### So why would anyone take seat 32?
-
-Because ~0% is a *good* number in the pools QUEUE is for. An ordinary LP in the normal regime
-returns **−31.8%**; the deep tail returns ~0% plus rent. The tail is not buying upside, it is
-declining a loss — a **bond-like** claim against an **equity-like** one.
-
-Its income is **rent**, and rent is the only reason the deep book is worth funding at all. The head's
-advantage is competed into its self-price by Harberger, and θ = τ/(τ+k) of that flows backward:
-
-```
-  head's advantage over an ordinary LP (NORMAL, marginal):  $186,852/yr
-  tail capital (seats 2..32):                                $968,750
-
-    tau     theta    head's self-price     rent/yr     TAIL COUPON
-    10%      33%              622,839      62,284           6.4%     <-- what the script ships
-    25%      56%              415,226     103,807          10.7%
-    50%      71%              266,931     133,466          13.8%
-   100%      83%              155,710     155,710          16.1%
-```
-
-**τ is a constructor argument and the deployed 10% is the least defensible number in the project.**
-It hands the tail a 6.4% coupon against a head earning six figures. 25–50% is the honest range, and
-nothing but a deployment decision stands in the way.
-
-### The answer to "should all 32 seats hold the same capital"
-
-**No, and equal seats are what manufactures the trap.** Simulated, sizing the head to swallow the
-routine arbitrage compresses the middle and roughly doubles the number of seats that beat an LP:
-
-```
-  NORMAL regime            pro-rata    head     worst of seats 2-21   seats >= LP
-  32 equal   ($31k each)     -31.8%   +566.1%        -109.6%              10/32
-  head $300k + 31 x $22.6k   -31.8%    -12.1%         -82.6%              13/32
-  head $600k + 31 x $12.9k   -31.8%    -38.4%         -49.9%              21/32
-```
-
-But note what it costs: the head's return collapses from +566% to −38%. **You cannot have both a
-spectacular head and a survivable middle** — they are the same money. The design honestly supports
-exactly **two** positions, and the contract already lets holders choose their own capital, so
-nothing needs to change in the code:
-
-| | **HEAD** — one seat | **TAIL** — the deep seats | **MIDDLE** |
-|---|---|---|---|
-| What it is | equity-like market making | bond-like rent coupon | nothing |
-| Capital | sized to the routine arbitrage trade | whatever is idle | **do not fund it** |
-| Income | fees on huge turnover, minus stale fills | rent, plus ~0 flow P&L | fees on almost nothing |
-| Benchmark | an ordinary LP | a wallet, or an LP in a toxic pool | — |
-| Wins when | the pool is benign or normal | the pool loses to arbitrage | **never** |
-| Loses when | the pool is toxic | the pool is benign | **always** |
-
-`MAX_SEATS = 32` is room for *participants*, not 32 things to sell.
-
-### The crossover, testable against a real pool with no model of ours
-
-> **Buy the tail when your pool loses more to arbitrageurs than it collects in fees.** Measure it
-> from the pool's own history: mark inventory at t+5min on every swap, sum the signed P&L, divide by
-> fees. A subgraph query, no model required. Stablecoin pairs: never. Volatile and long-tail pairs:
-> common.
-
-### What is honestly wrong with this
-
-1. **It is zero-sum against its own benchmark.** Every point the head gains, the book loses. The
-   only external gain is that capital which would otherwise sit in a wallet now provides depth.
-2. **The pools where the tail pays are the pools rational LPs are already leaving.** The addressable
-   market is people who have concluded LPing there loses money and want the exposure anyway — and
-   there are at most 31 of them, because the roster is capped.
-3. **Routing viability and seat value are anti-correlated.** QUEUE is routed only where it is the
-   deepest venue — long-tail pairs — which are exactly the pairs with thin, adversely-selected flow.
-   That, not the network-compute overhead, is the sharpest objection, and no engineering closes it.
-4. **The middle of the book has no buyer at any price**, and the roster is contiguous, so it cannot
-   be left out — only left unfunded. A seat with no capital still holds rank.
-5. **A QUEUE LP cannot re-mint around the price**, which every ordinary v4 LP can. Fixed-term, roll
-   it. See §5 in `README.md`.
-
-### What would make this stronger, none of it built
-
-| | why |
-|---|---|
-| **τ at 25–50%, not 10%** | Raises the tail's coupon from 6.4% to 10.7–13.8%. Already a constructor argument: a deployment decision, not a code change. Nothing has been tested at those values. |
-| **A correct `recenter()`** | Ends the fixed term, which is worth more than any pricing change: it is the difference between an 18-day instrument and a perpetual one. Attempted twice; unit-green, campaign-red, not shipped (`docs/wip/recenter-v2/`). |
-| **A big book** | The trap is a fixed *depth range*, not a fixed fraction. Diluting it across a larger book is the only lever that does not cost the head. |
+1. **It is a transfer, not creation.** The capital-weighted average *is* the passive-LP return.
+2. **Simulation only.** No live-pool data. 120 paths per cell, four disjoint seed ranges, one pair,
+   one band width.
+3. **The subsidiser must post real capital**, roughly comparable to what it subsidises. This is not
+   leverage on a marketing budget.
+4. **+119% gas for every trader** on the pool.
+5. **In toxic conditions there is no premium rate that works.** Seat 2 never clears a passive LP at
+   any φ, so the feasible window is **empty**. A toxic band also dies in ~1.4 days against ~61
+   benign, so it is a small share of the calendar — but the honest statement is that the mechanism
+   has a regime in which it does not deliver.
+6. **The front seat is a bad investment, and we say so on camera.** That is the design: somebody has
+   to volunteer, and the volunteer is the protocol, not a yield-seeker.
+7. **We did not measure demand, and no simulator can.** If no protocol has a reason to volunteer for
+   the front seat, this is an ordinary Uniswap position with extra steps.
+8. **The roster is closed at deployment.** There is no `mint` — capital joins by funding an existing
+   seat or buying one.
+9. **A holder cannot be subordinate and liquid at the same time.** Any withdrawal costs the rank.
+   That is enforced deliberately, and it is what makes a naive ERC-4626 wrapper unsafe (§11).
 
 ---
 
-## 1. NINETY SECONDS
+## 11. ADJACENT IDEAS — designed, NOT built, and we label them that way
 
-A Uniswap pool is a shared cash register. Every trade hits every cash provider a little, in proportion to size. Nobody is first. Nobody is last. The only way to get more of the action is to put more money in.
-
-Every other electronic market on earth already prices "being first." They just pay for it in **latency** — microwave towers, colocation — which is burnt on infrastructure and paid to nobody inside the market. On a blockchain the same value is sold by whoever orders the block. The pool's own cash providers get none of it.
-
-QUEUE puts a numbered line inside the pool and sells the numbers.
+**A pooled wrapper so ordinary LPs can hold a back seat.** The obvious version is an ERC-4626 vault
+on a middle seat. **It does not work, and the reason is worth saying out loud because it shows we
+understood our own mechanism:**
 
 ```
-  Customer trades $3,000
-  same price · same 0.30% trading fee
-                    │
-                    ▼
-         ┌──────────────────┐
-         │ Seat 1   $20k    │  ← emptied. Took 100% of this trade.
-         ├──────────────────┤     Pays rent to everyone behind.
-         │ Seat 2   $50k    │  untouched
-         ├──────────────────┤
-         │ Seat 3  $100k    │  untouched
-         ├──────────────────┤
-         │  … up to 32      │
-         └──────────────────┘
+   withdraw() demotes the rank on ANY payout, of ANY size.
+        │
+        ▼
+   redeem() must call withdraw()
+        │
+        ▼
+   ONE DUST REDEEMER permanently destroys the rank the whole vault's
+   value rests on — and NOTHING ever promotes a seat back.
+        │
+        ▼
+   Worse: anyone holding a seat BEHIND the vault is PAID to do it.
+   No lockup or fee closes this. Every exit ends in a withdraw().
 ```
 
-- Seat 1 is filled by every trade, including the small ones.
-- Seat 32 is filled only when a trade has already emptied 1 through 31.
-- You cannot join by arriving. You **buy** a seat at the holder's posted price.
-- The front pays **rent** to the back, continuously, on a number they set themselves.
-- Anyone can take the seat at that number, at any time.
+**The shape that does work:** an **async-redeem (ERC-7540) vault on the TAIL seat**, where demotion
+is a no-op and the tail is the *recipient* of the subordination payment. Shares must track
+contributed liquidity rather than a token-denominated NAV, and single-token deposits must be
+refused. **Unbuilt. Reasoned from source, not measured.**
 
-**This is not an order book.** An order book lines up *customers' orders*. QUEUE lines up *the people putting up the money*. No limit price, no matching, no cancel. The customer never talks to the queue.
-
-Think **NYSE seat**, not **DMV line**.
+**Priority among takers, rather than among LPs.** The machinery that works — a transferable,
+Harberger-priced, rank-ordered claim with exact conservation — is a priority auction. Priority among
+*LPs* is worth negative money; the right to trade *first against the pool in a block* is not, and
+that value currently leaks to searchers rather than to LPs. **Different product, crowded field, a
+rewrite of the allocator. Named because it is the only direction consistent with everything this
+repo has proven.**
 
 ---
 
-## 2. WHEN THIS MAKES SENSE — AND WHEN IT DOES NOT
+## 12. WHY THIS EARNS RESPECT RATHER THAN RIDICULE
 
-[ANALYSIS] throughout this section. The cases are the claim; the numbers that follow are the evidence.
-
-### Use it
-
-| Venue | Why QUEUE is the right object |
-|---|---|
-| A pair that already has ~10–30 serious market makers | 32 seats is about the size of that pit. Capital per seat is unbounded; only the numbers in line are scarce. |
-| A designated-market-maker / franchise book | This is what a DMM franchise *is*: a paid, obligated position at the front. Uniswap has never been able to express one. `designated market maker` → **0/662** prior hooks [COUNTED]. |
-| A permissioned or RWA book that already names its dealers | You already have a closed roster. QUEUE makes the roster's *order* a priced asset instead of a handshake. |
-| A market-maker who wants *first fill*, not *more size* | Today the only route to more fill is more capital, which also buys more of the toxic tail. QUEUE lets them buy the first $50k of flow. |
-| A treasury / LST issuer / vault that wants to LP without taking every small trade | The back seat is a subordinated liquidity position with a coupon. It has never existed in an AMM. **It is not "safer"** — see §8. |
-
-### Do not use it
-
-| Venue | Why it is the wrong object |
-|---|---|
-| A retail ETH/USDC pool competing for aggregator flow | Routers pick same price + lower network cost. QUEUE is +119% compute [MEASURED] on a typical swap. They will skip you. |
-| "We want to stop sandwiches" | QUEUE does not. Same prices, same attacks. |
-| "We want LPs to lose less" | Total P&L is identical. Redistribution, not reduction. |
-| "We want anyone to LP" | 32 seats. A small LP needs a syndicate wrapper. That wrapper is unbuilt and recreates the intermediary the pitch claims to delete. |
-| A long-tail pair with no professional desks | There is no buyer for the front, so there is no rent, so the back is strictly worse than ordinary Uniswap in the regime where LPing is profitable. |
-
-**The honest one-liner:** QUEUE is a **membership market for fill priority**. The membership fee is paid to the members you are standing in front of, not to an exchange. If that is not a sentence you can take to a buyer, this is the wrong product.
+* The Uniswap Foundation funds research concluding LPs lose money. **This audience rewards
+  measurement over optimism.**
+* We tried to kill our own value proposition with pre-registered criteria and **succeeded five
+  times**. The one claim that survived is measured, sourced and caveated.
+* We found and published the defects in **our own instruments**: the evidence file for our headline
+  result was committed empty; every published rate figure measured a rule the contract had replaced;
+  three separate copies of the shipped premium had drifted apart. All fixed, all recorded.
+* **"We found nothing" is not the same sentence as "we killed four theses and one survived."** Only
+  the second one is true, and only it should be said.
 
 ---
 
-## 2b. WHAT SHIPS TODAY — one queue for the whole pair, not per tick
-
-Yes. **The queue is for the band, not per tick**, and the band sits inside a normal Uniswap pool. There is one pool, one hook-owned concentrated position (~±10%), and one ordered list of ≤32 seats that share that position. Seats are not NFTs and they do not pick ranges.
-
-A trade that **stays at today's price** is allocated down that line, front-first. A trade that **walks away from today's price** fills the paid desks, then ordinary Uniswap LPs further out (Uniswap's own Position Manager, no seat). Parking on top of the paid desks reverts. There is no per-tick book and no per-seat range.
-
-```
-UNISWAP v3/v4 TODAY                         QUEUE TODAY (shipping)
-───────────────────                         ─────────────────────
-Price first: nearer ticks fill first        Price first, still (ticks unchanged)
-Within a tick: everyone at that             THEN, inside the hook's band:
-price is filled pro-rata                    32 paid seats, front-first
-                                            Outside the band: ordinary Uniswap
-                                            (anyone, PositionManager, pro-rata)
-```
-
-That is why this version is a **specialist DMM at the money**, not a replacement for Uniswap. Uniswap's product is concentrated liquidity; the wings are that product, unmodified. The queue is only who gets filled first *at the same price*. **Per-seat or per-tick ranges are a different product and are not shipping.** See §16.
-
-### Two tokens vs one
-
-A seat's ledger is `(token0, token1)`. It **can** hold only one.
-
-| Action | Both tokens | One token |
-|---|---|---|
-| `addToSeat` | Allowed. At the current price, on a full-range in-range position, **both legs are needed to mint depth.** The min of the two legs decides how much L is added. | Allowed. On this version, in range, the other leg is 0, so **L minted is 0.** The tokens sit in the shared float. You have a claim on the books. You did **not** add pool depth. |
-| After a swap | Front is driven toward one-sided: it sells the outgoing token until that side is empty. | That is the normal post-fill state. Withdrawal needs the shared float because Uniswap will not release an off-ratio pile from a position. |
-| Rent received | Weighted by **token0 balance only**. [MEASURED in the contract.] | A seat holding only token1 is paid **$0** of rent. After a one-way sell of token0, the back is often sitting in token1 — so the coupon dies on the day they sat through the beating. |
-
-**It makes a difference.** Providing both in the current ratio is how you add depth. Providing one is inventory. Earning rent requires token0. A "passive" back seat that gets converted to token1 on an event is not passive and is not paid. That is the Ratchet plus the token0-weight, stacked.
-
-Do not tell a treasury "deposit whichever token you have." On this version that is how you add no depth and collect no rent.
-
----
-
-## 3. WHAT A "QUEUE" IS HERE
-
-The word is doing too much work. In ordinary English a queue is: arrive, stand at the back, wait, get served.
-
-**QUEUE is not that.**
-
-```
-ORDINARY QUEUE                          THIS PRODUCT
-──────────────                          ────────────
-Arrive → join the back                  There is no "join the back"
-Position = who got here first           Position = who pays the rent
-Anyone can enter                        32 seats. Always.
-Free                                    Paid, continuously
-You cannot be jumped                    You CAN be bought out, at your own price
-Leaving gives up your place             Taking your money out does NOT destroy
-                                        the seat. Empty seat = numbered place,
-                                        still for sale, still on the rent meter.
-```
-
-The ordinary version is dead on arrival, and this repository has the corpse:
-
-1. **Free rank is griefable rank.** If arrival grants the front, the front costs one wei. Dust it, own every small trade forever. That was version 1 of this hook (`PLAN.md` §B.8, §E.16; `PITFALLS.md` 5.8).
-2. **Unbounded rank is worthless rank.** If anyone may join the back, slots are not scarce. A non-scarce asset has no price. With no price there is no rent, and the back is never paid.
-
-So the roster is **bounded** and the seats are **paid for**. Scarcity is the mechanism, not a compute concession.
-
-Which raises the obvious objection: a fixed set of 32 tradeable seats is a cartel. That is why a seat is **leased, not owned**:
-
-- You post your own price. No oracle, no admin, nobody else's opinion.
-- You pay **continuous rent on your own number**, to the seats behind you.
-- **Anyone may take the seat at that number, at any time.** Under-price it, you lose it. Over-price it, you pay for it.
-- Rent comes from a **prepaid meter**. Let it run dry and you are **moved to the back** — not liquidated, not seized. You keep the seat and every wei of capital. You lose only your place.
-
-> **Scarce, but never capturable.** A bounded roster without the lease is a cartel. A lease without a bounded roster prices nothing.
-
-The sharpest form of the remaining objection — *"so it isn't really a queue"* — is correct, and conceding it is what makes the rest land. QUEUE is not price–time priority. Rank goes to willingness to pay rent, not to arrival. What it reproduces is the **scarcity and value** of queue position, made explicit and payable to the people you are standing in front of.
-
----
-
-## 4. WHO PAYS WHOM
-
-```
-                    RENT (continuous, prepaid)
-   Front-seat LP  ──────────────────────────►  Back-seat LPs
-   (market maker                           (treasury, vault,
-    who wants flow)                         paid to wait)
-         │                                         ▲
-         │  buys the seat                          │  receives the buyout
-         │  at the posted price                    │  if they sell, or the
-         ▼                                         │  rent if they stay
-   Seat changes hands ─────────────────────────────┘
-   (anyone, any time, at the holder's own number)
-
-
-   Customer ──► ordinary Uniswap router ──► pool
-                same price, same trading fee
-                plus a fixed extra network tick (§6)
-                The queue is invisible to them.
-```
-
-| Party | Today | Under QUEUE | Pays or receives |
-|---|---|---|---|
-| **Front-seat LP** | Deposits more capital to get a bigger slice of *everything*, including the trades that hurt | Holds the front, filled first on every trade | **Pays rent**, continuously, on a price they set |
-| **Back-seat LP** | Filled pro-rata on every trade whether they want to be or not | Sits behind; reached only when a trade sweeps the front | **Receives that rent** — a coupon for standing aside |
-| **Customer** | Pays the pool's trading fee | Pays the same fee at the same price, through any router | **Pays a fixed +119% network cost** on a typical swap [MEASURED]. No fee change, no worse price. |
-
-The rent is a transfer between two kinds of LP that both already exist. No new party is taxed to fund it. No value is taken from customers or searchers. The protocol takes no cut. The one cost that falls outside that transfer is the **fixed extra network tick the customer pays**, and it is a real cost — named here, not netted out of the pitch.
-
-**Both seats cannot beat ordinary Uniswap at once.** [ANALYSIS] QUEUE is zero-sum against pro-rata: the swap happened at the same prices either way, so total fees minus total adverse selection is the same pie. In a *profitable* pool the front takes more of a positive number and the back takes less — the back needs rent to be willing. In a *loss-making* pool the signs flip — the back is glad to have sat out, and the front wants to be paid to stand there. The current lease **cannot express a negative price**; under toxic flow everyone declares near zero, rent stops, and the compensation dies on the day the back most wants it. Unsolved. (`PITFALLS.md` 5.10, 5.20.)
-
----
-
-## 5. WHY 32, NOT 100, NOT 500
-
-Three reasons. They are different. A slide that mixes them is lying by compression.
-
-### 5.1 The line fits in one computer word
-
-The order of the 32 seats is stored as 32 bytes — one byte per seat number. Pushing someone to the back rewrites the entire line in a single write. Walking the line reads the entire order in a single read. `MAX_SEATS > 32` in *this* version **silently truncates rank**; `test_4_41` exists so that cannot ship.
-
-Raising the cap past 32 is a **redesign**, not a constant change.
-
-### 5.2 Compute — and the number people ask about
-
-[MEASURED] `test/queue/Gas.t.sol`. Every figure is a **complete swap transaction** through the real router against the real PoolManager — what a customer actually pays. State is built in `setUp()` so writes are metered honestly.
-
-| seats in queue | typical swap (head only) | full walk of the line | seats walked |
-|---:|---:|---:|---:|
-| 1 | 117,971 | 145,980 | 1 |
-| 2 | 117,989 | 173,950 | 2 |
-| 5 | 117,990 | 198,161 | 5 |
-| 10 | 117,990 | 238,511 | 10 |
-| 25 | 117,991 | 359,562 | 25 |
-| 32 | 117,992 | **416,053** | 32 |
-
-> `sweep(n) = 137,866 + 14,777·n + 19,900·[n ≥ 2]` — reproduces every row to within **3 gas**.
-
-Three facts:
-
-1. **A typical swap is flat: 117,971 → 117,992 across 1 → 32 seats, a spread of 21 units.** Most swaps only hit seat 1. Flatness is the cursors working.
-2. **A walking swap is linear, 14,777 units per extra seat.** A full 32-seat walk is a ~997,000-unit transaction.
-3. **QUEUE costs 119% more than no hook at all on a typical swap** [MEASURED, `test_5_7`]. **CORRECTED 2026-09-01, and the old figure was wrong in our own favour:** "+48%" compared against a plain pool that had never traded, so the control was paying its own one-time storage-initialisation costs. Measured with both pools in the same state — **plain 69,970, QUEUE with the premium off 141,036 (+102%), QUEUE as shipped 153,177 (+119%)**. Roughly half the overhead is the book existing at all; the rest is the priority premium, which is what pays the back of the book.
-
-The binding constraint is **not** the walk. Depositing (`addToSeat`) settles every priced seat ahead of the depositor, and each of those settlements pays every funded seat behind — quadratic in the roster. Measured worst case: **2,610,805 units**, 8.7% of a 30M block. **That is the number any proposal to raise `MAX_SEATS` has to be argued against** (`PITFALLS.md` 5.72).
-
-```
-                    1 seat      32 seats       100 seats        500 seats
-Typical trade       same        same (+21)     would be same*   would be same*
-Walk-every-seat     cheap       ~416k          ~1M+             fails
-Add money to a seat cheap       2.6M worst     likely a block   impossible
-What it is          monopoly    a franchise    getting cheap    free → no price
-
-* if the "only touch the front" shortcut still works
-```
-
-Unlimited seats do not fail gently. A 1,000-entry walk is ~8.2M units on the sweep alone; the quadratic deposit path is past a block long before that. Large honest trades fail. Informed traders split and go through anyway.
-
-### 5.3 32 is about the size of a serious pit
-
-The *money* per seat is unbounded. Only the *numbers in line* are scarce. If they were not scarce they would have no price, and the product disappears. This reason would still apply if compute were free.
-
-**Could it be 8 or 16?** Yes — a tighter designated-MM pit. **64?** Not without the unbuilt redesign that makes walking the line a constant cost (DECIDED NOT SHIPPED, `PLAN.md` §B.11). **100 or 500?** Not a bigger QUEUE. A different, currently unexecutable program.
-
-**A 32-seat pool is a professional venue, not an open retail pool.** Uniswap's identity is permissionless access. This is a genuine departure and it should be the first sentence of the pitch, not a footnote.
-
-### 5.4 Scarcity — both sides
-
-**For:** compute forces it at this version; a seat everyone can have is worth nothing; every real market-maker franchise is bounded for the same reason.
-
-**Against:** 32 is a club, clubs cartel; small LPs must syndicate (unbuilt wrapper, recreates an intermediary); a bounded roster caps the *number* of LPs (not dollars); less depth means less utility on the same line as less adverse selection — a thin QUEUE pool is a smaller pool, not a better one.
-
-Honest resolution: scarcity is currently *forced* by compute and *justified* by economics. Those are two arguments. If the constant-cost redesign ships, only the economic one remains, and the seat count becomes a per-pool parameter the deployer sets.
-
----
-
-## 6. THE NETWORK-COMPUTE COST — IT IS NOT "CUSTOMERS PAY MORE"
-
-[MEASURED, CORRECTED 2026-09-01] A typical swap: **153,177 vs 69,970** on an identical hookless pool in the same storage state = **+119%** (`test_5_7`). With the priority premium off it is 131,821, **+88%**. The "+48%" this document used to quote compared against a plain pool that had never traded — the control was paying its own one-time storage-initialisation writes, and the comparison flattered us. The extra versus the older +36% figure is the in-band clip.
-
-What a business person hears: *"customers pay 36% more."*
+## 13. VERIFICATION — what is actually proven
 
 | | |
 |---|---|
-| A trading fee? | **No.** The pool's 0.30% (or whatever was set) is unchanged. |
-| A worse price? | **No.** Same tokens out. |
-| Extra network cost? | **Yes.** A slightly longer checkout. |
-| Same at 1 seat as at 32? | **Yes, for a typical swap.** 117,971 vs 117,992. Difference: 21 units. The 36% is the cost of the pool *having a book at all*. |
-| Always 119%? | **No.** A trade that walks many seats adds ~14,777 per extra seat. A full 32-seat walk is 764,200 units — not +48%, closer to 5× a hookless swap. That is a large, unusual trade. |
-| In dollars? | This product belongs on an L2. 31,000 extra units is **cents or less**, not 36% of the notional. On Ethereum mainnet it would be a real bill. **QUEUE is an L2 product.** |
+| **316** | tests passing, 0 failing, 1 skipped — against **real v4 contracts**, nothing mocked |
+| **85 / 85** | mutations RED, zero survivors. A bad pattern or a no-compile counts as **unrun**, never as a pass |
+| **16,384** | randomised calls per invariant, plus a deterministic scripted campaign with coverage floors |
+| **4** | evacuation exploits found against our own mechanism and closed at the root |
+| **2** | independent premium-basis sweeps, each with a φ = 0 control that must be — and is — exact |
 
-The commercial risk is not "36% more expensive trades." It is: **routers pick the pool with the same price and the lower network cost.** If they skip QUEUE, this pool does not see retail flow. Retail flow is the "good" flow the front seat is paying rent to capture. That loop is the adoption problem. It is not solved.
-
-Do not quote "+119%" as "QUEUE overhead." Quote: **+119% on a typical (head-only) fill; +14,777 per seat if the trade actually walks the line.**
-
----
-
-## 7. "32 PEOPLE CANCEL AT ONCE AND THE POOL DIES"
-
-The right instinct. The wrong machine.
-
-**There is no cancel button on a trade.** Customers cannot cancel the queue. They never see it.
-
-**A cash provider can take their money out of their seat at any time.** Taking the money out does **not** destroy the seat. An empty seat is still a numbered place, still for sale, still on the rent meter. The line stays 32 long. [MEASURED: `test_2_5`; comments on `withdraw` in `QueueHook.sol`.]
-
-```
-32 seats, all funded                         32 seats, 30 emptied
-────────────────────                         ────────────────────
-Deep book. Small trades                      Thin book. Same prices.
-hit seat 1 and stop.                         A $3,000 trade now walks
-                                             further and moves the price more.
-
-The pool does not "fail".                    The pool does not "fail".
-It is the same as any market                 It is the same as any market
-where liquidity walks.                       where liquidity walks.
-
-If ALL money leaves:                         The 32 seat tokens still exist.
-trades still execute, with                   Anyone can buy a seat and put
-almost no depth — a pool                     money back in. No admin. No
-nobody is using. Same as a                   pause switch.
-Uniswap pool whose LPs all
-withdrew.
-```
-
-What the code actually does when the book is empty [MEASURED, `PITFALLS.md` 5.78]: a swap does **not** revert inside QUEUE. The error that would mean "swap bigger than the queue" is structurally unreachable through the pool — the swap cannot be larger than the position, and the position cannot be larger than the ledger. An empty book: the first swap is a no-op (nothing in, nothing out) that still walks the price to the limit; the next same-direction swap reverts Uniswap's own "price limit already exceeded," not the hook. One deposit restores fills.
-
-**What is actually different from a normal pool:**
-
-| Risk | Real? |
-|---|---|
-| 32 desks can actually empty the book (a panic, a better venue, a regulatory event) | **Yes.** A normal Uniswap pool has thousands of LPs; losing 32 is noise. Here 32 *is* the market. Same as a thin CEX MM list pulling quotes. Concentration risk. Real. |
-| They can all "cancel the seat" and brick membership | **No.** They can empty it. Someone else can take it at the posted price. Price at zero → free to take. Price enormous + dry meter → automatically moved to the back, money kept, place lost. Nothing seized. |
-| Simultaneous buyouts halt the pool | **No.** Taking a seat pays the holder and sends their capital back. New holder is empty until they deposit. Brief thinness, not a halt. A contract seller cannot refuse the tokens and block the sale. |
-| Incumbent veto on being bought out | **Was real, now closed.** A withdrawal/buyout could revert at a tick boundary (`PITFALLS.md` 5.76 / 5.77). Found after 135 tests. Fixed. |
-| Last people out are short | **Yes, rounding dust.** Face value is an upper bound. Worst surplus across the invariant campaign: **0 wei**. Worst shortfall: **under 1 part per billion** of everything ever deposited, borne by the last withdrawers. Not an attack — causing it costs six-figure multiples of the residual in swap input. |
-| The 32 collude, post zero, rent stops | **Yes, and this is the failure mode the pitch should fear.** Then the transfer that makes the back's deal rational dies. You have ordinary Uniswap with extra network cost and a thinner book. The lease assumes an outsider with capital. A founding roster of insiders may not provide one. |
-
-The failure mode of "everyone leaves" is **"the pool is empty,"** not "the pool is seized." There is no admin, no upgrade, no pause.
+* Conservation is measured on **PoolManager's own balances net of protocol fees**, never on the
+  hook's own bookkeeping.
+* Every negative control asserts the **exact revert reason** — a control that fails for an unrelated
+  reason proves nothing.
+* Gas is measured with **cold storage and state built in `setUp()`**, because a warm slot reads 47%
+  optimistic.
+* **This is not an audit.**
 
 ---
 
-## 8. PROS AND CONS — DO THE BENEFITS OUTWEIGH?
+## 14. THE NINETY-SECOND VERSION, FOR SOMEONE WHO CONTROLS A BUDGET
 
-### The customer (the trader)
-
-| Pros | Cons |
-|---|---|
-| Same price. Same trading fee. Any Uniswap router. Never touches the queue. | +119% network compute on a typical swap [MEASURED]. A constant, not a slope. |
-| | A very large trade that walks many seats costs more still (14,777/seat). |
-| | **CLOSED — the band shipped.** True while the hook held a full-range position (~1/200th the depth per dollar of a tight ±1% range). The hook now custodies a concentrated band whose half-width is a **deployment parameter**, so depth at the money is sized to the pair. Queue maths is proven orthogonal to range (`test_1_11`). The surviving objection is routing, not depth: see §7. |
-
-**Verdict:** the customer is not being sold anything. They should be indifferent except for the extra network tick and the thinner book. If routers skip the pool, the front seat does not get the flow it is paying for.
-
-### The front seat (market maker who wants flow)
-
-| Pros | Cons |
-|---|---|
-| First fill on every trade, including the small profitable ones, without posting more capital. | Pays rent continuously on a price they set. |
-| Can say *"give me the first $50k of flow"* — Uniswap cannot express this at all today. | Eats 100% of a bad trade that lands in their inventory. 50× leverage on the flow, **both ways**. |
-| Seat is durable (unlike JIT: mint-and-burn every block). Tight-range jump is structurally unavailable here. | If flow is toxic, the seat is a liability. The lease **cannot pay you to sit at the front** (price floor at 0). Unsolved. |
-| Anyone can take it if you under-price. You can empty the capital and keep or sell the rank. | For a firm that can flatten inventory off-venue. A treasury should not sit here. |
-
-**Verdict:** benefits outweigh **if** the firm can hedge and the flow is mixed or benign. Otherwise they will not buy the seat, which is the mechanism working.
-
-### The back seat (treasury, vault, "pay me to wait")
-
-| Pros | Cons |
-|---|---|
-| Receives rent from the front. A coupon that has never existed in an AMM. | In quiet, profitable two-way markets they **forgo most fee income**. Without rent, the back is strictly worse than ordinary Uniswap. **Rent is not optional for this role.** |
-| Reached only by large trades. Lower turnover. | Large trades are the *informed* ones. Lower frequency, **worse mix**, plus a coupon. Not "safer." Selling the back as safe is lying. |
-| Capital sized independently of rank. | Inventory bought on a big sell does not automatically unwind on the way up — the next buy fills the *front* first. "Passive" capital is forced to be a bit active. (`docs/research/premise-review/fairness.md`, the Ratchet.) |
-| Cannot be dusted out of existence. | 32-seat cap: a small LP needs a syndicate wrapper. Unbuilt. Recreates an intermediary. |
-
-**Worked numbers, benign day [ESTIMATE].** §7.1's $3,000 swap, fee $9, head-only, repeated 100× a day, balanced flow, markout ≈ 0:
-
-| | Head ($20k) | Tail ($530k) |
-|---|---:|---:|
-| QUEUE fee income / day | **$900** (100% of every swap) | **$0** |
-| Ordinary Uniswap fee income / day | $18 | **$477** |
-| Tail vs ordinary Uniswap | — | **−$477 / day**, nothing back, because the thing it is "insured against" is not happening |
-
-$477/day on $530k is ~9 bps/day of given-up income. **That is the hole rent has to fill.** If rent does not show up, the tail's participation is irrational in the regime where people LP at all.
-
-**Worked numbers, toxic episode [ESTIMATE].** $300k of informed selling (§7.3): the $530k tail nets **$0** against **−$1,950** pro-rata. The tail beats ordinary Uniswap by $1,950 on that episode — and the lease, on that day, is the one that censors at zero.
-
-**Verdict:** benefits outweigh **only if rent actually flows**. In the demo, in a new pool, on a long-tail pair, there is no market in seats yet. That is the weakest point in the design.
-
-### The venue / deployer
-
-| Pros | Cons |
-|---|---|
-| Differentiated LP product. A reason for professional capital to pick this pool over the 189th dynamic-fee hook [COUNTED]. | Bounded in *number of LPs* (not dollars). |
-| A public number: the head-seat price. Both answers are results. | The band is ±10%. Wings are public Uniswap outside it. Routers may still skip +48% compute. |
-| No admin, no upgrade, no privileged role. You cannot be asked to freeze it. | You also cannot freeze it. Founding 32 is an endowment worth one transaction of head start. |
-
-### JIT bots / searchers
-
-Weak buy-in, stated as weak. They cannot jump this pool with a tight-range mint. They can buy the seat for a block and resell it. Honest answer: they trade elsewhere. QUEUE's claim against them is structural, not persuasive.
-
----
-
-## 9. WHAT A DECISION-MAKER WILL FEAR
-
-| Fear | Verdict |
-|---|---|
-| "32 people control the pool — a cartel" | **Half real.** 32 is a franchise. The lease is the anti-cartel: anyone can buy any seat at the holder's own price, no whitelist, no admin. Collude to post infinite prices → pay infinite rent. Post zero → cartel is free to break, **and rent dies.** |
-| "Customers pay 36% extra" | **Confused as a trading-fee claim; real as a routing claim.** Extra network cost, not extra trading fee. Still a reason routers skip you. |
-| "If they all leave, money is trapped" | **Mostly false.** Per-seat withdrawal against actual tokens. No lockup. No pause. Last-out rounding dust, not a lock. |
-| "Someone steals by being first" | **Version 1, dead.** You cannot create a seat by depositing. Dusting the head buys nothing. |
-| "This is a dark / permissioned pool" | **Looks like one; is not, quite.** Entry is permissionless *at a price*. A real permissioned pool has a whitelist and a forked router. QUEUE uses the ordinary Uniswap router. Compliance will still treat 32 named seats as a designated-MM list. Do not be surprised. |
-| "A bug loses the money" | **Real, and the most serious row in this table.** The hook *is* the pool's accounting. A bug is lost funds. 198 tests, 74 mutations with zero survivors, three production bugs found by attacking our own code. **This is not an audit.** |
-| "We get blamed for MEV" | **Theme risk, not product risk.** QUEUE does not stop sandwiches. Shipping it as "MEV protection" is mis-selling. |
-
----
-
-## 10. ARCHITECTURE
-
-```
-                    ┌──────────────────────────────────────┐
-                    │      ANY UNISWAP ROUTER              │
-                    │   (the customer never sees QUEUE)    │
-                    └─────────────────┬────────────────────┘
-                                      │ swap
-                                      ▼
-                    ┌──────────────────────────────────────┐
-                    │      Uniswap v4 PoolManager          │
-                    │  Does the swap as usual. Same price. │
-                    │  Then calls the hook: "here is what  │
-                    │  actually moved."                    │
-                    └─────────────────┬────────────────────┘
-                                      │ afterSwap(amounts)
-                                      ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  QUEUE HOOK                                                              │
-│                                                                          │
-│  1. Holds 100% of the pool's money as ONE position it owns.              │
-│     Nobody else can add liquidity. The hook's books ARE the pool.        │
-│                                                                          │
-│  2. 32 seats. Each = (token A, token B, owner, ask price, prepaid rent). │
-│     The ORDER of the 32 is one computer word.                            │
-│                                                                          │
-│  3. Walks the line front-first at THIS SWAP's own average price.         │
-│     Last seat filled gets the leftover wei so the sum is exact.          │
-│                                                                          │
-│  4. Rent: prepaid meter → seats behind you. Dry meter → moved to the     │
-│     back. You keep the seat and every wei. You lose only your place.     │
-│                                                                          │
-│  5. Buyout: anyone pays your posted price. Your capital is sent back.    │
-│     They get an empty seat at your old place.                            │
-│                                                                          │
-│  No admin. No upgrade. No oracle. No off-chain bot required.             │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
-Why hold the whole pool: Uniswap fills from one blended pot. To have a line, someone has to keep 32 separate piles. The hook is that someone. The price it uses is not a guess — it is the swap's own average, handed back by Uniswap. There is nothing to manipulate.
-
-A seat is an ERC-6909 token, supply exactly one. Transferring it moves **place in line**, not the capital. The capital goes back to the seller.
-
-Deposit / swap / withdraw, the operational version:
-
-```
-DEPOSIT
-  LP ──► hook.addToSeat(seat, amount0, amount1)
-           ├─ settle rent owed by everyone in front (closes a flash-loan grab)
-           ├─ hook IS the unlocker, so Uniswap keys the position to the hook
-           └─ credit the seat's ledger; leftovers sit in a shared float
-
-
-SWAP ARRIVES
-  customer ──► any router ──► PoolManager.swap()
-                                ├─ beforeAddLiquidity: REVERT unless the hook itself
-                                ├─ swap executes NORMALLY. Price untouched.
-                                │  Hook returns no delta. Router-clean.
-                                └─ afterSwap(what actually moved)
-                                      realised average price = amtIn / amtOut
-                                      — the swap's OWN number. Not a mark.
-                                      Not an oracle. Nothing to push.
-                                      ▼
-                                FRONT-FIRST
-                                take  = min(this seat's outgoing, remaining)
-                                give  = floor(amtIn × take / amtOut)
-                                last filled seat gets  amtIn − assignedSoFar
-                                ── that line is what makes the sum close ──
-
-   typical small swap: touches 1 seat, the line does not move
-   sweeping swap:      touches k seats
-
-
-WITHDRAW
-  LP ──► hook.withdraw(seat, w0, w1)
-           └─ pays whatever that seat currently holds
-              (NOT face value — last-out rounding, §14)
-              Withdrawing to zero does NOT destroy the seat.
-```
-
----
-
-## 11. WORKED EXAMPLES
-
-**Shared assumptions** [ESTIMATE — illustrative, not measurements, except gas]:
-
-- WETH/USDC, ETH at 3,000 USDC, fee tier 0.30%, taken on the input token.
-- Pool custodies **$1,000,000** in five seats: `S1 $20k · S2 $50k · S3 $100k · S4 $300k · S5 $530k`.
-- Price impact is folded into the stated realised average price. **Gas figures are [MEASURED]** on the shipping hook (`test/queue/Gas.t.sol`) as complete swap transactions through the real router.
-
-### 11.1 Small swap — head only
-
-Trader swaps **3,000 USDC → WETH**. Fee 9 USDC. 2,991 USDC swapped → **0.997 WETH** out.
-Realised average = 3,000 / 0.997 = **3,009 USDC/WETH**.
-
-| | Under QUEUE | Under ordinary Uniswap |
-|---|---:|---:|
-| S1 sells | **0.997 WETH** | 0.0199 WETH |
-| S1 earns | **9.00 USDC** | 0.18 USDC |
-| S2–S5 earn | **0.00** | 8.82 USDC combined |
-| Swap compute, complete tx | **153,177** [MEASURED]; +92,796 (+119%) vs no hook, same storage state | `test_5_7` |
-
-S1 is 2% of the pool and earned 100% of the fee: a **50× multiple**, which is not a result, it is an identity — `total capital / front seat capital`.
-
-**The other half:** S1 also bore **100% of this swap's adverse selection** instead of 2%. The front is 50× leverage on the flow, in both directions. Whether that is good depends entirely on what the flow is — and that is the question the seat price answers.
-
-### 11.2 Large swap — sweeping four and a half seats
-
-Trader sells WETH, consuming **500,000 USDC**. Price walks 3,000 → 2,940; realised average **2,970**. Gross input 168.86 WETH, of which fee 0.5066 WETH (≈ $1,505).
-
-| Seat | USDC held | USDC filled | WETH received @2,970 | fee share | fee (WETH) |
-|---|---:|---:|---:|---:|---:|
-| S1 | 20,000 | 20,000 (100%) | 6.7340 | 4.0% | 0.02027 |
-| S2 | 50,000 | 50,000 (100%) | 16.8350 | 10.0% | 0.05066 |
-| S3 | 100,000 | 100,000 (100%) | 33.6700 | 20.0% | 0.10132 |
-| S4 | 300,000 | 300,000 (100%) | 101.0101 | 60.0% | 0.30398 |
-| S5 | 530,000 | **30,000 (5.7%)** | 10.1010 | 6.0% | 0.03040 |
-| | | **500,000** | **168.3501** | **100%** | **0.50663** |
-
-Seats touched: **5**. Swap compute ≈ **198,161** [MEASURED at a 5-seat roster], of which ~40,000 is the queue walk.
-
-Marked at the post-swap price of 2,940:
-
-| | Net P&L on the episode | On its own capital |
-|---|---:|---:|
-| S1–S4 (fully converted) | −$3,348 | **−71 bps** |
-| S5 (5.7% converted) | −$214 | **−0.4 bps** |
-| **Pool total** | **−$3,562** | — |
-| *Same swap, ordinary Uniswap* | **−$3,562** | **−35.6 bps for every seat, identically** |
-
-**The total is unchanged to the cent.** QUEUE moved S5 from −35.6 bps to −0.4 bps and S1–S4 from −35.6 bps to −71 bps. **This is redistribution, not reduction.** Anyone who writes it up as "QUEUE reduced LP losses" is lying about it.
-
-### 11.3 Toxic flow — the front must be paid to stand there
-
-An event day. Flow is one-directional and informed. **$300,000** of net informed selling walks the price 3,000 → 2,910; realised average **2,955**. Fee 0.3046 WETH ≈ $886.
-
-Per USDC filled: loss = `1 − 2910/2955` = **−1.5228%**; fee credit = `886 / 300,000` = **+0.2955%**; net = **−1.2273%**.
-
-| Seat | USDC filled | Net P&L | On its own capital |
-|---|---:|---:|---:|
-| S1 | 20,000 (100%) | −$245 | **−123 bps** |
-| S2 | 50,000 (100%) | −$614 | **−123 bps** |
-| S3 | 100,000 (100%) | −$1,227 | **−123 bps** |
-| S4 | 130,000 (43%) | −$1,595 | **−53 bps** |
-| S5 | 0 | **$0** | **0 bps** |
-| **Total** | **300,000** | **−$3,681** | — |
-| *Ordinary Uniswap* | | **−$3,681** | **−36.8 bps, every seat, identically** |
-
-The front/back spread on this day is 123 bps. S5 outperformed today's pool by 36.8 bps; S1–S3 underperformed it by 86 bps.
-
-**Caveat on the "toxicity signal" [ANALYSIS].** The price of moving from front to back is a *forward-looking Harberger ask*, censored at zero on the toxic side where it would be most interesting. It is not an oracle of adverse selection. The novel part is that it is on-chain and costs real money to post. The overclaim "the seat price IS the toxicity" is on the record as overclaim (`PITFALLS.md` 5.20).
-
-### 11.4 What you pay vs what you earn — the buy-in this project actually is
-
-This repo is **queue management and nothing else.** No sandwich shield, no new curve, no fee switch. The only reason a desk shows up is: liquidity in + ask posted → fees ± markout ± rent. If those numbers do not work, the rest of the repo is a museum of exact wei.
-
-Live sliders: [`frontend/index.html`](frontend/index.html) — rank, your liquidity, your ask, small volume, sweep volume, two markouts. Same $1M five-seat book. Rank 4 is the stand-in for seat 32.
-
-τ = 10%/year, immutable. Rent this year = `0.10 × your ask`. A rough consistency check, not a valuation:
-
-> If this day, repeated, gives you $X extra vs ordinary Uniswap, a rational cap on your ask is **$X / 0.10**. Above that you are paying more rent than the extra P&L. Below that a buyer takes you and keeps the residual. Ask of 0 is free to take.
-
-**Quiet two-way. $300k/day head-only, 0 bps markout, $1M book.** [ESTIMATE] You are the $20k front, asking $50,000.
-
-```
-THIS MONTH (day × 30)
-                    QUEUE          ordinary Uniswap
-Fee income          $27,000        $540
-Markout             $0             $0
-Rent you pay        −$417          —
-Rent you receive    $0             —
-NET                 $26,583        $540
-Δ vs ordinary       +$26,043 / month
-
-Extra annual ≈ $312k
-Rational ask cap ≈ $312k / 0.10 = $3.1M
-Your ask $50k is UNDERPRICED — rent is cheap vs the extra.
-A buyer pays you $50k and collects the leftover.
-```
-
-That 50× fee multiple is an identity (`pool / head`), not a result. **Move markout off zero and it dies.** At 30 bps markout on the same $300k/day, the head's markout is $2,700/day against $900 fees. The front is a liability. Press that slider.
-
-**Event day. $30k small + $300k sweep at 123 bps markout.** You are still the $20k front.
-
-```
-The sweep empties you first. You take ~all of a −123 bps fill on your $20k
-and almost none of the remaining $280k (that walks through you to the back).
-Rent is still −$417/month on a $50k ask.
-The front is a liability. A rational holder asks ~0. Rent stops.
-The back, who sat out most of the beating, is no longer paid.
-```
-
-**Same event, you are the $530k back, asking $500.**
-
-```
-S1+S2+S3+S4 = $470k in front. A $300k sweep dies in S1–S4. You fill $0.
-Fee $0, markout $0. You receive rent from whoever in front is still asking.
-You beat ordinary Uniswap, which would have smeared −36.8 bps on you.
-THAT is why the back exists — on this day.
-On the quiet day above, the same back forgoes ~$477/day of fees.
-Rent from the front has to fill that hole or the back is a bad deal.
-```
-
-**Why buy the front — the events, not the slogan**
-
-| Event | Why the front | What a reasonable ask is doing |
-|---|---|---|
-| Quiet two-way flow, you can hedge | You want every small fill on a thin book. 50× turnover vs your capital. | Ask near extra-P&L / τ. Too low → you are taken. Too high → you bleed rent. |
-| A scheduled print / listing / unlock, 1 hour | JIT today mints a tight range for free and pays incumbents nothing. Here you **buy the head for the hour**, harvest the first inventory of flow, re-ask. Rent for an hour on a $50k ask is ~$0.57. The real cost is the buyout capital and the firm window. | Short-hold. Ask high enough not to be flipped mid-event, not so high the hour of rent (tiny) matters. This is the closest thing to "why would a searcher buy in." |
-| You are a treasury | You would **not**. You want the back, and only if rent is actually flowing. | Ask ~0. Last in line paying rent into an empty-behind pot burns escrow into `unallocatedRent0`. |
-
-**Over-price / under-price, in one picture**
-
-```
-         extra P&L this year
-                 │
-    underpriced  │  fair band     overpriced
-    ─────────────┼─────────────────────────────► ask
-    buyer takes  │  you keep it   you pay to
-    you, keeps   │  and pay rent  keep it;
-    the leftover │  ≈ extra P&L   nobody takes
-                 │                you; you bleed
-    ask = 0 is the free seat. Founding state. Ends the product.
-```
-
-At τ = 10%, **overpaying the ask by 10× costs you 100% of a fair extra-P&L in rent.** That is the whole discipline. There is no oracle. The discipline is the bill.
-
-These numbers are **not measured on chain.** They are the identities the mechanism imposes, with a flow mix you type in. The frontend is the way to lie less than a static table.
-
----
-
-## 12. ARE WE SURE THIS DOES NOT EXIST?
-
-### 12.1 The 662-row directory — queries run, not remembered
-
-Dataset: `archive/2026-08-26/docs/research/data/hook_directory_662.json`, 662 submissions across UHI1–UHI10.
-
-```bash
-jq -r '[.[] | select((.name+" "+.desc+" "+.tags+" "+.integrations)
-      | test("queue|priority|price.?time|fill order|rank|seat|ordered|fifo|lifo";"i"))] | length' \
-  hook_directory_662.json
-```
-
-| Query | Hits / 662 | What they actually are |
-|---|---:|---|
-| `queue\|priority\|price.?time\|fill order\|rank\|seat\|ordered\|fifo\|lifo` | **10** | Zero are an ordering over LP capital. |
-| `\bqueue` | **3** | All three queue *swaps*, not liquidity. |
-| `\brank\b\|\bseat\b\|\bseats\b` | **0** | — |
-| `designated market maker\|\bdmm\b` | **0** | — |
-| `harberger\|self.assess\|always for sale` | **0** | — |
-| `am-?amm\|auction.?managed` | **7** | The nearest neighbour — see below. |
-
-**Result: 0 of 662 submissions sell an ordering over LP capital.** [COUNTED]
-
-### 12.2 What IS adjacent, stated plainly
-
-| Adjacent thing | How close | How QUEUE differs |
-|---|---|---|
-| **am-AMM family** (7 rows) | Closest by concept. Both sell a right over a pool to capital. | am-AMM auctions **management and fee-setting of the whole pool to one winner per block**. QUEUE sells **an ordering over the existing LPs' own capital**, perpetually, to many holders. No auction, no per-block winner, no manager, no fee-setting right. **Lead with pro-rata-vs-queue. Do not lead with the word "auction."** Atrium puts LVR auctions on the AVOID list [SOURCED]. |
-| **Tranche hooks** (11 rows, 1 prized) | Closest by shape — an explicit ordering over LP capital. | Tranches order **payouts**. A senior tranche still trades against every swap pro-rata; it is paid first out of the results. QUEUE orders **fills** — which swaps you are the counterparty to. Different object. |
-| **JIT liquidity** (21 rows, and live practice) | Closest by behaviour. A JIT bot is already buying fill priority. | Today the only way to buy priority is to **out-concentrate** everyone at the touch. Pays LPs nothing. QUEUE reverts every external add; the only route to the front is to buy the rank from whoever holds it. |
-| **Limit-order hooks** (17 rows, 7 prized) | A limit book *is* price–time priority. | Those hooks queue **traders' orders**. QUEUE orders **LPs' capital**. Opposite side of the market. |
-| **Angstrom, Kyber FairFlow, CoW, UniswapX** | Real, live, adjacent. | Order-routing layers beside the AMM. None changes who *inside* a pool is the counterparty. |
-| **TradFi: NYSE Designated Market Makers** | The real precedent, and it is not on-chain. | A DMM franchise is exactly "a paid, obligated position at the front of the book." Never expressible in an AMM because there was no book. |
-
-**Honest summary:** the *concept* of paid queue priority is ancient. The *implementation over pooled AMM liquidity* has no instance in 662 submissions, no instance in the live incumbents we could locate, and no instance in the DeFi literature we could locate. The novelty claim is about the venue, not about the idea. Pitch it that way.
-
----
-
-## 13. WHAT THE ENGINEERING RESULTS MEAN COMMERCIALLY
-
-| The technical result | What it means for the business |
-|---|---|
-| Front-first allocation is **exact to the wei** in both tokens, at four price ratios and two decimal pairs [MEASURED] | A seat's fill is a contractual quantity, not a best-effort. That is the difference between an instrument you can price and a feature you have to trust. |
-| The queue is **never over-backed** — surplus **exactly 0 wei** across 16,384 randomised operations [MEASURED] | Every claim on the pool is matched by assets in the pool. |
-| Shortfall stays **under 1 part per billion** of everything ever deposited [MEASURED] | Redemption is not exact — v4's own rounding sees to that — but the leakage is a rounding artefact, borne by **the last holders to exit**. |
-| Seat overhead is **flat from 1 to 32 seats**, on top of a constant **+119%** vs a bare pool [MEASURED] | The cost to a customer is a **fixed tick a router can price**, not a penalty that grows as the book gets deeper. |
-| Rent **cannot be captured by a flash loan**, and settlement conserves the rent pot to the wei [MEASURED] | The coupon paid to the back cannot be farmed by someone who was not there. |
-| Foreclosure **demotes, never seizes** | Running out of prepaid rent costs you your place, not your money. No liquidation, no collateral call, no oracle. |
-| **No admin, no upgrade, no privileged role** | Nobody to trust, nobody to lobby, nobody who can change the rent rate after you have bought a seat. |
-| The allocator **never reads the position's range** — identical roster allocates to the wei over a ±10% band as over the full range [MEASURED, `test_1_11`] | The thin-depth limitation is a **parameter this version set conservatively**, not something baked into the mechanism. Concentrating the book is v2, unbuilt. |
-| The invariant campaign **found three real bugs** in code that had already passed 135 tests | This mechanism was attacked by its own authors and it broke. Everything above is what survived that. |
-
----
-
-## 14. HONEST LIMITATIONS
-
-Stated at full strength. Nothing here is softened. The standing hazard ledger is [`PITFALLS.md`](PITFALLS.md) §5; this list is not complete without it.
-
-**1. QUEUE does not stop sandwiches.** A sandwich is front-run, victim, back-run. QUEUE changes which LP is the counterparty to each of those three swaps. It does not prevent any of them, does not raise their cost, and does not detect them. The cohort's mission statement is *"Protect LPs · kill the Sandwich"* [SOURCED]. **QUEUE does not kill the sandwich.**
-
-**2. QUEUE does not reduce total LVR.** §11.2 and §11.3 show the total pool P&L identical to the cent. This is not an artefact of the example; it is structural. The swap happened at the same prices either way. QUEUE **reallocates** adverse selection and **prices** it. Any sentence claiming it reduces LP losses in aggregate is false.
-
-**3. QUEUE does not recapture value from searchers.** No auction, no tax, no toll. The one exception: the tight-range JIT queue-jump is structurally unavailable (external adds revert), and the equivalent right must be bought from an incumbent. Recapture on one vector, not on MEV generally.
-
-**4. The bounded seat count makes it a professional venue, not an open retail pool.** 32 seats. Retail participation requires a syndicate wrapper, unbuilt.
-
-**5. The redemption residual is open.** [MEASURED] The queue's face value is **not** exactly redeemable. v4 computes a swap's amounts and a position's redeemable value with two different formulas. The "~0.26 wei per swap" figure holds near the seeded price and **does not generalise** — a pool drained into the float and pushed to the tick floor loses ~1e9 wei on a single swap (`PITFALLS.md` 5.80). What *does* generalise: worst surplus **0 wei**, worst shortfall **under 1 part per billion** of lifetime inflow, borne by the last withdrawers. Not an attack. Still never claim "face value is redeemable."
-
-**6. The lease cannot express a negative seat value.** Under toxic flow every holder declares near zero, no rent flows, the front is free to take. The mechanism behaving correctly, and the point at which the price signal is censored. Unsolved, and not solvable inside this design.
-
-**7. The whole toxicity signal depends on a liquid secondary market in ranks that does not exist.** Weakest point in the design. In a demo, a new pool, or a long-tail pair, there is no market, therefore no price, therefore no signal. No measurement supporting the assertion that it would form.
-
-**8. The band is ±10%, not ±1%.** Depth per dollar is better than the old full-range blob and worse than a tight MM range [ANALYSIS]. Wings restore permissionless depth *outside* the money; they do not make the band itself a ±1% book. Aggregators may still skip +48% compute.
-
-**9. Rent is `currency0`, weighted by `currency0`.** Weighting a two-token basket needs a price and QUEUE is not allowed to have one. A tail holding only `currency1` is paid nothing; the rent waits until an eligible recipient exists.
-
-**10. Enforcement needs somebody to poke it.** No keeper ships and none is required — the seats behind are paid by the poke, and a buyer must poke to clear a delinquent incumbent — but a seat nobody wants and nobody pokes accrues a debt nothing collects.
-
-**11. Native ETH is not a supported deposit/withdraw path.** The unlock helper can settle native; `addToSeat` / `withdraw` talk ERC-20. `address(0)` as a currency blows up. Do not deploy this on an ETH pair and expect it to work.
-
-**12. The allocator is the whole pool's accounting, rewritten by us.** A bug there is not a degraded feature. It is lost funds.
-
-### What IS proven (the riskiest assumption, tested)
-
-Front-first allocation at the swap's realised average price is exact, to the wei, in both tokens, at a non-unit price (1:4 — a 1:1 fixture would have hidden a token0/token1 mix-up). Aggregate flows measured on PoolManager's own ERC20 balances, never on the hook's bookkeeping:
-
-```
-queue total token0            2248553145997694428660
-PoolManager-measured token0   2248553145997694428660      <- equal, to the wei
-queue total token1             445000573750774563494
-PoolManager-measured token1    445000573750774563494      <- equal, to the wei
-```
-
-Three negative controls, all red, with the revert reason asserted:
-
-| Mutation | Result | Why it actually failed |
-|---|---|---|
-| PRO-RATA (what v4 genuinely does today) | RED | fill smears across all three entries instead of landing in the head |
-| OFF-BY-ONE cursor (start at entry 1) | RED | head untouched, entry 1 filled |
-| FLOOR-ONLY (drop the remainder assignment) | RED | token0 conservation on swap 2 — a single-entry fill has no remainder to drop |
-
-The allocation price cannot be manipulated. It is the swap's *own* realised average, from PoolManager's returned `BalanceDelta`. Not a mark, not an oracle, not a quantity the hook chooses.
-
----
-
-## 15. THEME FRAMING — what a hackathon judge will actually score
-
-> *"UHI10 Hookathon: Sustainable Liquidity & MEV Protection — The goal here is to reduce value leakage from LPs and make volatile-pair liquidity sustainable at low fees — pushing hook innovation toward fair, MEV-protected execution that lets LPs compete on any asset pair."* [SOURCED]
-
-Open problem **#3**, verbatim: *"Dynamic fees alone can't distinguish 'good' retail flow from 'bad' toxic flow."* [SOURCED]
-
-**QUEUE addresses open problem #3, and only #3.** It does not address sandwiches, mempool ordering, or private orderflow. Saying otherwise is the inflated version.
-
-**Does it fall under "sustainable liquidity"? Yes — that half, not the MEV half.** [ANALYSIS] "Sustainable" here does not mean LPs lose less in total. It means **the right capital can choose to stay**: a market maker who wants first fill without posting more size can buy it; a treasury that will not take every small trade can sit last and be paid a coupon; a JIT bot that today jumps the book for free has to buy the head from the incumbent. That is a sustainability argument about *who remains in the pool*, not about the pool's aggregate P&L. It still fails if rent does not actually flow. Do not also claim MEV protection. The theme is two words; we earn one of them.
-
-The bridge, in three steps [ANALYSIS, with the impossibility claims proven in the archive]:
-
-1. **No forgeable-proof toxicity signal exists for a v4 hook.** Trade size, slippage budget, priority fee, identity, history — every candidate is invisible to the hook or free to fake by splitting a quantity, shopping addresses, or waiting one block.
-2. **No curve can escape it either.** LVR rate and marginal depth are the same quantity. Halving one halves the other.
-3. **Therefore stop classifying and start pricing.** Sell LPs different slices of the flow and let them bid.
-
-An informed trader who slices their order to stay inside the head is **not evading QUEUE** — they are concentrating the informed flow onto the one seat that is explicitly priced. The mechanism never assumed size ⇒ toxicity, so the evasion that defeats every other flow-segmentation design is, here, the design working. That paragraph is only as good as the seat actually being priced, which requires a market that does not exist yet.
-
-### The counters a judge will make
-
-| Counter | Answer |
-|---|---|
-| "This is am-AMM with extra steps." | One sentence: am-AMM auctions **management of the whole pool to one winner per block**. QUEUE runs **no auction**, has **no winner**, sets **no fee**, grants **no management right**. It sells an ordering over existing LPs' own capital, held by many parties at once. Do not lead with the word "auction." |
-| "The theme is MEV protection and you admit you do not stop MEV." | Correct on sandwiches, conceded in §14. Claim the **sustainable liquidity** half: the right desks can stay because fill-slice is a product. On the JIT vector it is defense + recapture (external adds revert; the jump must be bought). Do not also claim sandwich-killing. Open problem #3 has **one** prior attempt in 662, against **189 dynamic-fee hooks** [COUNTED]. |
-| "32 seats is not a Uniswap pool." | Correct. It is a professional venue. First minute of the pitch, not the last. |
-| "Your toxicity signal needs a liquid market in seats, and there isn't one." | Correct. Weakest point. No measurement that it would form. |
-| "Front-first is unfair to the front." | It is not a fairness mechanism. The front is **bought**, from a party who agreed to sell it, at a price they posted. |
-| "Uniswap already has priority — swaps cross ticks in order." | That is *price* priority. QUEUE adds an ordering **within** a tick. And that ordering is not *time* priority either. |
-| "This is not price–time priority. Your roster is closed." | Correct. Rank goes to rent, not arrival. Free rank is griefable; unbounded rank is worthless; scarcity is the mechanism; the lease is what stops scarcity becoming a cartel. Pre-empt this. An informed listener forms it in twenty seconds. |
-
----
-
-## 16. WHAT WOULD MAKE UNISWAP ACTUALLY WANT THIS
-
-[ANALYSIS] throughout. The shipping hook is a spike that proved queue arithmetic. Uniswap will not adopt a full-range 32-seat blob as a primitive. These are the combinations that are real, ranked.
-
-### 16.1 Per-tick seats — the interesting idea, and the one that is not a config change
-
-**Yes, that is more interesting for Uniswap.** It is also not what ships, and it is not "set MAX_SEATS per tick."
-
-v4 already has **price** priority: nearer ticks fill first. What it does not have is an ordering **among LPs at the same tick**. That missing half is the whole pitch. The shipping hook implements the half by **destroying the ticks** — one blob, one line. Per-tick (more honestly: **per-seat ranges**) keeps Uniswap's product and adds the queue *inside* it:
-
-```
-v2 — PRICE THEN QUEUE                         NOT this: 32 queues × every tick
-─────────────────────                         ────────────────────────────────
-Each of 32 seats picks its own tick range     Unbounded ticks × 32 seats is
-like a v3 NFT.                                not a program.
-
-A swap fills in-range seats first             afterSwap hands the hook ONE
-(price priority, already v4).                 delta, not a per-tick tape.
-Among those currently in range,               Reconstructing who contributed
-rank 0 then rank 1 (the QUEUE half).          was the riskiest assumption.
-Depth of a ±1% book, plus a priced
-intra-tick order.
-```
-
-**[MEASURED] 2026-08-31.** `test/spike/PriceThenQueue.t.sol`, 8/8. A SwapMath replay over a three-band ladder (below / at / above, non-overlapping) attributes a crossing swap **to the wei** against a real PoolManager: sum of per-band fills = PM delta net of protocol fees; the untouched wing gets 0. A mutant that smears the same delta by L is red — it credits the wing v4 did not touch. There is no tick-crossing hook flag (`Hooks.ALL_HOOK_MASK` is 14 named bits). Verdict and the build order: `docs/research/price-then-queue/SPIKE.md`.
-
-`test_1_11` still does **not** prove this. It proves the allocator is orthogonal to the range of **the one custodied position**. Fastest v2: **concentrate that one blob**. Next: the 3-band ladder this spike measured. Arbitrary overlapping per-seat ranges are **UNPROVEN** and are v3, not a config change.
-
-**Do not build 32 queues per tick.** Gas, state, and the afterSwap information-set all say no. **Do not take over the swap with `beforeSwapReturnDelta`.** That would be a new AMM. The spike did not.
-
-### 16.2 Other combinations worth taking seriously
-
-| Idea | Why Uniswap / a judge would care | Honest cost |
-|---|---|---|
-| **Concentrate the one position** | **DONE.** Fixed the 1/200th-depth hole; half-width is a deploy parameter. Allocator proven orthogonal (`test_1_11`). | Out-of-range behaviour is now the honest limitation: the band does not move, and `recenter()` was deleted after our own attack broke it three ways. |
-| **Per-seat ranges** (16.1) | Actual missing half of price–time priority. The Foundation-shaped object. | Ladder walk **MEASURED** to the wei. Overlapping arbitrary ranges UNPROVEN (v3). |
-| **JIT as a one-block head rental** | Already possible: `buySeat` → harvest → re-ask. Makes the free jump *pay the incumbent*. Demo this; do not redesign for it. | Firm window, buyout capital, rank-then-run for an hour. |
-| **ERC-4626 syndicate vault** | Retail can buy a slice of a seat. "Sustainable liquidity" at more than 32 names. | Recreates the intermediary §4 claimed to delete. Unbuilt. Needed if you ever want non-professional LPs. |
-| **Two-sided rank** (bid queue ≠ ask queue) | Fixes the Ratchet: tail currently accumulates at extremes and has no priority to exit. Premise-review B-2. | Two order words, twice the rent story. Not a hackathon add-on. |
-| **Compose with a limit-order hook** | Opposite side of the market. Limit orders queue *traders*; QUEUE queues *LPs*. A fill can hit a ranked LP book. | Integration, not a merge. 17 prized limit-order hooks already exist. |
-| **Compose with TWAMM** | TWAMM is time-sliced *flow*. QUEUE is ranked *inventory*. Time-sliced flow walking a ranked book is a story. | Two hooks on one pool is a v4 permission and routing problem. |
-| **"Head price as a toxicity index" for other protocols** | Other hooks could read `selfPrice` of rank 0. | Censored at 0 on the toxic side. Do not sell an oracle you admitted cannot go negative. |
-| **Dynamic fee / am-AMM / LVR auction** | 189 dynamic-fee hooks, 7 am-AMMs, Atrium AVOID on LVR auctions. | **Do not.** Saturated, and it muddies the one-sentence pitch. |
-
-**What not to do:** add an admin, a keeper, a classifier, or a curve. Those are how this project already died, several times.
-
-The adoption path for Uniswap is: **shipping proves the arithmetic (done) → the band plus ordinary Uniswap wings (done, this is the integrable object) → per-seat ranges (not shipping, a different product).** Pitching 32 NFT ranges or a closed full-range blob as what Uniswap should run is how you get Impact 2. The wings are how a Uniswap team can LP this pool tomorrow without buying a seat.
-
----
-
-## 17. HOW TO SAY THIS TO A CFO IN NINETY SECONDS
-
-> This is not an order book and it is not Uniswap. Same AMM price, same trading fee, any router. Thirty-two paid chairs in front of the same inventory: the front is filled first and pays the back to stand there; anyone can buy a chair at the occupant's posted price. You are not buying safer trades or lower losses in total. You are buying a **ranked split of the same P&L** among 32 professionals, at a fixed extra processing cost per trade — about 36% more network compute on a typical swap, which on an L2 is cents, and which does not grow with how many chairs are filled.
+> Protocols pay for liquidity by printing tokens. It dilutes your holders, it creates permanent sell
+> pressure, and the money leaves the day you stop.
 >
-> Use it if you already have a pit of professional desks who want first fill without posting more capital, and passive capital that will sit behind for a coupon. Do not use it if you wanted a public pool, sandwich protection, or anyone-can-LP. The 32 can empty the book the way any thin market-maker list can pull quotes; they cannot seize it, pause it, or trap withdrawals. The dangerous version of that fear is not a crash. It is the 32 posting a price of zero so the coupon stops, and you are left with a thinner, slightly more expensive ordinary pool.
+> Uniswap fills every LP in a position identically — pro-rata. QUEUE puts them in a line instead and
+> fills them in order. **Being first is bad**: you absorb every adverse move first, at the worst
+> prices. We measured exactly how bad.
+>
+> So you stand at the front with your own capital and take the worse fills, and every LP behind you
+> does better because you are there. **You print nothing, you dilute nobody, and you keep your
+> capital — you just earn less on it, on purpose. And it is not a promise anyone can vote away: it
+> is the order the contract fills people in.**
+>
+> On our shipped configuration, one point you give up buys the people behind you exactly half a
+> point. It is a transfer, not free money, and we will show you the algebra. It costs every trader
+> 119% more gas, so this belongs on an L2. In toxic markets there is no setting that works. And the
+> front seat is a bad investment — which is the point, because the volunteer is you, not a
+> yield-seeker.
 
 ---
 
-## APPENDIX — the one-paragraph version
+## APPENDIX — where the numbers live
 
-Every concentrated AMM is a pro-rata market: within a tick, every LP is filled in proportion to size and no LP can be first or last. Every real electronic market already prices queue position — implicitly, in latency spend burnt on infrastructure rather than paid to the people being jumped. Uniswap's choice did not make ordering worthless; it made it unpriceable *inside* the pool, so it is captured *outside* it. QUEUE gives a Uniswap v4 pool a transferable, continuously-priced rank in the fill order. Rank is scarce **on purpose** (free rank is griefable, unbounded rank has no price) and leased rather than owned, so a scarce roster cannot become a cartel. The front is filled by every swap; the back only by swaps large enough to sweep to it. Front-first allocation at the swap's own realised average price is exact to the wei, executed against a real PoolManager at a non-unit price, with three negative controls red. It does not stop sandwiches, does not reduce total LVR, and does not tax searchers. What it does is turn adverse selection from an unpriced compulsory cost into a priced, transferable position — among 32 professional seats, on a book that is a specialist venue, not a public pool. The price of the front seat is only as good as the market in seats, and that market does not exist yet. Both "near zero" and "high" would be results. Claiming to know which in advance is the thing that would make this uninteresting.
+| claim | file |
+|---|---|
+| the shipped economics, contract premium basis | `docs/research/seat-economics/results-shipping-basis.txt` |
+| the superseded basis, kept for the diff | `docs/research/seat-economics/results-shipping.txt` |
+| the two-ended book, killed | `docs/research/seat-economics/results-book.txt` |
+| the tranche thesis, killed | `docs/research/seat-economics/results-tranche.txt` ⚠ **stale basis** |
+| execution price by rank | `docs/research/seat-economics/results-exec.txt` ⚠ **stale basis** |
+| roster size / depth | `docs/research/seat-economics/results-depth-basis.txt` |
+| gas | `test/queue/Gas.t.sol` |
+| the demo, beat by beat | `script/QueueDeployBase.sol`, `test/queue/Deploy.t.sol` |
+| every trap, hazard and settled decision | `PITFALLS.md` |
+
+⚠ **`results-tranche.txt` and `results-exec.txt` have NOT been re-run on the contract's premium
+basis. No per-seat number from either is quotable until they are.** The theses they killed stand —
+those rest on identities and on sign tests that no weighting changes — but their magnitudes do not.

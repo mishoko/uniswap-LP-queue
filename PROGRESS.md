@@ -140,6 +140,24 @@ cost is the machinery, not the rate — 2,800 bps of φ moved it by 230 gas. Als
 a retracted `~1%/yr` still sitting in BUSINESS.md's **SAY** box, and a `Ranks 2–5: LP + ~0.25 pp` row
 wrong by ~3.5×.
 
+### 3f. `BUSINESS.md` REWRITTEN FROM SCRATCH, and the old one archived rather than edited
+
+The previous `BUSINESS.md` was a Phase-9 correction banner over a Phase-4 body. By the end its
+headline numbers came from a roster the deploy script does not deploy (32 equal seats, c₁ = 0.031,
+against the shipped 5 at c₁ = 1/3), at a premium rate we do not ship, on a premium RULE the contract
+replaced in Phase 8 — and a retracted "~1%/yr" was still sitting inside its **SAY** box, i.e. in the
+instructions for what to say out loud.
+
+Editing it in place would have left two live answers in one file, which this project's own §7
+convention forbids. So it is preserved verbatim at `archive/2026-09-03/BUSINESS-pre-phase-11.md` and
+the new file was written from the measurements.
+
+The new one is a business document: ASCII flows for pro-rata vs queue and for the subsidy, a worked
+dollar example (the front's $5,800 and the back's $5,800 are the same money, which is the identity in
+dollars), the five demo beats and what each proves, an honest emissions comparison that concludes
+**QUEUE is not cheaper — it is the same dollar number paid differently**, nine limitations, and the
+operational requirement from 5.181. Every number names its file, fixture and parameter block.
+
 ### 3. NOT ASKED FOR: the campaign's solvency meter omitted the premium (5.176)
 
 `QueueHandler._noteSolvency` computed `owed = totals + pending` against `backing = positionValue +
