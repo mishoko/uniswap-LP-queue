@@ -2779,14 +2779,26 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             // zero, i.e. free for anyone to take". Foreclosure was the one door where the identical
             // argument had not been applied. This is that asymmetry closed.
             //
-            // EXTENDS, NEVER SHORTENS. Writing the deadline unconditionally could CUT an already
-            // longer window short, which would be a new escape rather than a closed one.
+            // **THE DEADLINE IS WRITTEN UNCONDITIONALLY, AND THAT IS PROVEN SAFE RATHER THAN
+            // ASSUMED.** The first draft guarded it with `if (firmTo > l.firmUntil)`, on the theory
+            // that an unconditional write could CUT an already longer window short and open a new
+            // escape. **THAT CANNOT HAPPEN, and the mutation campaign is what established it:
+            // removing the guard changed nothing in 324 tests, because the guard is dead.** Every
+            // other write to `firmUntil` in this contract stores exactly `block.timestamp +
+            // FIRM_WINDOW` at the instant it runs (`_onSeatTransfer`, and both branches of
+            // `_setPrice`), `FIRM_WINDOW` is immutable, and `block.timestamp` is non-decreasing --
+            // so any stored deadline is `t_old + FIRM_WINDOW <= t_now + FIRM_WINDOW`. The write can
+            // only extend or leave the value unchanged.
+            //
+            // The guard is therefore removed rather than kept as belt and braces: a branch that can
+            // never be taken is a claim no test can check, and its comment asserted a protection
+            // that does not exist. PITFALLS 5.55 -- write down what you PROVED, not what the guard
+            // is for.
+            l.firmPrice = 0;
             // casting to 'uint64' is safe: a uint64 holds unix seconds for ~5.8e11 years, and
             // FIRM_WINDOW is bounded at 365 days by the constructor.
             // forge-lint: disable-next-line(unsafe-typecast)
-            uint64 firmTo = uint64(block.timestamp + FIRM_WINDOW);
-            if (firmTo > l.firmUntil) l.firmUntil = firmTo;
-            l.firmPrice = 0;
+            l.firmUntil = uint64(block.timestamp + FIRM_WINDOW);
             emit Foreclosed(seatId, due, charged, _demoteToTail(seatId));
         }
     }

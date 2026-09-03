@@ -2276,6 +2276,51 @@ contract HarbergerTest is QueueFixture {
         _checkInvariantR("4.45");
     }
 
+    /// @dev **WRITTEN FOR A MUTATION THAT SURVIVED — `M29b`, registered in Phase 12 and first RUN
+    ///      in Phase 13, where it came back green.** That is a hole in the SUITE, not in the code,
+    ///      and AGENTS.md §3b gives exactly three honest answers. The line is plainly load-bearing,
+    ///      so this is the first one: write the missing test.
+    ///
+    ///      `_settleBehind` walks the ranks behind a depositor and settles each. Settling can
+    ///      FORECLOSE, and a foreclosure demotes to the tail, which slides every seat behind it UP
+    ///      by one — so the index the walker is standing on now holds a DIFFERENT seat. That is why
+    ///      it advances only `if (order == before)`. Drop the condition and the seat that slid into
+    ///      the current index is silently skipped and never settled.
+    ///
+    ///      **IT TAKES TWO CONSECUTIVE DELINQUENTS TO SEE IT.** With one, the slide happens on the
+    ///      last thing the walker had to do and nothing is skipped — which is precisely why 324
+    ///      tests missed this: they all foreclose one seat at a time.
+    ///
+    ///      WHAT WOULD MAKE THIS READ FAIL: `i++` unconditionally. That is `M29b`, and this test
+    ///      was run against it.
+    function test_4_46_settleBehindDoesNotSkipASeatThatSlidUpUnderAForeclosure() public {
+        _four();
+
+        // Two delinquents IN A ROW behind the depositor. No meter is ever funded, so the bill is
+        // unpayable the moment anybody looks.
+        _setPrice(BOB, 1, 1000e18);
+        _setPrice(CARL, 2, 1000e18);
+        vm.warp(block.timestamp + 1 days);
+        assertGt(hook.rentDue(1), _escrow(1), "seat 1 is not delinquent: this test proves nothing");
+        assertGt(hook.rentDue(2), _escrow(2), "seat 2 is not delinquent: this test proves nothing");
+        assertEq(hook.rankOfId(1), 1, "fixture: seat 1 is not the first rank behind the depositor");
+        assertEq(hook.rankOfId(2), 2, "fixture: the two delinquents are not adjacent");
+
+        // A deposit on the HEAD runs `_settleBehind` over every rank behind it.
+        _addTo(ALICE, 0, 5e18, 1e18);
+        // The witness sees the same two demotions, in the order they happened.
+        _refDemote(1);
+        _refDemote(2);
+
+        assertEq(_price(1), 0, "seat 1 was not foreclosed: the walk never started");
+        assertEq(_price(2), 0, "THE WALKER SKIPPED THE SEAT THAT SLID UP: seat 2 escaped settlement entirely");
+        assertEq(hook.rankOfId(1), 2, "seat 1 did not land at the tail");
+        assertEq(hook.rankOfId(2), 3, "seat 2 did not land at the tail");
+
+        _checkInvariantC("4.46");
+        _checkInvariantR("4.46");
+    }
+
     /// @dev `order` packs one seat id per BYTE, so the roster bound and the word are the same fact.
     ///      Raising `MAX_SEATS` past 32 would silently truncate the queue's order rather than fail,
     ///      which is why the coupling is asserted here rather than left in a comment.

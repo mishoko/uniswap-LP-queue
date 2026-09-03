@@ -145,16 +145,24 @@ MUTS = [
     # price when `old != 0` -- so before this fix the defaulter's very next call armed NO window and
     # the ask was live again in the SAME BLOCK. Under the post-Phase-12 economics the tail is the
     # best seat, so "stop paying rent" was a FREE voluntary demotion straight through a live term.
+    # RE-POINTED 2026-09-03, same session: the dead `if` guard beside these lines was removed after
+    # M29h survived, which changed the text this pattern matched. Re-verified RED after re-pointing.
     ("M29g", HOOK, "foreclosure does not arm the firm quote (the self-foreclosure free lane, re-opened)",
-     "            uint64 firmTo = uint64(block.timestamp + FIRM_WINDOW);\n"
-     "            if (firmTo > l.firmUntil) l.firmUntil = firmTo;\n            l.firmPrice = 0;",
+     "            l.firmPrice = 0;\n"
+     "            // casting to 'uint64' is safe: a uint64 holds unix seconds for ~5.8e11 years, and\n"
+     "            // FIRM_WINDOW is bounded at 365 days by the constructor.\n"
+     "            // forge-lint: disable-next-line(unsafe-typecast)\n"
+     "            l.firmUntil = uint64(block.timestamp + FIRM_WINDOW);",
      "            // MUT"),
-    # The `if` is the "EXTENDS, NEVER SHORTENS" rule. Writing unconditionally lets a foreclosure CUT
-    # an already longer window short, which is a new escape rather than a closed one -- so it needs
-    # its own case, and a suite that only tests the unarmed seat will not catch it.
-    ("M29h", HOOK, "foreclosure SHORTENS an already longer firm window instead of extending it",
-     "            if (firmTo > l.firmUntil) l.firmUntil = firmTo;",
-     "            l.firmUntil = firmTo;"),
+    # M29h WAS HERE AND IS DELETED, WHICH IS ONE OF THE THREE HONEST ANSWERS TO A SURVIVOR.
+    # It guarded the foreclosure deadline with `if (firmTo > l.firmUntil)` on the theory that an
+    # unconditional write could CUT an already longer window short. It SURVIVED the campaign, and
+    # the reason is that the guard is DEAD: every other write to `firmUntil` stores exactly
+    # `block.timestamp + FIRM_WINDOW` at the instant it runs, `FIRM_WINDOW` is immutable, and
+    # `block.timestamp` is non-decreasing -- so a stored deadline can never exceed a newly computed
+    # one. The mutant was EQUIVALENT and could not have gone red however many tests were written.
+    # The guard has been removed from `_settleSeat` instead, so there is no line left to mutate.
+    # Same disposition as the old M21, for the same reason: a case that cannot fail is a free green.
 
     ("M26", HOOK, "the escrow aggregate is not moved by a distribution",
      "        escrowTotal = escrowTotal - amount + pot;", "        // MUT"),
@@ -167,7 +175,10 @@ MUTS = [
     # three lines below were run as negative controls when the guard was written; the THIRD ONE
     # SURVIVED and `test_8_22` was written for it, which is why it is in the campaign by name.
     ("M29c", HOOK, "a seat can voluntarily give up its rank inside its term",
-     "            uint256 unlockAt = uint256(lease[seatId].tenureFrom) + MIN_TENURE;\n            if (block.timestamp < unlockAt) revert SeatWithinTerm(seatId, unlockAt, block.timestamp);\n",
+     # RE-POINTED 2026-09-03 (Phase 13): the local was renamed `unlockAt` -> `unlockAt_` because it
+     # shadowed the view of the same name. Pattern drift, not a behaviour change -- but it made this
+     # case UNRUNNABLE, and a case that cannot run is not a case.
+     "            uint256 unlockAt_ = uint256(lease[seatId].tenureFrom) + MIN_TENURE;\n            if (block.timestamp < unlockAt_) revert SeatWithinTerm(seatId, unlockAt_, block.timestamp);\n",
      ""),
     ("M29d", HOOK, "funding a seat from empty never arms a term",
      "            if (s.liquidity == 0) lease[seatId].tenureFrom = uint64(block.timestamp);\n",
@@ -190,12 +201,14 @@ MUTS = [
     # the rent-weight flash grab that `_settleAhead` used to close. Mutated at BOTH entry points,
     # separately, because a rule that appears twice has been covered in only one place four times on
     # this project (PITFALLS 5.37, 5.50, 5.52 twice).
+    # RE-POINTED 2026-09-03 (Phase 13): `rankOfId(seatId)` is now read ONCE into `rank_` at both
+    # call sites (commit 7f5793f). Both cases were BAD-PATTERN and had therefore never run.
     ("M28b", HOOK, "funding a seat does not settle the seats BEHIND it (the flash grab, re-opened)",
-     "        _settleAhead(rankOfId(seatId));\n        _settleBehind(rankOfId(seatId));\n        _fundSeat",
-     "        _settleAhead(rankOfId(seatId));\n        _fundSeat"),
+     "        _settleAhead(rank_);\n        _settleBehind(rank_);\n        _fundSeat(seatId, amount0, amount1);",
+     "        _settleAhead(rank_);\n        _fundSeat(seatId, amount0, amount1);"),
     ("M28c", HOOK, "a FUNDED BUYOUT does not settle the seats behind it",
-     "            _settleAhead(rankOfId(seatId));\n            _settleBehind(rankOfId(seatId));",
-     "            _settleAhead(rankOfId(seatId));"),
+     "            _settleAhead(rank_);\n            _settleBehind(rank_);\n        }",
+     "            _settleAhead(rank_);\n        }"),
     ("M29b", HOOK, "settleBehind skips a seat when a foreclosure slides the ranks up under it",
      "            _settleSeat(_idAt(before, i));\n            if (order == before) i++;\n        }\n    }",
      "            _settleSeat(_idAt(before, i));\n            i++;\n        }\n    }"),
