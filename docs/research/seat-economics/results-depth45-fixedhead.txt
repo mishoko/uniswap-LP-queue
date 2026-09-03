@@ -1,0 +1,137 @@
+====================================================================================================
+THE DEPTH SWEEP WITH THE HEAD SHARE HELD FIXED  (PITFALLS 5.189)
+====================================================================================================
+  c1 = 45% FIXED at every N; the other 55% split EQUALLY over the remaining seats.
+  book $1,000,000 - band +/-10% - retail 15.0/hr - premium basis 'liquidity_excl'
+  120 paths per cell - phi grid (0, 2000, 4000, 6000, 8000, 9500) - back-ladder shape 'decay'
+  Regimes copied verbatim from report_depth.REG: (('BENIGN', 0.25, 0.0), ('NORMAL', 0.45, 0.0), ('TOXIC', 0.8, 0.35))
+
+  READ THE CONTROL FIRST. The N=5 BENIGN back bound must reproduce 3777 from
+  results-headsize.txt at c1 = 45%. If it does not, this harness is not that harness
+  and every other number below is void.
+
+====================================================================================================
+  --- BENIGN ---   passive pro-rata LP +5.02%   (120 paths)
+     N    head  seats>=LP@best   back bound  worst seat  its gap pp  its turnover                VERDICT
+     5  45.0%        4/4              3777          s2      +0.295          2.14            back clears
+     8  45.0%        7/7              3728          s2      +0.362          2.38            back clears
+    16  45.0%       15/15             3910          s4      +0.118          1.76            back clears
+    32  45.0%       31/31             3984          s6      +0.020          1.80            back clears
+
+====================================================================================================
+  --- NORMAL ---   passive pro-rata LP +0.49%   (120 paths)
+     N    head  seats>=LP@best   back bound  worst seat  its gap pp  its turnover                VERDICT
+     5  45.0%        4/4              1740          s2      +0.134          1.92            back clears
+     8  45.0%        7/7              2048          s2      +0.976          2.10            back clears
+    16  45.0%       15/15             2555          s2      +0.732          2.21            back clears
+    32  45.0%       31/31             2708          s2      +0.660          2.30            back clears
+
+====================================================================================================
+  --- TOXIC ---   passive pro-rata LP -2.17%   (120 paths)
+     N    head  seats>=LP@best   back bound  worst seat  its gap pp  its turnover                VERDICT
+     5  45.0%        4/4                 0          s2      +0.015          1.00            back clears
+     8  45.0%        7/7              5120          s2      +0.031          1.00            back clears
+    16  45.0%       14/15            NEVER          s2      -0.273          1.00        EMPTY (1 seats)
+    32  45.0%       30/31            NEVER          s2      -0.141          1.00        EMPTY (1 seats)
+
+  [261s]
+
+
+====================================================================================================
+THE DEPTH SWEEP WITH THE HEAD SHARE HELD FIXED  (PITFALLS 5.189)
+====================================================================================================
+  c1 = 45% FIXED at every N; the other 55% split EQUALLY over the remaining seats.
+  book $1,000,000 - band +/-10% - retail 15.0/hr - premium basis 'liquidity_excl'
+  120 paths per cell - phi grid (0, 2000, 4000, 6000, 8000, 9500) - back-ladder shape 'equal'
+  Regimes copied verbatim from report_depth.REG: (('BENIGN', 0.25, 0.0), ('NORMAL', 0.45, 0.0), ('TOXIC', 0.8, 0.35))
+
+  READ THE CONTROL FIRST. The N=5 BENIGN back bound must reproduce 3777 from
+  results-headsize.txt at c1 = 45%. If it does not, this harness is not that harness
+  and every other number below is void.
+
+====================================================================================================
+  --- BENIGN ---   passive pro-rata LP +5.02%   (120 paths)
+     N    head  seats>=LP@best   back bound  worst seat  its gap pp  turnover   r1@best   r1@9500                VERDICT
+     5  45.0%        4/4              3723          s2      +0.369      2.38    +4.29%    -4.86%            back clears
+     8  45.0%        7/7              3815          s3      +0.254      2.02    +4.29%    -4.87%            back clears
+    16  45.0%       15/15             3957          s5      +0.059      1.89    +4.28%    -4.88%            back clears
+    32  45.0%       31/31             3989          s9      +0.014      1.85    +4.28%    -4.88%            back clears
+
+====================================================================================================
+  --- NORMAL ---   passive pro-rata LP +0.49%   (120 paths)
+     N    head  seats>=LP@best   back bound  worst seat  its gap pp  turnover   r1@best   r1@9500                VERDICT
+     5  45.0%        4/4              2040          s2      +0.984      2.10    -1.25%    -4.98%            back clears
+     8  45.0%        7/7              2505          s2      +0.756      2.18    -1.25%    -4.99%            back clears
+    16  45.0%       15/15             2695          s2      +0.663      2.29    -1.25%    -4.99%            back clears
+    32  45.0%       31/31             2733          s3      +0.639      2.22    -1.25%    -5.00%            back clears
+
+====================================================================================================
+  --- TOXIC ---   passive pro-rata LP -2.17%   (120 paths)
+     N    head  seats>=LP@best   back bound  worst seat  its gap pp  turnover   r1@best   r1@9500                VERDICT
+     5  45.0%        4/4              4949          s2      +0.038      1.00    -3.57%    -3.79%            back clears
+     8  45.0%        7/7              8943          s2      +0.020      1.00    -3.80%    -3.80%            back clears
+    16  45.0%       14/15            NEVER          s2      -0.136      1.00    -3.70%    -3.80%        EMPTY (1 seats)
+    32  45.0%       29/31            NEVER          s2      -0.127      1.00    -3.80%    -3.80%        EMPTY (2 seats)
+
+  [229s]
+
+
+====================================================================================================
+  READING THIS FILE -- what it settles and what it does NOT
+====================================================================================================
+
+  THE CONTROL PASSED, AND IT IS A KNOWN-ANSWER CONTROL RATHER THAN A SELF-CONSISTENCY ONE.
+  The N=5 / decay row reproduces results-headsize.txt at c1 = 45% on FOUR independent numbers:
+  back bounds 3777 / 1740 / 0 and the passive LP at +5.02% / +0.49% / -2.17%. At n = 5 the decaying
+  ladder IS the shipped roster, 450 : 220 : 165 : 110 : 55. So this is the published harness.
+
+  WHAT THIS INSTRUMENT MEASURES: the LOWER bound only -- the first phi at which EVERY back seat
+  beats a passive pro-rata LP. It does not measure the front's ceiling.
+
+  WHY THE FRONT'S CEILING NEVERTHELESS DOES NOT MOVE WITH N, derived from two measured facts:
+    (a) the wing bar is the head's own alternative -- a keeper-managed ATM range holding the head's
+        capital. The head holds 45% x $1,000,000 = $450,000 AT EVERY N in this file, so the bar is
+        literally the same number.
+    (b) r1 is INVARIANT IN N at fixed c1. Measured, phi = 9500:
+            BENIGN  -4.86% -4.87% -4.88% -4.88%   across N = 5, 8, 16, 32
+            NORMAL  -4.98% -4.99% -4.99% -5.00%
+             TOXIC  -3.79% -3.80% -3.80% -3.80%
+        The head's return depends on the head SHARE, not on how the rest of the book is subdivided.
+    => phi_max is N-invariant, so results-headsize.txt's 7340 at c1 = 45% carries across.
+    LABELLED: this is DERIVED from (a) and (b), not separately measured at each N.
+
+  THE RESULT
+
+    all-regime window at a FIXED 45% head, using phi_max = 7340 from the derivation above:
+
+       N      DECAYING ladder                 EQUAL ladder
+      ---------------------------------------------------------------------
+       5      [3777, 7340]  NON-EMPTY         [4949, 7340]  NON-EMPTY
+       8      [5120, 7340]  NON-EMPTY         EMPTY (toxic back bound 8943 > 7340)
+      16      EMPTY (toxic: rank 2 never)     EMPTY (toxic: rank 2 never)
+      32      EMPTY (toxic: rank 2 never)     EMPTY (toxic: ranks 2-3 never)
+
+    In BENIGN and NORMAL every back seat clears at EVERY N tested, up to 32, under BOTH shapes.
+    The only failure anywhere is the TOXIC regime, and it is ONE seat -- rank 2 -- missing by
+    -0.273pp (decay, N=16), -0.141pp (decay, N=32), -0.136pp / -0.127pp (equal). Rank 2's turnover
+    is 1.00 in every one of those cells, so it is a REAL fill-based miss and not the seat-32
+    non-participation artefact.
+
+  WHAT THIS OVERTURNS.  results-depth-basis.txt section 3 reports EMPTY windows at N = 8, 16 and 32
+  and the documentation hardened that into "five is near the measured maximum". That sweep let the
+  head share fall from 66.7% to 6.1% as N grew. Held at the shipped 45%:
+    - EIGHT seats has a non-empty all-regime window on the shipped ladder shape. The old table said
+      N=8 was EMPTY in BENIGN and TOXIC.
+    - SIXTEEN and THIRTY-TWO seats work in BENIGN and NORMAL and miss on exactly one seat in TOXIC.
+      The old table said ranks 2-5 and ranks 2-17 respectively failed.
+  THE SEAT COUNT WAS NEVER THE BINDING CONSTRAINT. THE HEAD SHARE WAS.
+
+  THE SHAPE MATTERS, AND ONLY AT THE EDGE.  N=8 clears in TOXIC on the decaying ladder (5120) and
+  not on the equal one (8943). Reported rather than resolved: it is one cell, on the coarse
+  6-point phi grid this file inherits, and a claim about N=8 should be re-run on a fine grid before
+  anything is shipped on it.
+
+  WHAT IS STILL NOT CLAIMED.  Nothing here says a 32-seat book is a good idea. The gas cost at that
+  depth is the quadratic corner of the contract (2.57M / 2.64M for the two deposit extremes), a
+  32-seat book at a 45% head gives the back seats ~1.8% of the book each, and MAX_SEATS = 32 remains
+  a storage fact. What is now false is the claim that the ECONOMICS forbid it.
