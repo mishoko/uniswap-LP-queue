@@ -288,7 +288,9 @@ with the payers excluded — the rule the contract implements**. Source:
 
 *The last column is the **paired** t-statistic of the worst-performing back seat against a plain
 pro-rata LP in that regime — the queue run and the LP run share a seed and therefore a
-bit-identical price path. **Every back seat clears in every regime, and the tightest margin is
+bit-identical price path. **The unpaired t is materially smaller** (at 45% benign, +1.8 against the
+paired +6.9); pairing is the correct method here and we label it rather than quoting the big number
+bare. **Every back seat clears in every regime, and the tightest margin is
 still t = +5.4.** At the old 33.3% head the toxic column had no working φ at all.*
 
 **But read §6B before quoting any of this.** The back seats' gain is a **coupon**, not better
@@ -520,6 +522,29 @@ protected ones:
 > it was already subsidising. Reversed, tested, and the old direction is now the negative control
 > (`Harberger.t.sol::test_4_9b`).
 
+### "So why doesn't everyone just post a price of zero and pay no rent?"
+
+The obvious question, and the answer is the whole of Harberger in three lines:
+
+```
+   POST ZERO  →  you pay no rent … and ANYONE may take your seat for nothing.
+   ─────────────────────────────────────────────────────────────────────
+   ▶ So posting zero is only safe if your seat is worth nothing to anyone
+     else. That is TRUE of the front seat — its expected return is BELOW a
+     plain LP's, on purpose — and FALSE of every back seat, whose whole
+     appeal is that it is worth holding.
+   ▶ THE RESULT IS THE ONE THE DESIGN WANTS, and it falls out rather than
+     being enforced: the SPONSOR posts ~zero and pays ~nothing while
+     collecting from everyone behind it; the BACK SEATS must post real
+     prices or lose their rank, and so they really do pay.
+   ▶ Note what is NOT checked in the contract: receiving rent does not
+     require paying any. A seat's share is weighted by the depth it
+     contributed, never by its posted price. Nothing stops a seat
+     collecting while posting zero — except that posting zero puts the
+     seat up for grabs, which is the only enforcement there is, and the
+     only one we want.
+```
+
 ### WHAT A SEAT IS WORTH — and the pricing rule this document previously got wrong
 
 ```
@@ -692,6 +717,20 @@ A single shipped φ has to work in every market it will meet, so the object that
    SHIPPED φ = 5,500 is the midpoint of [3777, 7340].
 ```
 
+> ### ⚠ EVERY WINDOW IN THIS TABLE IS RENT-FREE. Read this before using any of them.
+>
+> `sim.py` models **no Harberger rent at all.** The contract charges τ = 10%/yr and pays it
+> **forward** — from the back seats to the front — which is the *opposite* direction to the premium
+> the windows are built on. The source file states the consequence itself:
+>
+> > *"These windows are therefore a LOWER bound on what the front can bear and an UPPER bound on
+> > what the back keeps. A back seat clearing the LP by less than its rent bill has not really
+> > cleared it."*
+>
+> **The binding margin below is +0.209pp.** A back seat's annual rent is not obviously smaller than
+> that. §10 carries this as the largest open hole in the economics, and **nothing on disk tests it.**
+> Every number in this section is a *point estimate on a rent-free model*, not a guarantee.
+
 ### Why 40% was rejected, and this is the part that matters
 
 ```
@@ -700,11 +739,17 @@ A single shipped φ has to work in every market it will meet, so the object that
      at c₁ = 40%, φ = 6000, TOXIC, binding seat (rank 2):
          gap to the plain LP      +0.010 pp
          paired standard error     0.032 pp
-         t                         +0.3      ← a COIN FLIP
+         t (PAIRED)                +0.3      ← a COIN FLIP
      at c₁ = 45%, φ = 5500, TOXIC, binding seat (rank 2):
          gap to the plain LP      +0.209 pp
          paired standard error     0.039 pp
-         t                         +5.4      ← CLEARS
+         t (PAIRED)                +5.4      ← CLEARS
+   ─────────────────────────────────────────────────────────────────────
+   ▶ SAY "PAIRED" OR THE NUMBER READS STRONGER THAN THE EVIDENCE. The
+     queue run and the LP run share a seed, so they share a price path;
+     pairing on it is correct and it is what makes these t's large. The
+     UNPAIRED t is materially smaller — at 45% BENIGN it is +1.8 against
+     the paired +6.9. We quote paired t's and we label them.
    ─────────────────────────────────────────────────────────────────────
    ▶ A window whose binding seat clears by LESS THAN ITS OWN STANDARD
      ERROR is a window on a coin flip. Shipping the smallest head share
@@ -775,9 +820,11 @@ not as rigour.
 
 ### To the protocol running the programme
 
-* **Real capital, locked.** ~$333k in a fixed band that cannot be re-centred without withdrawing and
-  redeploying.
-* **~10.4%/yr of that capital**, in benign conditions, handed to the seats behind it.
+* **Real capital, locked.** **~$450k** in a fixed band that cannot be re-centred without
+  withdrawing and redeploying.
+* **~19.5%/yr of that capital gross**, in benign conditions, handed to the seats behind it —
+  **~15.3% net** of the rent that flows back under a contested seat market (§6C's bookends).
+  *(This read 10.4% until Phase 13. That was the 33.3% head, and §6E prices what the move cost.)*
 * **Rent on its own posted seat price** — see §9, which is not optional.
 * **Uncapped, and set by the market rather than by a budget.** The subsidy is largest in exactly the
   conditions where the treasury can least afford it.
@@ -824,17 +871,31 @@ running cost of the programme** and belongs in the pitch rather than in whoever 
 3. **The subsidiser must post real capital**, roughly comparable to what it subsidises. This is not
    leverage on a marketing budget.
 4. **+119% gas for every trader** on the pool.
-5. **In toxic conditions there is no premium rate that works.** Seat 2 never clears a passive LP at
-   any φ, so the feasible window is **empty**. A toxic band also dies in ~1.4 days against ~61
-   benign, so it is a small share of the calendar — but the honest statement is that the mechanism
-   has a regime in which it does not deliver.
-6. **The front seat is a bad investment, and we say so on camera.** That is the design: somebody has
+5. **EVERY PUBLISHED φ WINDOW IS RENT-FREE, AND THE RENT RUNS THE OTHER WAY.** `sim.py` models no
+   Harberger rent at all, while the contract charges τ = 10%/yr and pays it **forward**, from the
+   back seats to the front — the opposite direction to the premium. `results-headsize.txt` says so
+   in its own header, in capitals, and draws the consequence: *"these windows are a LOWER bound on
+   what the front can bear and an UPPER bound on what the back keeps. A back seat clearing the LP by
+   less than its rent bill has not really cleared it."* **The binding margin at the shipped
+   configuration is +0.209pp** (rank 2, toxic). A back seat's rent bill is not obviously smaller
+   than that, and **nothing on disk tests it.** This is the largest open hole in the economics and
+   we found it in our own file rather than being told.
+6. **The premium is measurably weaker on the pool we actually deploy.** The shipped pair is 18/6
+   decimals, and token0 premium is separately known to be inert in one direction (PITFALLS 5.124),
+   so **every premium figure quoted here is an upper bound on what the contract delivers.**
+7. **A toxic regime is now covered, but read HOW.** At the shipped 45% head the toxic window is
+   `[0, 9500+]` — the back seats clear a passive LP *with the premium switched off entirely*. That
+   is subordination doing the work, not the priced coupon, and rank 5 is unfilled on ~68% of toxic
+   paths. It is a real property and it is not the mechanism being paid for.
+   *(Until Phase 12 this entry read "in toxic conditions there is no premium rate that works." That
+   was true at the 33.3% head and the 45% adoption closed it — §6E.)*
+8. **The front seat is a bad investment, and we say so on camera.** That is the design: somebody has
    to volunteer, and the volunteer is the protocol, not a yield-seeker.
-7. **We did not measure demand, and no simulator can.** If no protocol has a reason to volunteer for
+9. **We did not measure demand, and no simulator can.** If no protocol has a reason to volunteer for
    the front seat, this is an ordinary Uniswap position with extra steps.
-8. **The roster is closed at deployment.** There is no `mint` — capital joins by funding an existing
+10. **The roster is closed at deployment.** There is no `mint` — capital joins by funding an existing
    seat or buying one.
-9. **A holder cannot be subordinate and liquid at the same time.** Any withdrawal costs the rank.
+11. **A holder cannot be subordinate and liquid at the same time.** Any withdrawal costs the rank.
    That is enforced deliberately, and it is what makes a naive ERC-4626 wrapper unsafe (§11).
 
 ---

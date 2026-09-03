@@ -173,6 +173,13 @@ no privileged role.
                         → the only channel that survives when trading stops
 ```
 
+> **⚠ EVERY φ WINDOW WE PUBLISH IS RENT-FREE.** The simulator models no Harberger rent; the
+> contract charges τ = 10%/yr and pays it **forward**, the opposite direction to the premium the
+> windows are built on. So the windows are a *lower* bound on what the front can bear and an
+> *upper* bound on what the back keeps — and the binding margin is **+0.209pp**. **Nothing on disk
+> tests whether the window survives rent.** It is the largest open hole in the economics,
+> `BUSINESS.md` §10 item 5, and we found it in our own research file.
+
 **φ was solved, not swept for a nice number.** Two constraints must hold in **every** regime at
 once: the back needs φ high enough that every back seat beats a passive LP (**≥ 3,777**); the front
 needs φ low enough to still beat *its own* cheapest alternative — a keeper-managed at-the-money
