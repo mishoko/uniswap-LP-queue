@@ -22,7 +22,7 @@ Newest entry first. Never delete an entry — supersede it.
 | 10 | Value question CLOSED + all four open defects fixed | **COMPLETE 2026-09-02** | **YES** — 311 tests, 0 failed. Four defects fixed at the root, 11 tests inverted, 3 new. The constrained-buyer door closed by MEASUREMENT (PITFALLS 5.160) |
 | 9 | Evacuation doors + the closed-form surplus | **COMPLETE 2026-09-02** | **PARTLY** — 308 tests. Ten defects found; four left OPEN and all four are now closed by Phase 10 |
 | 11 | Handoff §3.2/§3.3 closed + the economics re-measured on the contract's own premium rule | **COMPLETE 2026-09-02** | **YES** — 316 tests, 0 failed. INVARIANT W (5.175, closes 5.164); campaign aimed at the premium (5.133 closed); solvency meter repaired (5.176); `results-book.txt` was the EMPTY BLOB and 5.160 partly does not reproduce (5.177); **every published φ number was on a replaced basis (5.178) so `PREMIUM_BPS` was re-derived 7,900 → 5,100 (5.180)**; the flagship application is takeable for gas (5.181); a third φ mirror made the quoted gas figure wrong (5.182). `src/` untouched throughout |
-| 12 | The rent direction reversed + the TERM + the docs rewritten | **CODE COMPLETE 2026-09-03** | **PARTLY** — 319 tests, 0 failed. Two mechanisms found pointing the wrong way and both fixed at the root (5.183, 5.185); `README.md` rewritten from scratch; `BUSINESS.md` §6B–6D give the per-seat P&L in dollars. **THE FULL MUTATION CAMPAIGN HAS NOT RUN AGAINST EITHER FIX — until it does, `_settleBehind` and `MIN_TENURE` are UNPROVEN**, and `M21` is a known equivalent mutant needing re-pointing first |
+| 12 | Rent reversed + the TERM + c₁ 33.3→45% + docs rewritten | **CODE COMPLETE 2026-09-03** | **PARTLY** — 319 tests, 0 failed. Two mechanisms found pointing the wrong way and both fixed at the root (5.183, 5.185); `README.md` rewritten from scratch; `BUSINESS.md` §6B–6D give the per-seat P&L in dollars. **THE FULL MUTATION CAMPAIGN HAS NOT RUN AGAINST EITHER FIX — until it does, `_settleBehind` and `MIN_TENURE` are UNPROVEN**, and `M21` is a known equivalent mutant needing re-pointing first |
 | 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-02** | **PARTLY** — 224 tests. **THE MECHANISM IS SOUND AND THE BUSINESS CASE IS MISSING** — the 32 seats share one LP position, so they can at best TIE with not using the hook; the priority premium fixed the distribution (29/32 losing → 0/32) but creates no reason to participate. Next session is a BRAINSTORM for an outside payer, not a build. See `docs/research/seat-economics/VALUE.md`. Earlier note: 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
@@ -101,16 +101,43 @@ body with five verifiably false claims. `BUSINESS.md` gained §6B (the per-seat 
 against LPing elsewhere), §6C (what a seat costs and for how long, plus the Harberger equilibrium
 that turns rank 1's gross −10.4%/yr into a net −1.3%/yr) and §6D (the security answer).
 
+### ADOPTED AT THE END OF THE SESSION: c₁ = 45%, φ = 5,500
+
+The head share is the dominant economic parameter and it moved **33.3% → 45%** (capital
+`90 : 44 : 33 : 22 : 11`), with `PREMIUM_BPS` **5,100 → 5,500**. At 33.3% the TOXIC window was
+EMPTY — seat 2 never cleared a passive LP at any φ — so the programme had a regime in which it did
+not deliver. At 45% the intersected window holds in all three regimes: `[3777, 7340]`.
+
+**40% was rejected although its window is non-empty:** at that window's own midpoint the binding
+seat clears by `+0.010pp` against a paired SE of `0.032pp`, **t = +0.3**. At 45%, `+0.209pp` at
+**t = +5.4**. **The fix is also real rather than an artefact** — rank 2's zero-turnover share in
+TOXIC is 0.0% at every head share tested, so the window opens because the head absorbs the move,
+not because seat 2 stops being reached.
+
+**It is a bigger programme, not the same one costing more:** the sponsor locks 45% instead of
+33.3%, the annual subsidy roughly 2.5×, and the external LPs' boost rises by about the same factor.
+
+`Hygiene.t.sol::test_7_8` failed immediately and by name when the deploy constant moved and the two
+test-side mirrors did not — the drift that went unnoticed for two phases (5.180, 5.182). That is
+what a working interlock looks like.
+
 ### What the next session must do first
 
-1. **Run the full mutation campaign.** It has not run since `src/` changed. Re-point **`M21`** first —
-   it is an **equivalent mutant**: the credit loop's `i < r` cannot differ from `i <= r`, because
-   `st.remaining` reaches zero at exactly rank `r`. Nine new cases are registered (`M20b`, `M21b`,
+1. **Run the full mutation campaign — 94 cases, ~3.5 h, and nothing else may touch `src/` or run
+   `forge` while it does.** It has not run against ANY of Phase 12, so **`_settleBehind` and
+   `MIN_TENURE` are UNPROVEN.** Re-point **`M21`** first: it is an **equivalent mutant** — the
+   credit loop's `i < r` cannot differ from `i <= r`, because `st.remaining` reaches zero at exactly
+   rank `r`, so index `r` is never visited. Nine cases are new and have never run (`M20b`, `M21b`,
    `M28b`, `M28c`, `M29b`, `M29c`–`M29f`).
-2. **Decide the head share.** `report_headsize.py` shows the all-regime window is **EMPTY at the
-   shipped c₁ = 33.3% and NON-EMPTY at 40%** (`[5668, 6447]`). If adopted, `PREMIUM_BPS`, the demo
-   roster, `Gas.t.sol` and `Deploy.t.sol` all move — **so do it BEFORE the campaign, not after.**
-3. **The frontend** (5.184) and the **broadcast**.
+2. **Close or justify the third symptom in the table above** — foreclosure still demotes a defaulter
+   to what is now the best seat in the book.
+3. **Align every document line by line**, strip every hackathon reference, and add the three things
+   that are missing rather than wrong: **a glossary** (nobody outside this repo knows what φ is),
+   **the seat's price and term inside every benefit claim** (a return quoted without its rent is not
+   a return), and **the rent cascade with amounts** (who receives *how much* from whom).
+4. **The frontend** (5.184) — the weakest artefact in the repo. Its sliders are the best
+   demonstration here and every number behind them is stale.
+5. **Deploy with the owner**, then the deployed address into `README.md`.
 
 ---
 
