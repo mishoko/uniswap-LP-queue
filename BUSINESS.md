@@ -311,17 +311,13 @@ in **every** regime, and the shipped 5,500 is the midpoint of what survives.
 **§6E has the full sweep, the head shares that produce no window at all, and — the part that
 matters — why the 40% head was rejected even though its point estimate crosses.**
 
-> **⚠ AND ONE CLAIM WE ARE WALKING BACK.** This document has said that five seats is *near the
-> measured maximum*. The evidence for that sweeps the seat count while the head share collapses
-> alongside it — two variables, one attribution — and head share is the dominant parameter. **That
-> five seats is a CEILING is UNPROVEN**; the mechanism AT five is what is measured. `PITFALLS.md`
-> §5.189, and `README.md` §5 states it in full.
-
-**The sensitivity that decides the product, and we state it ourselves:** the upper bound exists only
-because *re-anchoring is worth something to the front.* Hold the front to the **passive-LP** bar
-instead of the managed-range bar and the ceiling collapses. What the managed alternative costs to
-replicate is measured; **what a buyer would pay for the seat is not simulated at all — it is set by
-the on-chain seat market, and §6C explains why that is a feature rather than a gap.**
+> **⚠ AND ONE CLAIM WE HAVE NOW RETRACTED, WITH THE MEASUREMENT THAT KILLED IT.** This document
+> used to say five seats is *near the measured maximum*. The evidence swept the seat count while the
+> head share collapsed alongside it — two variables, one attribution. **Held at the shipped 45%
+> head, every back seat beats a plain LP at every depth up to 32 seats in BENIGN and NORMAL, and the
+> only failure anywhere is rank 2 in a crash.** The seat count was never the binding constraint; the
+> head share was. We ship five for product and gas reasons, which `README.md` §5 sets out.
+> Evidence: `docs/research/seat-economics/results-depth45-fixedhead.txt`; `PITFALLS.md` §5.189.
 
 ---
 
