@@ -1859,4 +1859,90 @@ contract EvacuationTest is QueueFixture {
         _checkInvariantF("after a sweep that minted", 64);
         _checkInvariantR("after a sweep that minted");
     }
+
+
+    /// @notice **THE SENIORITY FREE LANE — is the TAIL reachable for the price of gas?**
+    ///
+    /// @dev Every other evacuation test in this file asks whether a holder can DODGE a fill while
+    ///      KEEPING its rank. This one asks the opposite question, and nothing in the repo had
+    ///      asked it: can a holder deliberately THROW its rank away in order to reach a BETTER one?
+    ///
+    ///      **WHY THAT IS THE MORE DANGEROUS DIRECTION.** `withdraw` demotes on any payout, and
+    ///      PITFALLS 5.171 defends that rule on the ground that it "cannot be griefed — only the
+    ///      seat holder may call `withdraw`". That answers involuntary demotion. It does not answer
+    ///      a holder who WANTS to be demoted, and our own economics say every holder does: at the
+    ///      shipped φ = 5,100, `results-shipping-basis.txt` measures the tail beating rank 2 by
+    ///      +0.6 pp in BENIGN, +1.3 pp in NORMAL and +3.0 pp in TOXIC. The tail is the best seat in
+    ///      the book in every regime measured, and demotion is the only thing that reaches it.
+    ///
+    ///      **WHAT THIS TEST PROVES AND WHAT IT DOES NOT.** It proves the MECHANISM is free: the
+    ///      manoeuvre is one call, the payout is one wei, and the seat's contributed depth arrives
+    ///      at the tail intact. It does NOT prove the PRIZE is real — that is the simulator's
+    ///      claim, measured by a different instrument, and conflating the two would be exactly the
+    ///      tautology AGENTS §3 LAW 5 warns about. Both halves are needed.
+    ///
+    ///      **AGENTS §3 LAW 5's QUESTION — what would have to be true for this to read FAIL?**
+    ///      Either the demotion does not happen (so the tail is unreachable and rank is sticky), or
+    ///      reaching it costs the seat its depth (so the prize is paid for). Both are real,
+    ///      plausible designs and either one turns this test red. It is not arithmetic.
+    function test_8_20_theTailIsReachableForOneWeiAndItPromotesSomebodyElse() public {
+        _use(atkHook, atkKey);
+
+        // Give the book history, so the seats hold earnings and not only principal.
+        _advSwap(address(this), true, _inputToReach(_target()));
+
+        // THE MOVER is whoever stands at rank 1 — the measured WORST seat behind the head. Read it
+        // from the order word rather than assuming founding order still holds.
+        uint256 mover = atkHook.ranking()[1];
+        uint256 promoted = atkHook.ranking()[2];
+        assertEq(atkHook.rankOfId(mover), 1, "the mover is not at rank 1: wrong seat under test");
+        assertEq(atkHook.rankOfId(promoted), 2, "the follower is not at rank 2");
+
+        uint128 lBefore = atkHook.seatLiquidity(mover);
+        assertGt(lBefore, 0, "the mover contributed no depth: this test proves nothing");
+
+        // ---- THE MANOEUVRE. One call, one wei of whichever token the seat actually holds.
+        //      Nothing about the request looks like an exit.
+        _oneWeiOut(mover);
+
+        // ---- (1) THE TAIL WAS REACHED FOR ONE WEI.
+        assertEq(atkHook.rankOfId(mover), N - 1, "one wei did NOT buy the tail");
+
+        // ---- (2) IT COST ESSENTIALLY NOTHING. The depth that arrives at the tail is the depth
+        //      that left rank 1, less at most the one wei actually paid out.
+        assertLe(
+            uint256(lBefore) - uint256(atkHook.seatLiquidity(mover)),
+            1,
+            "one wei of payout burned more than one wei of contributed depth"
+        );
+        emit log_named_uint("depth the mover carried to the tail", atkHook.seatLiquidity(mover));
+
+        // ---- (3) SOMEBODY ELSE WAS MOVED INTO THE SEAT IT LEFT, WITHOUT BEING ASKED. This is the
+        //      half that makes it an externality rather than a private choice.
+        assertEq(
+            atkHook.rankOfId(promoted),
+            1,
+            "the follower was NOT promoted into rank 1: the manoeuvre has no victim, so it is not a free lane"
+        );
+
+        // ---- (4) AND IT IS REPEATABLE, which is what turns a one-off dodge into a rotation
+        //      nobody can opt out of.
+        assertGt(atkHook.seatLiquidity(promoted), 0, "the promoted seat has no depth: the repeat proves nothing");
+        _oneWeiOut(promoted);
+        assertEq(atkHook.rankOfId(promoted), N - 1, "the repeat did not reach the tail");
+
+        _checkInvariantL("after the seniority walk");
+        _checkInvariantF("after the seniority walk", 64);
+    }
+
+    /// @dev Withdraw exactly one wei from `seatId`, as its holder, in whichever token it holds.
+    ///      Factored out to keep `test_8_16` inside the stack limit, and it asserts the payout so a
+    ///      clamped-to-zero request cannot make the caller's demotion assertions vacuous.
+    function _oneWeiOut(uint256 seatId) internal {
+        (uint256 a0, uint256 a1) = atkHook.seat(seatId);
+        assertGt(a0 + a1, 0, "the seat holds nothing: a one-wei withdrawal proves nothing");
+        vm.prank(atkRoster[seatId]);
+        (uint256 p0, uint256 p1) = atkHook.withdraw(seatId, a0 > 0 ? 1 : 0, a0 > 0 ? 0 : 1);
+        assertEq(p0 + p1, 1, "a one-wei request did not pay exactly one wei: the premise has moved");
+    }
 }

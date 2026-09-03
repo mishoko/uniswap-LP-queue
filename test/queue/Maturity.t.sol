@@ -974,128 +974,104 @@ contract MaturityTest is QueueFixture {
     ///      single-direction test would have reported whichever half it happened to pick.
     function test_M9_rentIsDistributedProportionallyBelowTheBand() public {
         _matureDown();
-        (uint256 credited, uint256 unalloc) = _chargeRentAtRankZero();
+        (uint256 credited, uint256 unalloc) = _chargeRentAtTail();
         assertGt(credited, 0, "below the band the rent reached nobody");
         assertEq(unalloc, 0, "below the band the rent was stranded");
     }
 
-    /// @notice **DEFECT-GRADE ASYMMETRY, AND NOT THE ONE THIS TEST WAS WRITTEN TO FIND. ABOVE the
-    ///         band the rent weight collapses to DUST, so a seat holding ONE WEI of currency0 takes
-    ///         100% of the rent paid by every seat in front of it, while seats holding 1.9e18 of
-    ///         currency1 and no currency0 take nothing.**
+    /// @notice **ABOVE THE BAND EVERY RECIPIENT HOLDS ZERO currency0, AND THE DEPTH-WEIGHTED RULE
+    ///         STILL PAYS THEM IN FULL.**
     ///
-    /// @dev `_distributeRent` splits pro-rata by the recipients' `currency0` balance, and it carries
-    ///      an explicit `w == 0` branch for "nobody behind holds any currency0" — the money is held
-    ///      in `unallocatedRent0` rather than lost. **There is no branch for `w == 1`.** Above the
-    ///      band every seat has been drained of currency0 by the terminal one-for-zero fill
-    ///      (INVARIANT C: every seat below `cursor0` holds `a0 == 0`), except whichever seat the
-    ///      fill stopped inside, which keeps a residual wei. Pro-rata over a total weight of one wei
-    ///      hands that seat everything.
+    /// @dev **RE-AIMED IN PHASE 12, AT A STRICTLY STRONGER CLAIM.** This test used to hunt for a
+    ///      recipient holding a few wei of currency0 and bound how much of the pot it could take —
+    ///      the `test_M9b` identity that caught "a seat standing with 1 wei claimed 100% of a
+    ///      2.667e17 pot" back when rent was split by `a0`.
     ///
-    ///      This is the same shape as `test_7_14` — the last-wei holder taking an entire pot — which
-    ///      `_settlePremium` was given an explicit exclusion to close. The rent path never got the
-    ///      equivalent, and the dust weight is not even a wei the beneficiary had to work for: it is
-    ///      whatever the fill happened to leave behind.
+    ///      Rent now moves FORWARD, so the recipients are the seats AHEAD of the payer — and
+    ///      front-first allocation converts those out of currency0 FIRST and most completely. Above
+    ///      the band they hold **exactly zero**, not dust. So the old fixture cannot be built here:
+    ///      there is no "dust holder" to bound.
     ///
-    ///      **WHEN THE FIX LANDS THIS TEST INVERTS.** Re-weighting rent by `seat.liquidity` makes
-    ///      the weight direction-invariant, so the dust capture becomes impossible and this becomes
-    ///      the regression test for it: the assertion `e1 - e0 == credited` on a one-wei holder must
-    ///      then FAIL, and the seats behind must split the pot by contributed depth exactly as
-    ///      `test_M9` already shows them splitting it below the band. Whoever implements the change
-    ///      should invert it here rather than delete it — the executed defect is the evidence that
-    ///      the fix was needed.
+    ///      **That makes the same defect testable as a BRANCH rather than as a share, which is a
+    ///      better control, not a weaker one.** With every recipient at zero currency0, an
+    ///      `a0`-weighted rule computes `w == 0` and HOLDS the entire pot; the depth-weighted rule
+    ///      the contract actually implements distributes all of it. The two answers are `unalloc ==
+    ///      charged` and `unalloc == 0` — maximally far apart, with nothing in between for a
+    ///      tolerance to hide in. Reverting production to `a0` therefore turns this red on the very
+    ///      first assertion instead of on a magnitude.
     ///
-    ///      **BELOW the band the identical code pays out perfectly**, because there every seat is
-    ///      100% currency0 and the weights are real. That is the whole point of running this in both
-    ///      directions: the rent mechanism is proportional in one terminal state and degenerate in
-    ///      the mirrored one, and a single-direction test reports whichever half it happens to pick.
-    /// @notice **INVERTED 2026-09-02. THIS TEST USED TO ASSERT THE DEFECT AS AN IDENTITY** — that a
-    ///         seat holding a few wei of currency0 took the ENTIRE rent pot above the band. The
-    ///         executed defect is kept as the evidence the fix was needed, and the assertion now
-    ///         pins the fix instead: rent is split by CONTRIBUTED DEPTH, which front-first
-    ///         allocation cannot destroy, so the dust balance buys nothing.
-    ///
-    /// @dev The fixture is deliberately unchanged: the same terminal state, the same seat, the same
-    ///      dust. It is the WEIGHT that moved, so keeping the state identical is what makes the
-    ///      before/after comparable at all.
-    ///
-    ///      The claim is an IDENTITY, not a bound (AGENTS §3b): the seat receives exactly the pot
-    ///      scaled by its share of the depth standing behind the payer, computed from the
-    ///      CONTRACT's own `seatLiquidity`, never from a fixture-side quantity (PITFALLS 5.34).
-    function test_M9b_aDustWeightTakesOnlyItsDepthShareAboveTheBand() public {
+    ///      AGENTS §3 LAW 5's question — what would have to be true for this to read FAIL? Weight
+    ///      by any currency BALANCE and the pot is held. Weight by contributed depth and it is paid.
+    ///      Both are real implementations and the test separates them.
+    function test_M9b_zeroCurrency0RecipientsAreStillPaidByDepthAboveTheBand() public {
         _matureUp();
 
         // Establish the state first, or the claim below is about a fixture nobody can place.
-        uint256 dusty = type(uint256).max;
-        uint256 weight;
-        uint256 depthBehind;
-        for (uint256 i = 1; i < 5; i++) {
+        uint256 balanceWeight;
+        uint256 depthAhead;
+        for (uint256 i; i < 4; i++) {
             uint256 id = hook.idAtRank(i);
             (uint256 a0, uint256 a1) = hook.seat(id);
-            weight += a0;
-            depthBehind += hook.seatLiquidity(id);
-            if (a0 != 0 && dusty == type(uint256).max) dusty = id;
-            assertGt(a1, 1e17, "a seat behind the payer holds no real capital at all");
+            balanceWeight += a0;
+            depthAhead += hook.seatLiquidity(id);
+            assertGt(a1, 1e17, "a seat ahead of the payer holds no real capital at all");
+            assertGt(hook.seatLiquidity(id), 0, "a recipient contributed no depth: fixture is wrong");
         }
-        assertTrue(
-            dusty != type(uint256).max, "no seat behind holds any currency0: this is the w == 0 case, not this one"
-        );
-        // THE STATE THAT USED TO BE FATAL, asserted so the test still proves it was reached.
-        assertLt(weight, 1_000, "the recipients' currency0 weight is not dust: this test proves nothing");
-        assertGt(depthBehind, 0, "nobody behind contributes depth: this is the w == 0 case, not this one");
+        // THE STATE THAT WOULD BE FATAL TO A BALANCE-WEIGHTED RULE, asserted so the test proves it
+        // was reached: the whole recipient set is worth ZERO on the old weight.
+        assertEq(balanceWeight, 0, "the recipients still hold currency0: this is not the branch under test");
+        assertGt(depthAhead, 0, "nobody ahead contributes depth: this is the w == 0 case, not this one");
 
         uint256[4] memory before_;
-        for (uint256 i = 1; i < 5; i++) {
-            (, before_[i - 1],,,) = hook.leaseOf(hook.idAtRank(i));
+        for (uint256 i; i < 4; i++) {
+            (, before_[i],,,) = hook.leaseOf(hook.idAtRank(i));
         }
-        (uint256 credited, uint256 unalloc) = _chargeRentAtRankZero();
+        (uint256 credited, uint256 unalloc) = _chargeRentAtTail();
 
-        assertEq(unalloc, 0, "the rent was held rather than distributed: wrong branch");
+        // **THE BRANCH, AND IT IS THE WHOLE POINT.** An `a0`-weighted rule holds all of this.
+        assertEq(unalloc, 0, "the rent was held rather than distributed: the weight is a BALANCE, not depth");
         assertGt(credited, 1e17, "nothing happened: no rent was charged, this test proves nothing");
 
         // **THE EXACT IDENTITY IS THE SUM, NOT THE PER-SEAT FLOOR.** `Allocation`'s remainder line
         // closes the split to the wei against the total, so one seat absorbs the residue of four
-        // floored divisions — measured here as 2 wei. Asserting a per-seat `floor(pot*Li/W)` would
-        // therefore be WRONG by exactly that residue, and widening it to an approximate match would
-        // be a tolerance chosen to pass. So: the SUM is pinned exactly, each seat is pinned to its
-        // floor from BELOW, and the whole residue is bounded by what the floors actually left over —
-        // every one of those three numbers comes from the CONTRACT (`seatLiquidity`), never from a
-        // fixture-side measurement (PITFALLS 5.34).
+        // floored divisions. Asserting a per-seat `floor(pot*Li/W)` would therefore be WRONG by
+        // exactly that residue, and widening it to an approximate match would be a tolerance chosen
+        // to pass. So: the SUM is pinned exactly, each seat is pinned to its floor from BELOW, and
+        // the residue is bounded by what the floors actually left over — every one of those numbers
+        // comes from the CONTRACT (`seatLiquidity`), never from a fixture-side measurement
+        // (PITFALLS 5.34).
         uint256 paid;
         uint256 floors;
-        uint256 got;
-        uint256 gotFloor;
-        for (uint256 i = 1; i < 5; i++) {
+        uint256 worst;
+        for (uint256 i; i < 4; i++) {
             uint256 id = hook.idAtRank(i);
             (, uint256 e1,,,) = hook.leaseOf(id);
-            uint256 g = e1 - before_[i - 1];
-            uint256 f = (credited * hook.seatLiquidity(id)) / depthBehind;
-            assertGe(g, f, "a seat behind was paid LESS than its floored depth share");
+            uint256 g = e1 - before_[i];
+            uint256 f = (credited * hook.seatLiquidity(id)) / depthAhead;
+            assertGe(g, f, "a seat ahead was paid LESS than its floored depth share");
+            assertGt(g, 0, "a recipient with real depth was floored to ZERO");
+            if (g > worst) worst = g;
             paid += g;
             floors += f;
-            if (id == dusty) {
-                got = g;
-                gotFloor = f;
-            }
         }
         assertEq(paid, credited, "the distribution did not sum to the pot");
-        assertLe(got - gotFloor, credited - floors, "one seat absorbed more than the whole floor residue");
-
-        // THE INVERSION. This assertion was `assertEq(got, credited)` — the ENTIRE pot to the seat
-        // holding a few wei of currency0. It now cannot exceed a quarter of it.
-        assertLt(got, credited, "the dust holder still took the entire rent pot: the weight did not move");
-        console.log("currency0 weight (wei)", weight);
-        console.log("pot                   ", credited);
-        console.log("captured by dust seat ", got);
+        assertLt(worst, credited, "one seat took the ENTIRE pot: the weight did not move off a balance");
+        console.log("recipients' currency0 balance weight", balanceWeight);
+        console.log("recipients' contributed depth       ", depthAhead);
+        console.log("pot distributed                     ", credited);
     }
 
     /// @notice The `w == 0` branch itself, reached deliberately: charge the TAIL, which has nobody
     ///         behind it at all. The money leaves the payer's escrow and lands in `unallocatedRent0`
     ///         — a pot with no reader anywhere in `src/` but the next distribution, and at maturity
     ///         there is no next distribution with a recipient.
-    function test_M9c_rentFromTheTailIsHeldWithNobodyToPayItTo() public {
+    /// @dev **INVERTED IN PHASE 12: THE SEAT WITH NOBODY TO PAY IS NOW RANK 0, NOT THE TAIL.** Rent
+    ///      moves forward, so the front seat is the one that structurally has no recipient — and
+    ///      that is correct rather than a gap: rank 0 buys protection from nobody, so it owes
+    ///      nobody. Everything this test asserts about the held-pot identity is unchanged.
+    function test_M9c_rentFromTheHeadIsHeldWithNobodyToPayItTo() public {
         _matureUp();
-        uint256 payer = hook.idAtRank(4);
+        uint256 payer = hook.idAtRank(0);
         address who = hook.ownerOf(payer);
         _fund(who, 10e18, 0);
         vm.startPrank(who);
@@ -1112,19 +1088,23 @@ contract MaturityTest is QueueFixture {
         (, uint256 unallocAfter) = hook.rentTotals();
 
         uint256 charged = e0 - e1;
-        assertGt(charged, 0, "nothing happened: the tail was not charged");
+        assertGt(charged, 0, "nothing happened: the head was not charged");
         // THE IDENTITY the `_distributeRent` docstring states:
         //     Sigma credited + unallocatedAfter == charged + unallocatedBefore
-        // with Sigma credited == 0 on this branch, because there is nobody behind the tail.
+        // with Sigma credited == 0 on this branch, because there is nobody ahead of rank 0.
         assertEq(unallocAfter, charged + unallocBefore, "the held-rent identity does not close");
-        _checkInvariantR("after a tail rent settlement at maturity");
+        _checkInvariantR("after a head rent settlement at maturity");
     }
 
     /// @dev Charge one seat's rent and report where it went: `Σ credited` to the seats behind, and
     ///      what fell into `unallocatedRent0`. Reads the CONTRACT's escrows on both sides — nothing
     ///      here is a fixture-side re-derivation (PITFALLS 5.34).
-    function _chargeRentAtRankZero() internal returns (uint256 credited, uint256 unalloc) {
-        uint256 payer = hook.idAtRank(0);
+    /// @dev **PHASE 12: THE PAYER IS THE TAIL, NOT RANK 0.** Rent moves FORWARD, so a charge from
+    ///      rank 0 has no recipient and lands in the held pot — under which every "the rent reached
+    ///      somebody" assertion in this suite holds vacuously at zero. The held branch still has a
+    ///      directed test; it is `test_M9c`, inverted onto rank 0 for the same reason.
+    function _chargeRentAtTail() internal returns (uint256 credited, uint256 unalloc) {
+        uint256 payer = hook.idAtRank(4);
         address who = hook.ownerOf(payer);
         _fund(who, 10e18, 0);
         vm.startPrank(who);
@@ -1133,20 +1113,20 @@ contract MaturityTest is QueueFixture {
         hook.fundRent(payer, 10e18);
         vm.stopPrank();
 
-        uint256 behindBefore = _escrowsBehind(0);
+        uint256 aheadBefore = _escrowsAhead(4);
         (, uint256 e0,,,) = hook.leaseOf(payer);
         vm.warp(block.timestamp + 30 days);
         hook.settleRent(payer);
         (, uint256 e1,,,) = hook.leaseOf(payer);
 
         assertGt(e0 - e1, 0, "nothing happened: the payer was not charged");
-        credited = _escrowsBehind(0) - behindBefore;
+        credited = _escrowsAhead(4) - aheadBefore;
         (, unalloc) = hook.rentTotals();
         _checkInvariantR("after a maturity rent settlement");
     }
 
-    function _escrowsBehind(uint256 rank) internal view returns (uint256 s) {
-        for (uint256 i = rank + 1; i < 5; i++) {
+    function _escrowsAhead(uint256 rank) internal view returns (uint256 s) {
+        for (uint256 i; i < rank; i++) {
             (, uint256 e,,,) = hook.leaseOf(hook.idAtRank(i));
             s += e;
         }

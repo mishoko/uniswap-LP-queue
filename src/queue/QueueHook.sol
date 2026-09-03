@@ -1665,7 +1665,10 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      paying rent to the very depositor they are trying to grief.
     function addToSeat(uint256 seatId, uint256 amount0, uint256 amount1) external nonReentrant {
         if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
+        // BOTH DIRECTIONS. `_settleBehind` is the one that closes the flash grab now that rent
+        // moves forward; `_settleAhead` is kept for the promotion it performs. See `_settleBehind`.
         _settleAhead(rankOfId(seatId));
+        _settleBehind(rankOfId(seatId));
         _fundSeat(seatId, amount0, amount1);
     }
 
@@ -2531,7 +2534,10 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // `addToSeat` settles everyone ahead first for exactly this reason; a funding buyout that
         // did not would be that hole with a new front door. Only when there is a deposit: a plain
         // buyout adds no balance and can capture nothing.
-        if (amount0 != 0 || amount1 != 0) _settleAhead(rankOfId(seatId));
+        if (amount0 != 0 || amount1 != 0) {
+            _settleAhead(rankOfId(seatId));
+            _settleBehind(rankOfId(seatId));
+        }
 
         // **RULE A OF PITFALLS 5.123(b): A SEAT PROMOTED IN THIS BLOCK IS NOT FOR SALE IN IT.**
         //
@@ -2637,12 +2643,49 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         }
     }
 
-    /// @notice Hand `amount` to the seats BEHIND `payerId`, pro-rata by their `currency0` balance.
+    /// @notice Hand `amount` to the seats AHEAD of `payerId`, pro-rata by their contributed depth.
     ///
-    /// @dev BEHIND, not ahead. Rent is what the front pays the back for standing aside, so paying it
-    ///      forward inverts the mechanism's entire economics while conserving every wei — the exact
-    ///      shape of the bug that killed `HardcapHook`, and the reason §D.6 demands a negative
-    ///      control for it specifically.
+    /// @dev **AHEAD, NOT BEHIND — AND THIS DIRECTION WAS REVERSED IN PHASE 12. READ THIS BEFORE
+    ///      CHANGING IT BACK.**
+    ///
+    ///      It used to run `r+1 .. n-1`, and the comment here used to read: *"BEHIND, not ahead.
+    ///      Rent is what the front pays the back for standing aside."* That sentence was true when
+    ///      it was written and the project has since disproved it. The Harberger layer was built
+    ///      when being FIRST was believed to be the prize — `Allocation.sol`'s own docblock records
+    ///      the state of the world then: under average pricing *"the head beat an ordinary pro-rata
+    ///      LP in EVERY ONE"* of the three regimes. Phase 8's marginal pricing and Phase 7's
+    ///      premium inverted that. The front seat is now the WORST seat in the book by design
+    ///      (`BUSINESS.md` §2: priority is worth NEGATIVE money), and the tail is the best.
+    ///
+    ///      **Nobody revisited the rent.** So until this change the contract charged the front seat
+    ///      — the seat that absorbs the move first and hands 51% of its fees backward — a SECOND
+    ///      time, and paid it to the seats it was already subsidising. Three consequences, all
+    ///      measured or executed rather than argued:
+    ///
+    ///        * the front paid both channels and the back received both, so the subsidy was larger
+    ///          than any published number (rent appears in NO economic file — `sim.py` models none);
+    ///        * the TAIL paid rent to nobody, because there is no seat behind it;
+    ///        * `_settleSeat`'s punishment for not paying — `_demoteToTail` — moved a defaulter to
+    ///          the seat our own simulator calls the best one in the book.
+    ///
+    ///      **THE TEST THAT SETTLES THE DIRECTION, and it needs no simulator.** Ask who supplies
+    ///      the service and who consumes it. The front stands in front and eats the adverse move
+    ///      first; the seats behind it are protected by the inventory standing there. **The front
+    ///      SUPPLIES subordination and the back CONSUMES it, so the back pays the front** — the
+    ///      same way round as every insurance market on earth. That also makes the front's income
+    ///      TIME-based rather than volume-based, which is the only transfer channel that survives a
+    ///      regime where trading stops (PITFALLS 5.183).
+    ///
+    ///      The old direction is now the negative control (`Harberger.t.sol:RentPaidBehindHook`,
+    ///      `test_4_9b`), because it still **conserves every single wei** while pointing the wrong
+    ///      way — the exact shape of the bug that killed `HardcapHook`, and the reason §D.6 demands
+    ///      a control for the direction specifically rather than a conservation check.
+    ///
+    ///      **THE FRONT SEAT'S OWN RENT HAS NO RECIPIENT** — there is nobody ahead of rank 0 — so it
+    ///      is HELD in `unallocatedRent0`, exactly as the tail's was before. That is correct rather
+    ///      than a gap: rank 0 buys protection from nobody, so it owes nobody. Its Harberger price
+    ///      exists to keep the seat from being taken out from under a live programme (PITFALLS
+    ///      5.181), not to buy a service.
     ///
     ///      Same-token pro-rata only. Weighting by anything that mixes `a0` and `a1` into one
     ///      "value" needs a price, and QUEUE is not allowed to have one (§E.11).
@@ -2662,7 +2705,6 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         uint256 pot = amount + held;
         if (pot == 0) return;
 
-        uint256 n = q.length;
         uint256 ord = order;
         uint256 r = rankOfId(payerId);
 
@@ -2694,16 +2736,17 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // corrupts BOTH streams at once, where before an error in one was visible against the
         // other. `invariant_I9` is the guard that makes that acceptable, and it had to land first.
         uint256 w;
-        for (uint256 i = r + 1; i < n; i++) {
+        for (uint256 i; i < r; i++) {
             w += q[_idAt(ord, i)].liquidity;
         }
 
         if (w == 0) {
-            // Nobody behind CONTRIBUTED ANY DEPTH — every seat behind the payer has withdrawn its
-            // liquidity, which is the honest reading of "there is nobody to pay". (It used to mean
-            // "nobody behind holds currency0", which above the band was true of a fully funded
-            // roster.) The money has LEFT the payer's escrow, so it must be accounted somewhere or
-            // the balance identity breaks and a wei is stranded.
+            // Nobody ahead CONTRIBUTED ANY DEPTH — either the payer IS rank 0, which owes nobody,
+            // or every seat in front of it has withdrawn its liquidity. Both are the honest reading
+            // of "there is nobody to pay". (It used to mean "nobody holds currency0", which above
+            // the band was true of a fully funded roster.) The money has LEFT the payer's escrow,
+            // so it must be accounted somewhere or the balance identity breaks and a wei is
+            // stranded.
             escrowTotal -= amount;
             unallocatedRent0 = pot;
             emit RentSettled(payerId, amount, 0, pot);
@@ -2711,7 +2754,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         }
 
         Allocation.State memory st = Allocation.init(pot, w);
-        for (uint256 i = r + 1; i < n && st.remaining > 0; i++) {
+        for (uint256 i; i < r && st.remaining > 0; i++) {
             uint256 id = _idAt(ord, i);
             uint256 bal = q[id].liquidity;
             if (bal == 0) continue;
@@ -2724,8 +2767,9 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
 
         // Rent lands in the recipients' ESCROW, not their `a0`. It is currency0 the hook already
         // holds outside the position, so this is a move inside one pot: `float0`, the position and
-        // INVARIANT F are all untouched by a settlement, and the tail's rent income is exactly the
-        // thing that pays the tail's own rent bill.
+        // INVARIANT F are all untouched by a settlement, and a seat's rent INCOME is exactly the
+        // thing that pays its own rent BILL — which after the Phase 12 reversal means the seats
+        // nearer the front are funded by the seats behind them, and rank 0 is funded by all of them.
         escrowTotal = escrowTotal - amount + pot;
         unallocatedRent0 = 0;
         emit RentSettled(payerId, amount, pot, 0);
@@ -2744,6 +2788,48 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             _settleSeat(_idAt(before, i));
             if (order == before) i++;
             else rank--;
+        }
+    }
+
+    /// @notice Settle every seat BEHIND `rank`.
+    ///
+    /// @dev **THIS EXISTS BECAUSE PHASE 12 REVERSED THE RENT DIRECTION, AND REVERSING A TRANSFER
+    ///      MOVES ITS DEFENCE.** It is not a second copy of `_settleAhead`; it guards the opposite
+    ///      side of the same hole, and shipping the reversal without it would have re-opened a bug
+    ///      the project had already closed once.
+    ///
+    ///      `_settleAhead` closes the rent-weight flash grab: a depositor must not weigh a borrowed
+    ///      balance against rent that accrued over a period it was not standing for, so the seats
+    ///      whose pending rent would be credited to the depositor are settled at the OLD weights
+    ///      first. Under the old direction those payers stood AHEAD of the depositor, because rent
+    ///      moved backward. **Rent now moves FORWARD, so a payer at rank `p` credits ranks
+    ///      `0 .. p-1`, and the seats that can pay INTO a depositor at rank `g` are exactly the ones
+    ///      at `g+1 .. n-1`.** `_settleAhead` alone would therefore have defended nothing: it
+    ///      settles the seats a deposit can no longer be paid by. `test_4_14` is the executed proof
+    ///      — it re-targets onto the new geometry and its variant still pays the grabber more than
+    ///      ten times the honest share when this function is removed.
+    ///
+    ///      `_settleAhead` is KEPT rather than replaced, for a different service it also performs:
+    ///      it forecloses delinquents in front of the depositor, which PROMOTES the depositing seat
+    ///      before its rank is read (see `addToSeat`'s cursor comment). Settling a seat in front is
+    ///      economically inert for the depositor under the new direction — a payer at rank `i < g`
+    ///      credits `0 .. i-1`, which never contains `g` — so keeping it cannot be a second way in.
+    ///
+    ///      **TERMINATION, since the loop can be re-entered at the same index.** A settlement may
+    ///      FORECLOSE the seat it charged, which demotes it to the tail and slides every seat behind
+    ///      it up one place — so index `i` then holds a DIFFERENT seat and must be re-read rather
+    ///      than skipped. `i` is not advanced in that case. Each reorder corresponds to exactly one
+    ///      foreclosure, and a foreclosure zeroes a `selfPrice` permanently, so there can be at most
+    ///      as many reorders as there were priced seats; after the last one `i` advances every pass.
+    ///      The demoted seat is re-visited at the tail and `_settleSeat` returns immediately on its
+    ///      zero price.
+    function _settleBehind(uint256 rank) internal {
+        uint256 n = q.length;
+        uint256 i = rank + 1;
+        while (i < n) {
+            uint256 before = order;
+            _settleSeat(_idAt(before, i));
+            if (order == before) i++;
         }
     }
 

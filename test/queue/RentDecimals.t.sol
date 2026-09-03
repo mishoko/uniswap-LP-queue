@@ -25,10 +25,10 @@ import {QueueFixture} from "./QueueFixture.sol";
 ///      recipient to ZERO and strand the money. Both configurations are run here and the pair is
 ///      the point — nothing differs but the decimals, so a difference IS the decimals.
 abstract contract RentDecimalsBase is QueueFixture {
-    address constant ALICE = address(0xA11CE); // seat 0, the rent PAYER
+    address constant ALICE = address(0xA11CE); // seat 0, rank 0 — a rent RECIPIENT
     address constant BOB = address(0xB0B); // seat 1
     address constant CARL = address(0xCA21); // seat 2
-    address constant DAVE = address(0xDA1E); // seat 3
+    address constant DAVE = address(0xDA1E); // seat 3, the tail — the rent PAYER
 
     function _u0(uint256 n) internal view returns (uint256) {
         return n * (10 ** dec0);
@@ -57,34 +57,38 @@ abstract contract RentDecimalsBase is QueueFixture {
     }
 
     /// @dev The whole claim, in one place, so both decimal pairs are asked EXACTLY the same question.
+    /// @dev **THE PAYER IS THE TAIL SINCE PHASE 12.** Rent moves FORWARD, so a charge from rank 0
+    ///      has no recipient at all and would exercise the HELD branch — under which every
+    ///      assertion below holds vacuously at zero and the 6-decimal rounding this suite exists to
+    ///      catch is never evaluated. The recipients are therefore ranks 0..2.
     function _rentSplitHolds() internal {
-        vm.prank(ALICE);
-        hook.setSelfPrice(0, _u0(100));
-        _fund(ALICE, _u0(20), 0);
-        vm.prank(ALICE);
-        hook.fundRent(0, _u0(20));
+        vm.prank(DAVE);
+        hook.setSelfPrice(3, _u0(100));
+        _fund(DAVE, _u0(20), 0);
+        vm.prank(DAVE);
+        hook.fundRent(3, _u0(20));
 
         vm.warp(block.timestamp + 3_153_600);
-        uint256 due = hook.rentDue(0);
+        uint256 due = hook.rentDue(3);
         assertGt(due, 0, "no rent accrued: this test proves nothing");
 
         uint256[3] memory before_;
         uint256 depth;
-        for (uint256 i = 1; i < 4; i++) {
+        for (uint256 i; i < 3; i++) {
             uint256 id = hook.idAtRank(i);
-            (, before_[i - 1],,,) = hook.leaseOf(id);
+            (, before_[i],,,) = hook.leaseOf(id);
             depth += hook.seatLiquidity(id);
         }
-        assertGt(depth, 0, "nobody behind contributes depth: wrong branch, this test proves nothing");
+        assertGt(depth, 0, "nobody ahead contributes depth: wrong branch, this test proves nothing");
 
-        hook.settleRent(0);
+        hook.settleRent(3);
         (, uint256 unalloc) = hook.rentTotals();
 
         uint256 paid;
-        for (uint256 i = 1; i < 4; i++) {
+        for (uint256 i; i < 3; i++) {
             uint256 id = hook.idAtRank(i);
             (, uint256 e1,,,) = hook.leaseOf(id);
-            uint256 got = e1 - before_[i - 1];
+            uint256 got = e1 - before_[i];
 
             // **THE 6-DECIMAL FAILURE MODE, ASSERTED DIRECTLY.** A seat that contributed real depth
             // must receive real money. If a floored `mulDiv` of a small pot rounds it to zero, this

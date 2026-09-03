@@ -313,17 +313,30 @@ contract DeployTest is BaseTest, QueueDeployBase {
         assertEq(selfPrice, 250e18, "the buyer's own assessment was not recorded");
         assertEq(d.hook.buyPrice(0), ask, "the buyer marked the seat up inside the firm window");
 
-        // ---- BEAT 6: RENT ACCRUES IN ELAPSED TIME AND IS PAID BY THE FRONT TO THE BACK.
-        _fundRent(d, 1, 0, 50e18);
+        // ---- BEAT 6: RENT ACCRUES IN ELAPSED TIME AND IS PAID BY THE BACK TO THE FRONT.
+        //
+        // **THE DIRECTION WAS REVERSED IN PHASE 12 AND THIS BEAT IS WHERE THE BUSINESS MODEL SHOWS
+        // UP ON CAMERA.** The front seat SUPPLIES subordination — it stands in front and absorbs
+        // the adverse move first — and the seats behind it CONSUME that protection. So the back
+        // pays the front, the same way round as every insurance market. It used to be the other way
+        // because the Harberger layer was designed when being first was believed to be the prize;
+        // Phases 7-8 disproved that and nobody revisited the rent (see `_distributeRent`).
+        //
+        // The PAYER is therefore a seat with somebody in front of it. Rank 0's rent has no
+        // recipient at all and would land in the held pot, which is correct but demonstrates
+        // nothing.
+        uint256 payer = d.hook.ranking()[3];
+        _setSelfPriceAs(payer, 250e18);
+        _fundRent(d, _holderIndexOf(payer), payer, 50e18);
         (uint256 escBefore,) = d.hook.rentTotals();
         assertEq(escBefore, 50e18, "escrow did not arrive");
-        assertEq(d.hook.rentDue(0), 0, "rent accrued before any time passed");
+        assertEq(d.hook.rentDue(payer), 0, "rent accrued before any time passed");
 
         _advanceTime(30 days);
         // Past the window, the buyer's own number is what anyone else must pay.
         assertEq(d.hook.buyPrice(0), 250e18, "the firm quote outlived its window");
 
-        uint256 due = d.hook.rentDue(0);
+        uint256 due = d.hook.rentDue(payer);
         // τ = 10% of 250e18 per 365 days, over 30 days.
         assertEq(due, (250e18 * RENT_BPS * 30 days) / (10_000 * RENT_PERIOD), "rent is not linear in time");
         assertGt(due, 0, "no rent accrued in 30 days: this beat proves nothing");
@@ -333,47 +346,66 @@ contract DeployTest is BaseTest, QueueDeployBase {
         // conserved to the wei while the payer's own escrow falls by exactly what it owed. An
         // earlier draft of this test asserted that `escrowTotal` FELL, which is what a rent that
         // leaked value would do — it passed against nothing and failed against the real contract.
-        uint256[] memory escBehindBefore = _escrowBehind(0);
-        (, uint256 payerEscBefore,,,) = d.hook.leaseOf(0);
+        uint256[] memory escAheadBefore = _escrowAhead(payer);
+        (, uint256 payerEscBefore,,,) = d.hook.leaseOf(payer);
 
-        _settle(0);
+        _settle(payer);
 
-        (, uint256 payerEscAfter,,,) = d.hook.leaseOf(0);
+        (, uint256 payerEscAfter,,,) = d.hook.leaseOf(payer);
         (uint256 escTotalAfter, uint256 unallocated) = d.hook.rentTotals();
         assertEq(payerEscBefore - payerEscAfter, due, "the payer was not charged exactly what was owed");
         assertEq(escTotalAfter, escBefore, "rent left the escrow pot: it must move escrow to escrow");
         assertEq(unallocated, 0, "rent was stranded while eligible recipients existed");
 
-        uint256[] memory escBehindAfter = _escrowBehind(0);
+        uint256[] memory escAheadAfter = _escrowAhead(payer);
         uint256 received;
-        for (uint256 i; i < escBehindAfter.length; i++) {
-            assertGe(escBehindAfter[i], escBehindBefore[i], "a seat behind LOST escrow to a rent payment");
-            received += escBehindAfter[i] - escBehindBefore[i];
+        for (uint256 i; i < escAheadAfter.length; i++) {
+            assertGe(escAheadAfter[i], escAheadBefore[i], "a seat ahead LOST escrow to a rent payment");
+            received += escAheadAfter[i] - escAheadBefore[i];
         }
-        assertEq(received, due, "the seats behind did not receive exactly what the front paid");
+        assertEq(received, due, "the seats ahead did not receive exactly what the back paid");
+        // ...and the FRONT seat is one of them, which is the whole point of the reversal: the seat
+        // that eats the adverse move first is the one being paid for it.
+        (, uint256 headEsc,,,) = d.hook.leaseOf(d.hook.ranking()[0]);
+        assertGt(headEsc, 0, "the front seat was not paid for standing in front");
 
-        // **AND THE LIMITATION IS VISIBLE HERE TOO, NOT HIDDEN (PITFALLS 5.19).** Rent is currency0
-        // weighted by currency0, so the seat emptied by BEAT 4's transfer holds none and is paid
-        // NOTHING despite standing behind the payer. `BUSINESS.md` §9 says so; this asserts it.
-        (uint256 emptyA0,) = d.hook.seat(4);
+        // **AND THE LIMITATION IS VISIBLE HERE TOO, NOT HIDDEN (PITFALLS 5.19).** Eligibility is
+        // CONTRIBUTED DEPTH. The seat emptied by BEAT 4's transfer contributed none, so it is paid
+        // NOTHING even when it stands ahead of the payer. `BUSINESS.md` §9 says so; this asserts it.
+        assertEq(d.hook.seatLiquidity(4), 0, "seat 4 was expected to contribute no depth");
         (, uint256 emptyEsc,,,) = d.hook.leaseOf(4);
-        assertEq(emptyA0, 0, "seat 4 was expected to be empty of currency0");
-        assertEq(emptyEsc, 0, "a seat holding no currency0 was paid currency0-weighted rent");
+        assertEq(emptyEsc, 0, "a seat contributing no depth was paid depth-weighted rent");
 
         assertEq(d.hook.ownerOf(0), actor[1], "settlement seized a seat: foreclosure must only demote");
     }
 
     // --------------------------------------------------------------------------------- the plumbing
 
-    /// @dev Every escrow balance strictly BEHIND `seatId`, indexed by rank offset.
-    function _escrowBehind(uint256 seatId) internal view returns (uint256[] memory out) {
+    /// @dev Every escrow balance strictly AHEAD of `seatId`, indexed by rank. Rent moves forward
+    ///      since Phase 12, so these are the recipients.
+    function _escrowAhead(uint256 seatId) internal view returns (uint256[] memory out) {
         uint256[] memory ids = d.hook.ranking();
         uint256 r = d.hook.rankOfId(seatId);
-        out = new uint256[](ids.length - r - 1);
-        for (uint256 i; i < out.length; i++) {
-            (, uint256 esc,,,) = d.hook.leaseOf(ids[r + 1 + i]);
+        out = new uint256[](r);
+        for (uint256 i; i < r; i++) {
+            (, uint256 esc,,,) = d.hook.leaseOf(ids[i]);
             out[i] = esc;
         }
+    }
+
+    /// @dev Which demo actor holds `seatId`. The roster is `actor[0..4]` in founding order, but a
+    ///      buyout has already moved one seat by BEAT 6, so this is read rather than assumed.
+    function _holderIndexOf(uint256 seatId) internal view returns (uint256) {
+        address who = d.hook.ownerOf(seatId);
+        for (uint256 i; i < actor.length; i++) {
+            if (actor[i] == who) return i;
+        }
+        revert("seat is held by nobody in the demo roster");
+    }
+
+    function _setSelfPriceAs(uint256 seatId, uint256 price) internal {
+        vm.prank(d.hook.ownerOf(seatId));
+        d.hook.setSelfPrice(seatId, price);
     }
 
     function _settle(uint256 seatId) internal {

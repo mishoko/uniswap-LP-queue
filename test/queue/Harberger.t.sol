@@ -53,11 +53,20 @@ contract SettleWithoutChargingHook is QueueHarness {
     }
 }
 
-/// @dev CONTROL 4.9b — rent paid to the seats AHEAD. Production's loop runs `r+1 .. n-1`; this one
-///      runs `0 .. r-1`, and nothing else differs. **It conserves every single wei**, which is
-///      exactly why a conservation test cannot see it: the money is all still there, pointing the
-///      wrong way. This is the shape of the bug that killed `HardcapHook`.
-contract RentPaidAheadHook is QueueHarness {
+/// @dev CONTROL 4.9b — rent paid to the seats BEHIND. **THIS IS THE DIRECTION THE CONTRACT SHIPPED
+///      UNTIL PHASE 12, so this control is a real regression guard rather than a hypothetical.**
+///      Production's loop now runs `0 .. r-1`; this one runs `r+1 .. n-1`, and NOTHING else
+///      differs — same weight field (`liquidity`), same remainder line, same held-pot rule, so the
+///      only variable is the direction. **It conserves every single wei**, which is exactly why a
+///      conservation test cannot see it: the money is all still there, pointing the wrong way. This
+///      is the shape of the bug that killed `HardcapHook`, and it is why §D.6 demands a control for
+///      the DIRECTION specifically.
+///
+///      It weights by `liquidity` rather than by `a0` on purpose. The pre-Phase-12 version of this
+///      control weighted by `a0`, which production had already stopped using — so it varied TWO
+///      things at once and a pass could not distinguish "the direction is enforced" from "the
+///      weight field is enforced". Hold one variable at a time (AGENTS §3b).
+contract RentPaidBehindHook is QueueHarness {
     constructor(
         IPoolManager pm,
         Currency c0_,
@@ -76,11 +85,12 @@ contract RentPaidAheadHook is QueueHarness {
         uint256 held = unallocatedRent0;
         uint256 pot = amount + held;
         if (pot == 0) return;
+        uint256 n = q.length;
         uint256 r = rankOfId(payerId);
 
         uint256 w;
-        for (uint256 i; i < r; i++) {
-            w += q[idAtRank(i)].a0;
+        for (uint256 i = r + 1; i < n; i++) {
+            w += q[idAtRank(i)].liquidity;
         }
         if (w == 0) {
             escrowTotal -= amount;
@@ -88,9 +98,9 @@ contract RentPaidAheadHook is QueueHarness {
             return;
         }
         Allocation.State memory st = Allocation.init(pot, w);
-        for (uint256 i; i < r && st.remaining > 0; i++) {
+        for (uint256 i = r + 1; i < n && st.remaining > 0; i++) {
             uint256 id = idAtRank(i);
-            uint256 bal = q[id].a0;
+            uint256 bal = q[id].liquidity;
             if (bal == 0) continue;
             (, uint256 give) = Allocation.step(st, bal, 0, 0); // rent is pro-rata, never priced
             lease[id].escrow += give;
@@ -368,13 +378,16 @@ contract HarbergerTest is QueueFixture {
     ///      the test asserts by how much before asserting the real split is not.
     function test_4_2_rentSumsExactlyToWhatWasCharged() public {
         _four();
+        // **THE PAYER IS THE TAIL, BECAUSE RENT NOW MOVES FORWARD.** Rank 0 has nobody ahead of it,
+        // so a charge from seat 0 has no recipient and would exercise the HELD path instead of the
+        // split this test is about (that path is `test_4_3`).
         // A price and an interval chosen so the charge is a prime-ish number of wei rather than
         // something that divides the weights evenly.
-        _setPrice(ALICE, 0, 77_777_777_777_777_777);
-        _prepay(ALICE, 0, 5e18);
+        _setPrice(DAVE, 3, 77_777_777_777_777_777);
+        _prepay(DAVE, 3, 5e18);
         vm.warp(block.timestamp + 1_234_567);
 
-        uint256 due = hook.rentDue(0);
+        uint256 due = hook.rentDue(3);
         assertTrue(due != 0, "nothing accrued: this test proves nothing");
 
         uint256[4] memory escBefore;
@@ -385,32 +398,36 @@ contract HarbergerTest is QueueFixture {
 
         // What a FLOORED split would have handed out, computed independently here. If this equals
         // the pot, the fixture is not exercising the remainder line and the test is worthless.
+        //
+        // **IT READS `seatLiquidity`, NOT `a0`.** It used to read `a0`, which production stopped
+        // weighting by in Phase 8 — so the "independent" floor was computed from a different
+        // quantity than the one under test and `assertGt(credited, naive)` could pass or fail for
+        // reasons unrelated to the remainder line. A reference witness that models the wrong rule
+        // is not a witness (AGENTS §3b).
         uint256 w;
-        for (uint256 i = 1; i < 4; i++) {
-            (uint256 a0,) = hook.seat(i);
-            w += a0;
+        for (uint256 i; i < 3; i++) {
+            w += hook.seatLiquidity(i);
         }
         uint256 naive;
-        for (uint256 i = 1; i < 4; i++) {
-            (uint256 a0,) = hook.seat(i);
-            naive += FullMath.mulDiv(due, a0, w);
+        for (uint256 i; i < 3; i++) {
+            naive += FullMath.mulDiv(due, hook.seatLiquidity(i), w);
         }
         assertLt(naive, due, "the weights divide evenly: the remainder line is not under test here");
 
-        hook.settleRent(0);
+        hook.settleRent(3);
 
-        uint256 charged = escBefore[0] - _escrow(0);
+        uint256 charged = escBefore[3] - _escrow(3);
         assertEq(charged, due, "the payer was not charged what it owed");
 
         uint256 credited;
-        for (uint256 i = 1; i < 4; i++) {
+        for (uint256 i; i < 3; i++) {
             credited += _escrow(i) - escBefore[i];
         }
         (, uint256 unallocAfter) = hook.rentTotals();
 
         assertEq(credited + unallocAfter, charged + unallocBefore, "rent split does not sum to the charge");
         assertEq(unallocAfter, 0, "there were eligible recipients and the pot was still withheld");
-        assertEq(credited, charged, "a wei went missing between the payer and the seats behind");
+        assertEq(credited, charged, "a wei went missing between the payer and the seats ahead");
         assertGt(credited, naive, "the remainder was floored away");
 
         _checkInvariantR("4.2");
@@ -436,18 +453,20 @@ contract HarbergerTest is QueueFixture {
     // ============================================ 4.3 — rent with no recipient is HELD, never lost
 
     function test_4_3_rentWithNoRecipientIsNotLost() public {
-        // Only the head holds currency0. Every seat behind it is empty of the rent currency, so
-        // there is nobody the pro-rata rule can name.
-        _addTo(ALICE, 0, 40e18, 10e18);
-        _addTo(BOB, 1, 0, 15e18);
-        _addTo(CARL, 2, 0, 34e18);
-        _addTo(DAVE, 3, 0, 191e18);
+        // **RANK 0 HAS NOBODY AHEAD OF IT, SO ITS RENT STRUCTURALLY HAS NO RECIPIENT.** Since the
+        // Phase 12 reversal this is the clean form of "there is nobody the pro-rata rule can name":
+        // it needs no contrived roster, it is the front seat's permanent condition, and it is
+        // CORRECT rather than a gap — rank 0 buys protection from nobody, so it owes nobody. Its
+        // self-price exists to stop the seat being taken out from under a live programme
+        // (PITFALLS 5.181), not to buy a service.
+        _four();
 
         _setPrice(ALICE, 0, 100e18);
         _prepay(ALICE, 0, 20e18);
         vm.warp(block.timestamp + 3_153_600);
 
         uint256 due = hook.rentDue(0);
+        assertTrue(due != 0, "nothing accrued: this test proves nothing");
         uint256 escBefore = _escrow(0);
         hook.settleRent(0);
 
@@ -458,27 +477,24 @@ contract HarbergerTest is QueueFixture {
         assertEq(escrowed, escBefore - due, "the withheld rent is being double-counted as escrow");
         _checkInvariantR("4.3 held");
 
-        // Now make the tail ELIGIBLE and settle again. The held pot is folded in and paid out
-        // together with the new charge — the identity spans both settlements.
-        //
-        // **ELIGIBILITY IS CONTRIBUTED DEPTH, NOT A currency0 BALANCE, AND THE FIXTURE SAYS SO
-        // EXPLICITLY.** This line used to be `_addTo(DAVE, 3, 500e18, 0)` — a single-token deposit,
-        // which under the old `a0` weighting made DAVE the whole denominator. Rent is now weighted
-        // by the depth a seat contributed and has not withdrawn, and an in-range single-token
-        // deposit mints essentially NO liquidity, so that line would leave the pot held for a second
-        // time and this test would assert the release of something never released. Two tokens mint
-        // real depth, which is what "somebody is standing behind you" now means.
-        _addTo(DAVE, 3, 500e18, 500e18);
-        assertGt(hook.seatLiquidity(3), 0, "the tail still contributes no depth: it is not an eligible recipient");
+        // Now let a seat that DOES have somebody ahead of it pay. The held pot is folded in and
+        // paid out together with the new charge — the identity spans both settlements.
+        _setPrice(DAVE, 3, 100e18);
+        _prepay(DAVE, 3, 20e18);
+        assertGt(hook.seatLiquidity(0), 0, "the head contributes no depth: it is not an eligible recipient");
         vm.warp(block.timestamp + 3_153_600);
 
-        uint256 due2 = hook.rentDue(0);
-        uint256 daveBefore = _escrow(3);
-        hook.settleRent(0);
+        uint256 due2 = hook.rentDue(3);
+        uint256 aheadBefore = _escrow(0) + _escrow(1) + _escrow(2);
+        hook.settleRent(3);
 
         (, uint256 heldAfter) = hook.rentTotals();
         assertEq(heldAfter, 0, "the held pot was not released to an eligible recipient");
-        assertEq(_escrow(3) - daveBefore, held + due2, "the released pot did not reach the seat behind");
+        assertEq(
+            _escrow(0) + _escrow(1) + _escrow(2) - aheadBefore,
+            held + due2,
+            "the released pot did not reach the seats ahead"
+        );
         _checkInvariantR("4.3 released");
     }
 
@@ -688,19 +704,19 @@ contract HarbergerTest is QueueFixture {
     function test_4_5b_overpricedSeatPaysForIt() public {
         _four();
         // 1000e18 for a fifth of a year at 10% is exactly 20e18 of rent.
-        _setPrice(ALICE, 0, 1000e18);
-        _prepay(ALICE, 0, 50e18);
+        _setPrice(DAVE, 3, 1000e18);
+        _prepay(DAVE, 3, 50e18);
         vm.warp(block.timestamp + 6_307_200);
 
-        uint256 escBefore = _escrow(0);
-        uint256 tailBefore = _escrow(1) + _escrow(2) + _escrow(3);
-        hook.settleRent(0);
+        uint256 escBefore = _escrow(3);
+        uint256 aheadBefore = _escrow(0) + _escrow(1) + _escrow(2);
+        hook.settleRent(3);
 
-        assertEq(escBefore - _escrow(0), 20e18, "the over-priced holder did not pay for the assessment");
-        assertEq(_escrow(1) + _escrow(2) + _escrow(3) - tailBefore, 20e18, "the tail was not compensated");
+        assertEq(escBefore - _escrow(3), 20e18, "the over-priced holder did not pay for the assessment");
+        assertEq(_escrow(0) + _escrow(1) + _escrow(2) - aheadBefore, 20e18, "the seats ahead were not paid");
         // Nobody can take it at that price, which is the whole point of setting it: the holder buys
-        // security with rent, and the tail is paid for standing aside.
-        assertEq(hook.buyPrice(0), 1000e18, "the assessment is not the ask");
+        // security with rent, and the seats AHEAD are paid for standing in front of it.
+        assertEq(hook.buyPrice(3), 1000e18, "the assessment is not the ask");
         _checkInvariantR("4.5b");
     }
 
@@ -900,11 +916,13 @@ contract HarbergerTest is QueueFixture {
     ///      unrelated reason.
     function test_4_9a_negativeControl_settleWithoutCharging() public {
         // Production.
+        // The payer is the TAIL: rank 0's rent has no recipient since the Phase 12 reversal, so it
+        // would be HELD and `escrowTotal` would legitimately fall — which is not the defect here.
         _four();
-        _setPrice(ALICE, 0, 100e18);
-        _prepay(ALICE, 0, 20e18);
+        _setPrice(DAVE, 3, 100e18);
+        _prepay(DAVE, 3, 20e18);
         vm.warp(block.timestamp + 30 days);
-        hook.settleRent(0);
+        hook.settleRent(3);
         _checkInvariantR("4.9a production");
         (uint256 escrowed,) = hook.rentTotals();
         assertEq(escrowed, 20e18, "production moved rent OUT of the escrow pot");
@@ -912,12 +930,12 @@ contract HarbergerTest is QueueFixture {
         // The variant, identical sequence.
         _mutantRig("Harberger.t.sol:SettleWithoutChargingHook", 0x9111);
         _four();
-        _setPrice(ALICE, 0, 100e18);
-        _prepay(ALICE, 0, 20e18);
+        _setPrice(DAVE, 3, 100e18);
+        _prepay(DAVE, 3, 20e18);
         vm.warp(block.timestamp + 30 days);
-        uint256 due = hook.rentDue(0);
+        uint256 due = hook.rentDue(3);
         assertTrue(due != 0, "nothing accrued on the variant: this test proves nothing");
-        hook.settleRent(0);
+        hook.settleRent(3);
 
         (uint256 esc,) = hook.rentTotals();
         // **THE AGGREGATE STAYS RIGHT.** `escrowTotal` is debited by the distribution either way, so
@@ -929,8 +947,8 @@ contract HarbergerTest is QueueFixture {
 
         // And the consequence, executed rather than described: the seats now collectively own more
         // prepaid rent than exists, so somebody's withdrawal cannot be paid.
-        vm.prank(ALICE);
-        hook.withdrawRent(0, 20e18); // the payer takes back a meter it never spent
+        vm.prank(DAVE);
+        hook.withdrawRent(3, 20e18); // the payer takes back a meter it never spent
         uint256 bobHas = _escrow(1);
         assertTrue(bobHas != 0, "seat 1 was credited nothing: this test proves nothing");
         vm.prank(BOB);
@@ -941,8 +959,11 @@ contract HarbergerTest is QueueFixture {
     /// @dev CONTROL: rent paid to the seats AHEAD. **It conserves every wei** — `escrowTotal` is
     ///      identical and INVARIANT R is perfectly happy — which is precisely why the assertion has
     ///      to name the DIRECTION rather than the total.
-    function test_4_9b_negativeControl_rentPaidToSeatsAhead() public {
-        // Production: seat 2 pays, and the money moves BACKWARD to seat 3.
+    function test_4_9b_negativeControl_rentPaidToSeatsBehind() public {
+        // **INVERTED IN PHASE 12, SCENARIO UNCHANGED, BECAUSE THE DIRECTION IS THE THING UNDER
+        // TEST.** Production now moves rent FORWARD: the back buys subordination from the front, so
+        // the back pays the front. The old direction — the one this contract shipped for four
+        // phases — is the variant below, and it conserves every wei while pointing the wrong way.
         _four();
         _setPrice(CARL, 2, 100e18);
         _prepay(CARL, 2, 20e18);
@@ -950,12 +971,13 @@ contract HarbergerTest is QueueFixture {
         uint256 aheadBefore = _escrow(0) + _escrow(1);
         uint256 behindBefore = _escrow(3);
         uint256 due = hook.rentDue(2);
+        assertTrue(due != 0, "nothing accrued on production: this test proves nothing");
         hook.settleRent(2);
-        assertEq(_escrow(3) - behindBefore, due, "production did not pay the seat behind");
-        assertEq(_escrow(0) + _escrow(1), aheadBefore, "production paid a seat ahead");
+        assertEq(_escrow(0) + _escrow(1) - aheadBefore, due, "production did not pay the seats ahead");
+        assertEq(_escrow(3), behindBefore, "production paid a seat behind");
 
         // The variant, identical sequence.
-        _mutantRig("Harberger.t.sol:RentPaidAheadHook", 0x9112);
+        _mutantRig("Harberger.t.sol:RentPaidBehindHook", 0x9112);
         _four();
         _setPrice(CARL, 2, 100e18);
         _prepay(CARL, 2, 20e18);
@@ -966,8 +988,8 @@ contract HarbergerTest is QueueFixture {
         assertTrue(due != 0, "nothing accrued on the variant: this test proves nothing");
         hook.settleRent(2);
 
-        assertEq(_escrow(0) + _escrow(1) - aheadBefore, due, "the inversion did not take");
-        assertEq(_escrow(3), behindBefore, "the seat behind was paid on the inverted variant");
+        assertEq(_escrow(3) - behindBefore, due, "the inversion did not take");
+        assertEq(_escrow(0) + _escrow(1), aheadBefore, "a seat ahead was paid on the inverted variant");
         // ...and the thing that makes this dangerous: nothing else notices.
         _checkInvariantR("4.9b variant conserves anyway");
     }
@@ -1269,20 +1291,31 @@ contract HarbergerTest is QueueFixture {
     ///      taking it back out again costs the seat its rank. See `_rentGrabAttempt`.
     function test_4_14_flashLoanCannotCaptureAccruedRent() public {
         // Production.
-        uint256 honest = _rentGrabAttempt(true);
-        // The variant: `addToSeat` with the `_settleAhead` line removed.
+        (uint256 honest, uint256 owedHonest) = _rentGrabAttempt(true);
+        // The variant: `addToSeat` with the settle lines removed.
         _mutantRig("Harberger.t.sol:NoSettleAheadHook", 0x9117);
-        uint256 stolen = _rentGrabAttempt(false);
+        (uint256 stolen, uint256 owedGrab) = _rentGrabAttempt(false);
 
-        emit log_named_uint("   seat 1's rent, honest weight ", honest);
-        emit log_named_uint("   seat 1's rent, flash-loan grab", stolen);
+        emit log_named_uint("   seat 0's rent, honest weight ", honest);
+        emit log_named_uint("   seat 0's rent, flash-loan grab", stolen);
         assertTrue(honest != 0, "the grabber earned nothing at all: this test proves nothing");
-        assertGt(stolen, honest * 10, "the grab did not pay off: the control is not demonstrating the hole");
 
-        // The honest number is exactly the pro-rata share at the balance BOB actually held through
-        // the accrual: recipients 1/2/3 hold 60/137/763, and BOB is not the one absorbing the
-        // remainder, so his share is the plain floored fraction.
-        assertEq(honest, _expectedHonestShare(), "production did not pay the honest share");
+        // **THE BAR IS THE WHOLE POT, NOT AN ARBITRARY MULTIPLE.** It used to be `stolen > honest *
+        // 10`, which held only because the old grabber's honest share happened to be 6.25%; on the
+        // re-aimed geometry the honest share is ~17% and the same defect scores 5.9x, so a
+        // hardcoded multiple would have reported the hole as CLOSED when it is wide open. The
+        // defect is not "the grabber gets a bit more" — it is that a borrowed balance takes
+        // essentially EVERYTHING the pro-rata rule had earmarked for three seats.
+        uint256 charge = (uint256(100e18) * 1000 * 30 days) / (10_000 * uint256(365 days));
+        assertApproxEqRel(stolen, charge, 0.01e18, "the grab did not capture essentially the whole pot");
+        assertLt(honest * 3, stolen, "the grab is not materially better than standing there honestly");
+
+        // The honest number is exactly the pro-rata share at the DEPTH seat 0 actually contributed
+        // through the accrual, computed inside that run against the contract's own weights.
+        assertEq(honest, owedHonest, "production did not pay the honest share");
+        // ...and the same rule, evaluated on the variant, is what the grab OVERSHOT. Stating it
+        // this way means the control names the size of the theft rather than only its direction.
+        assertGt(stolen, owedGrab, "the variant did not over-pay the grabber against its own rule");
     }
 
     /// @notice **AND THE SAME RULE AT THE SECOND ENTRY POINT CAPITAL HAS INTO A SEAT.**
@@ -1295,41 +1328,113 @@ contract HarbergerTest is QueueFixture {
     ///      the buyer's deposit — which can be borrowed — into a claim on a pot that accrued while
     ///      they were not standing there.
     function test_4_14b_aFundedBuyoutCannotCaptureRentItWasNotThereFor() public {
+        // **RE-AIMED AND RE-ARMED IN PHASE 12, AND IT WAS ALREADY BLUNT BEFORE THE REVERSAL.** Two
+        // separate things had gone wrong with this control:
+        //
+        //   1. THE GEOMETRY. Rent now moves FORWARD, so the payer must stand BEHIND the buyer or
+        //      there is nothing for a buyout to capture. With the old fixture (payer at rank 0,
+        //      buyer behind it) the pot has no recipient at all, `gained` is 0, and
+        //      `assertLt(gained, honest)` passes on 0 < something for ever.
+        //   2. THE DEPOSIT. It funded the buyout with `(100_000e18, 0)` — SINGLE-TOKEN — which
+        //      dominated the weights back when rent was split by `a0`. Since Phase 8 rent is split
+        //      by CONTRIBUTED DEPTH, and an in-range single-token deposit mints essentially NO
+        //      liquidity, so that deposit could no longer move the weight it was supposed to be
+        //      cornering. `_rentGrabAttempt`'s docblock records this exact discovery and was fixed
+        //      for it; nobody applied the same fix here. A control that cannot fail is not a
+        //      control (LAW 5), and this one had two independent reasons not to.
         _four();
-        _setPrice(ALICE, 0, 100e18);
-        _prepay(ALICE, 0, 20e18);
+        _setPrice(DAVE, 3, 100e18);
+        _prepay(DAVE, 3, 20e18);
         vm.warp(block.timestamp + 30 days);
 
-        uint256 meterBefore = _escrow(0);
-        assertGt(hook.rentDue(0), 0, "no rent accrued: this test proves nothing");
+        uint256 meterBefore = _escrow(3);
+        uint256 due = hook.rentDue(3);
+        assertGt(due, 0, "no rent accrued: this test proves nothing");
 
-        // EVE takes the SMALL tail-ward seat with a borrowed-scale deposit. A seat that already
-        // dominates the weights has nothing to gain, so the small one is what makes this bite.
-        _fund(EVE, 100_000e18, 0);
-        _buyAndFundTracked(EVE, 1, 0, 0, 100_000e18, 0);
-
-        // The buyout drained the payer's meter BEFORE the deposit could weigh on it.
-        assertLt(_escrow(0), meterBefore, "the funded buyout did not settle the seats ahead of it");
+        // EVE takes seat 1 — unpriced, so free to take under the bootstrap — which stands AHEAD of
+        // the payer and is therefore one of the three seats the accrual is earmarked for. Both
+        // witnesses are captured BEFORE the deposit: what the pro-rata rule owes seat 1 at the
+        // weights it actually held, and what it would owe at the cornered weights.
+        uint256 wBefore = hook.seatLiquidity(0) + hook.seatLiquidity(1) + hook.seatLiquidity(2);
+        uint256 owedHonest = FullMath.mulDiv(due, hook.seatLiquidity(1), wBefore);
+        assertGt(owedHonest, 0, "seat 1 is owed nothing honestly: this test proves nothing");
 
         uint256 before = _escrow(1);
-        hook.settleRent(0);
+        uint256 standingBefore = _escrow(0) + _escrow(2);
+        uint256 sellerBefore = _bal(c0, BOB);
+        (uint256 sellerPrincipal0,) = hook.seat(1); // returned with the seat; not rent
+        _fund(EVE, 100_000e18, 100_000e18);
+        _buyAndFundTracked(EVE, 1, 0, 0, 100_000e18, 100_000e18);
+
+        // THE CORNER IS REAL: seat 1 now dominates the weights it did not dominate a moment ago.
+        // Without this the assertions below would hold because nothing happened.
+        uint256 wAfter = hook.seatLiquidity(0) + hook.seatLiquidity(1) + hook.seatLiquidity(2);
+        uint256 owedIfCornered = FullMath.mulDiv(due, hook.seatLiquidity(1), wAfter);
+        assertGt(owedIfCornered, owedHonest * 3, "the borrowed deposit did not corner the weights");
+
+        // The buyout settled the seats BEHIND it before the deposit could weigh on them.
+        assertLt(_escrow(3), meterBefore, "the funded buyout did not settle the seats behind it");
+
         uint256 gained = _escrow(1) - before;
         emit log_named_uint("rent captured by the funded buyout", gained);
-        emit log_named_uint("the honest share for that seat    ", _expectedHonestShare());
-        assertLt(gained, _expectedHonestShare(), "THE FUNDED BUYOUT CAPTURED RENT IT WAS NOT THERE FOR");
+        emit log_named_uint("its honest share at the old weights", owedHonest);
+        emit log_named_uint("what it would have taken cornered  ", owedIfCornered);
+
+        // **THE CLAIM, AND THE DEFENCE IS STRONGER THAN "NOT THE CORNERED NUMBER".** The buyer gets
+        // NOTHING — not the cornered share, and not even the honest one. `_onSeatTransfer` zeroes
+        // the seat's contributed depth on every change of holder, and `_settleBehind` then runs
+        // while that depth is still zero and before `_fundSeat` restores it. So a seat that changed
+        // hands carries no weight through an accrual it was not present for, which is the property
+        // this test is named after, stated as an identity rather than as a bound (PITFALLS 5.53).
+        assertEq(gained, 0, "THE FUNDED BUYOUT CAPTURED RENT IT WAS NOT THERE FOR");
+        assertLt(gained, owedIfCornered, "the corner was not actually denied");
+        assertLt(gained, owedHonest, "the buyer was paid the departed holder's honest share");
+
+        // ...AND THE MONEY IS NOT LOST. Without this the test would pass identically against a
+        // contract that simply burnt the pot, which is a different bug wearing the same green tick.
+        //
+        // **IT SPLITS THREE WAYS, AND THE THIRD WAY IS THE INTERESTING ONE.** The seats that never
+        // moved keep their honest shares. Seat 1's honest share was credited to seat 1's escrow
+        // while it still held its depth — and then `_onSeatTransfer` paid that escrow out to the
+        // DEPARTING HOLDER along with the capital. So the rule the contract actually implements is
+        // sharper than "the buyer gets nothing": rent accrued over a period is paid to whoever was
+        // STANDING for it, and a mid-accrual sale settles the seller rather than enriching the
+        // buyer. That is the correct answer and it was not written down anywhere.
+        uint256 toStanding = _escrow(0) + _escrow(2) - standingBefore;
+        // The seller's transfer returns PRINCIPAL as well as escrow, so the principal is netted out
+        // here rather than folded into a tolerance — a tolerance wide enough to hide 60e18 of
+        // capital would hide the whole result.
+        uint256 toSeller = _bal(c0, BOB) - sellerBefore - sellerPrincipal0;
+        assertApproxEqAbs(toStanding + toSeller, due, _tol(2), "the accrual did not sum to the charge");
+        assertApproxEqAbs(toSeller, owedHonest, _tol(1), "the departing holder was not paid what it stood for");
     }
 
     /// @dev Runs the identical sequence on whichever hook is mounted. `settleAhead` picks the
     ///      production entry point or the control's one-line-lighter copy.
-    function _rentGrabAttempt(bool settleAhead) internal returns (uint256 gained) {
+    /// @return gained what the grabber's escrow actually rose by
+    /// @return honestShare what the pro-rata rule owed it at the weights it held THROUGH the
+    ///         accrual — captured inside this run, immediately before the deposit lands.
+    ///         **IT CANNOT BE COMPUTED AFTER THE FACT.** An earlier version of this witness read
+    ///         `seatLiquidity` at the end of the test, by which point the mutant run had already
+    ///         inflated it by 100,000e18 — so the "honest" baseline was measured on the grabbed
+    ///         state and the comparison was against itself. That is the shape LAW 5 names: a
+    ///         baseline derived from the same quantity as the numerator.
+    function _rentGrabAttempt(bool settleAhead) internal returns (uint256 gained, uint256 honestShare) {
         _four();
-        _setPrice(ALICE, 0, 100e18);
-        _prepay(ALICE, 0, 20e18);
+        // **THE PAYER IS THE TAIL AND THE GRABBER STANDS AHEAD OF IT — RE-AIMED IN PHASE 12.**
+        // Rent now moves FORWARD, so the seats that can pay INTO a given seat are the ones BEHIND
+        // it. The old geometry (payer at rank 0, grabber behind it) can no longer pay the grabber
+        // anything at all, so this control would have gone permanently vacuous — it fails with
+        // "the grabber earned nothing" rather than passing, which is the good failure mode, but it
+        // is still a control that has stopped controlling. Re-armed against the attack that
+        // exists (`_settleBehind`) instead of relaxed to fit the one that does not (LAW 5).
+        _setPrice(DAVE, 3, 100e18);
+        _prepay(DAVE, 3, 20e18);
         vm.warp(block.timestamp + 30 days);
 
-        // The grabber is seat 1, which holds 60e18 of the 960e18 behind the payer — 6.25% of the
-        // pot honestly. A seat that already dominates the weights has nothing to gain from a loan,
-        // so choosing the SMALL tail seat is what makes the control demonstrate anything at all.
+        // The grabber is seat 0, the SMALLEST of the three seats standing ahead of the payer. A
+        // seat that already dominates the weights has nothing to gain from a loan, so choosing the
+        // small one is what makes the control demonstrate anything at all.
         // **THE BORROWED DEPOSIT IS TWO-TOKEN, AND THAT IS NOT COSMETIC — IT IS WHAT KEEPS THIS
         // CONTROL ABLE TO FIRE.** It used to be `(100_000e18, 0)`, because the weights read `a0`
         // and a single-token currency0 deposit moved them enormously. Since rent is weighted by
@@ -1340,20 +1445,23 @@ contract HarbergerTest is QueueFixture {
         // (LAW 5), so it is re-armed against the attack that still exists rather than relaxed to fit
         // the one that does not. A two-token deposit mints real liquidity, which is real weight,
         // which is the thing `_settleAhead` has to be standing in front of.
-        uint256 before = _escrow(1);
-        _fund(BOB, 100_000e18, 100_000e18);
-        vm.startPrank(BOB);
-        if (settleAhead) hook.addToSeat(1, 100_000e18, 100_000e18);
-        else NoSettleAheadHook(payable(address(hook))).addToSeatNoSettle(1, 100_000e18, 100_000e18);
-        hook.settleRent(0);
+        uint256 before = _escrow(0);
+        {
+            uint256 due = hook.rentDue(3);
+            uint256 w = hook.seatLiquidity(0) + hook.seatLiquidity(1) + hook.seatLiquidity(2);
+            // Seat 0 is the FIRST recipient in the distribution loop, so it never absorbs the
+            // remainder and its share is the plain floored fraction.
+            honestShare = FullMath.mulDiv(due, hook.seatLiquidity(0), w);
+        }
+        _fund(ALICE, 100_000e18, 100_000e18);
+        vm.startPrank(ALICE);
+        if (settleAhead) hook.addToSeat(0, 100_000e18, 100_000e18);
+        else NoSettleAheadHook(payable(address(hook))).addToSeatNoSettle(0, 100_000e18, 100_000e18);
+        hook.settleRent(3);
         vm.stopPrank();
-        gained = _escrow(1) - before;
+        gained = _escrow(0) - before;
     }
 
-    function _expectedHonestShare() internal pure returns (uint256) {
-        uint256 due = (uint256(100e18) * 1000 * 30 days) / (10_000 * uint256(365 days));
-        return FullMath.mulDiv(due, 60e18, uint256(60e18) + 137e18 + 763e18);
-    }
 
     // ============================================ 4.15 — τ is a governance choice, not a constant
 
@@ -1582,51 +1690,55 @@ contract HarbergerTest is QueueFixture {
 
     function test_4_23_drainingTheMeterCannotOutrunTheBill() public {
         _four();
-        _setPrice(ALICE, 0, 100e18);
-        _prepay(ALICE, 0, 20e18);
+        _setPrice(DAVE, 3, 100e18);
+        _prepay(DAVE, 3, 20e18);
         vm.warp(block.timestamp + 365 days); // 10e18 owed
 
-        vm.prank(ALICE);
+        vm.prank(DAVE);
         vm.expectRevert(abi.encodeWithSelector(QueueHook.OverEntitlement.selector, uint256(20e18), uint256(10e18)));
-        hook.withdrawRent(0, 20e18);
+        hook.withdrawRent(3, 20e18);
 
-        vm.prank(ALICE);
-        hook.withdrawRent(0, 10e18);
-        assertEq(_escrow(0), 0, "the meter did not settle before it was drained");
-        assertEq(_escrow(1) + _escrow(2) + _escrow(3), 10e18, "the tail was not paid what accrued");
+        vm.prank(DAVE);
+        hook.withdrawRent(3, 10e18);
+        assertEq(_escrow(3), 0, "the meter did not settle before it was drained");
+        assertEq(_escrow(0) + _escrow(1) + _escrow(2), 10e18, "the seats ahead were not paid what accrued");
     }
 
     function test_4_24_sellingASeatSettlesTheSellersRentFirst() public {
+        // The seller is the TAIL, so its bill has recipients: rent moves forward since Phase 12.
         _four();
-        _setPrice(ALICE, 0, 100e18);
-        _prepay(ALICE, 0, 20e18);
+        _setPrice(DAVE, 3, 100e18);
+        _prepay(DAVE, 3, 20e18);
         vm.warp(block.timestamp + 365 days); // 10e18 owed
 
-        uint256 tailBefore = _escrow(1) + _escrow(2) + _escrow(3);
-        uint256 aliceBefore = _bal(c0, ALICE);
-        (uint256 a0,) = hook.seat(0);
-        vm.prank(ALICE);
-        hook.transfer(DAVE, 0, 1);
-        _evacuateRef(0);
+        uint256 aheadBefore = _escrow(0) + _escrow(1) + _escrow(2);
+        uint256 daveBefore = _bal(c0, DAVE);
+        (uint256 a0,) = hook.seat(3);
+        vm.prank(DAVE);
+        hook.transfer(ALICE, 3, 1);
+        _evacuateRef(3);
 
-        assertEq(_escrow(1) + _escrow(2) + _escrow(3) - tailBefore, 10e18, "the seller left without paying");
-        // She is refunded the UNSPENT half of the meter, not the whole of it.
-        assertApproxEqAbs(_bal(c0, ALICE) - aliceBefore, a0 + 10e18, _tol(1), "the seller was refunded rent she owed");
+        assertEq(_escrow(0) + _escrow(1) + _escrow(2) - aheadBefore, 10e18, "the seller left without paying");
+        // He is refunded the UNSPENT half of the meter, not the whole of it.
+        assertApproxEqAbs(_bal(c0, DAVE) - daveBefore, a0 + 10e18, _tol(1), "the seller was refunded rent he owed");
         _checkInvariantR("4.24");
     }
 
     function test_4_25_aBuyoutSettlesTheSellersRentFirst() public {
+        // The seller is the TAIL, so its bill has recipients: rent moves forward since Phase 12.
         _four();
-        _setPrice(ALICE, 0, 100e18);
-        _prepay(ALICE, 0, 20e18);
+        _setPrice(DAVE, 3, 100e18);
+        _prepay(DAVE, 3, 20e18);
         vm.warp(block.timestamp + 365 days);
 
-        uint256 tailBefore = _escrow(1) + _escrow(2) + _escrow(3);
+        uint256 aheadBefore = _escrow(0) + _escrow(1) + _escrow(2);
         _fund(EVE, 100e18, 0);
         vm.prank(EVE);
-        hook.buySeat(0, 100e18, 200e18);
-        _evacuateRef(0);
-        assertEq(_escrow(1) + _escrow(2) + _escrow(3) - tailBefore, 10e18, "the buyout wrote off the seller's bill");
+        hook.buySeat(3, 100e18, 200e18);
+        _evacuateRef(3);
+        assertEq(
+            _escrow(0) + _escrow(1) + _escrow(2) - aheadBefore, 10e18, "the buyout wrote off the seller's bill"
+        );
         _checkInvariantR("4.25");
     }
 
@@ -1738,20 +1850,19 @@ contract HarbergerTest is QueueFixture {
         _setPrice(ALICE, 0, 100e18);
         _prepay(ALICE, 0, 20e18);
 
-        // Build a held pot: seat 3 is behind everything, so a charge from seat 3 has no recipient.
-        _setPrice(DAVE, 3, 100e18);
-        _prepay(DAVE, 3, 20e18);
+        // Build a held pot: seat 0 is AHEAD of everything, so a charge from seat 0 has no
+        // recipient since the Phase 12 reversal.
         vm.warp(block.timestamp + 365 days);
-        hook.settleRent(3);
+        hook.settleRent(0);
         (, uint256 held) = hook.rentTotals();
         assertEq(held, 10e18, "no pot was held: this test proves nothing");
 
         // Seat 1 is unpriced. Settling it must not move the pot.
-        uint256 daveBefore = _escrow(3);
+        uint256 aliceBefore = _escrow(0);
         hook.settleRent(1);
         (, uint256 stillHeld) = hook.rentTotals();
         assertEq(stillHeld, held, "settling an unpriced seat paid out the held pot");
-        assertEq(_escrow(3), daveBefore, "settling an unpriced seat moved money");
+        assertEq(_escrow(0), aliceBefore, "settling an unpriced seat moved money");
     }
 
     // ---- the order word, at a NON-ZERO seat id and a NON-ZERO rank
@@ -1766,7 +1877,7 @@ contract HarbergerTest is QueueFixture {
         _prepay(CARL, 2, 1e18);
         vm.warp(block.timestamp + 365 days);
 
-        uint256 tailBefore = _escrow(3);
+        uint256 aheadBefore = _escrow(0) + _escrow(1);
         hook.settleRent(2);
         _refDemote(2);
 
@@ -1774,9 +1885,11 @@ contract HarbergerTest is QueueFixture {
         assertEq(hook.idAtRank(0), 0, "rank 0 was disturbed");
         assertEq(hook.idAtRank(1), 1, "rank 1 was disturbed");
         assertEq(hook.idAtRank(2), 3, "the queue did not close up");
-        // ...and the rent it managed to pay went to the seat that was behind it AT THE TIME, which
-        // is why the distribution runs before the demotion and not after.
-        assertEq(_escrow(3) - tailBefore, 1e18, "the foreclosed seat's last payment went nowhere");
+        // ...and the rent it managed to pay went to the seats that were AHEAD of it AT THE TIME,
+        // which is why the distribution runs before the demotion and not after. (Before Phase 12
+        // this read `_escrow(3)`: rent moved backward, so a middle seat's last payment landed on the
+        // tail. The reason the ORDERING of distribution-then-demotion matters is unchanged.)
+        assertEq(_escrow(0) + _escrow(1) - aheadBefore, 1e18, "the foreclosed seat's last payment went nowhere");
         _checkInvariantC("4.32");
         _swap(true, 120e18);
         _check("4.32 fill after a middle demotion");
@@ -1919,14 +2032,20 @@ contract HarbergerTest is QueueFixture {
         assertEq(_price(0), 0, "seat 0 was not settled by the deposit");
         assertEq(_price(1), 0, "seat 1 was skipped when the loop lost its place");
         assertEq(_escrow(1), 0, "seat 1's meter was not drained");
-        // Seat 0's meter is NOT zero, and that is correct: it was drained by its own foreclosure and
-        // then credited again out of seat 1's, because the demotion had already put it BEHIND seat 1
-        // by the time seat 1 paid.
-        assertGt(_escrow(0), 0, "the demoted seat did not share in the rent of the seat it fell behind");
-        // Both meters, 3e18 in total, are still in the system and are now held by whoever was
-        // behind each payer AT THE MOMENT IT PAID — which for seat 1 includes seat 0, demoted past
-        // it half a loop earlier. Nothing left, nothing was created.
+        // **INVERTED IN PHASE 12, AND THE INVERSION IS ITSELF THE PROOF THE ORDER IS RESPECTED.**
+        // Seat 0 forecloses first and is demoted to the tail, which promotes seat 1 to rank 0. When
+        // seat 1 then pays, rent moves FORWARD and rank 0 has nobody ahead of it — so seat 1's
+        // meter is HELD rather than credited to the seat that fell behind it. Before Phase 12 this
+        // read `assertGt(_escrow(0), 0)` because rent moved backward and seat 0, freshly demoted
+        // past seat 1, collected it. Either way the loop kept its place across a mid-loop demotion,
+        // which is what this test is named for.
+        assertEq(_escrow(0), 0, "the demoted seat was credited out of a payer it now stands BEHIND");
+        // **BOTH meters end up HELD, and the arithmetic says why.** Seat 0 pays first from rank 0 —
+        // nobody ahead, so its 1e18 is held. Its foreclosure then promotes seat 1 to rank 0, so
+        // seat 1's 2e18 is held for the same reason. 3e18 in total, still in the system, none of it
+        // credited to any seat. Nothing left, nothing was created.
         (uint256 escrowed, uint256 held) = hook.rentTotals();
+        assertEq(held, 3e18, "a payment reached a seat it stands behind: BOTH meters must be held");
         assertEq(escrowed + held, 3e18, "a meter went missing across two foreclosures in one loop");
         assertEq(_sumEscrows() + held, 3e18, "the aggregate disagrees with the seats");
         _checkInvariantC("4.38");

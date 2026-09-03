@@ -354,12 +354,14 @@ contract InvariantTest is QueueFixture {
         _checkInvariantR("I8c");
     }
 
-    /// @notice I8e — rent only ever flows BACKWARD.
-    /// @dev Conservation cannot see this: paying the seats AHEAD conserves every single wei while
-    ///      inverting the mechanism's entire economics. It is the shape of the bug that killed
-    ///      HardcapHook.
-    function invariant_I8e_rentFlowsBackward() public view {
-        assertEq(handler.rentDirectionViolations(), 0, "I8e: rent was paid to a seat AHEAD of the payer");
+    /// @notice I8e — rent only ever flows FORWARD.
+    /// @dev **INVERTED IN PHASE 12 WITH THE RENT DIRECTION, AND THE INVARIANT IS THE REASON THE
+    ///      REVERSAL IS SAFE TO MAKE.** The front SUPPLIES subordination and the back CONSUMES it,
+    ///      so the back pays the front. Conservation cannot see the direction either way: paying
+    ///      the wrong side conserves every single wei while inverting the mechanism's entire
+    ///      economics. It is the shape of the bug that killed HardcapHook.
+    function invariant_I8e_rentFlowsForward() public view {
+        assertEq(handler.rentDirectionViolations(), 0, "I8e: rent was paid to a seat BEHIND the payer");
     }
 
     // ============================================================================== after each run
@@ -594,7 +596,7 @@ contract InvariantTest is QueueFixture {
         invariant_I8a_settlementConservesRent();
         invariant_I8b_escrowTotalEqualsTheSeats();
         invariant_I8c_currencyIsFullyAccounted();
-        invariant_I8e_rentFlowsBackward();
+        invariant_I8e_rentFlowsForward();
     }
 
     /// @notice §D.8 V3's authorisation lens, driven directly so the outcome is ASSERTED rather than

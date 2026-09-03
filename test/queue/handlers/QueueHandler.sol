@@ -86,7 +86,10 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
     uint256 public frontFirstViolations;
     /// @dev A `settleRent` that changed `escrowTotal + unallocatedRent0`. I8a.
     uint256 public rentConservationViolations;
-    /// @dev A `settleRent` that credited a seat AHEAD of the payer. I8e — the HardcapHook shape.
+    /// @dev A `settleRent` that credited a seat BEHIND the payer. I8e — the HardcapHook shape.
+    ///      **INVERTED IN PHASE 12 WITH THE RENT DIRECTION.** Rent now moves forward: the back buys
+    ///      subordination from the front, so the back pays the front. The violation to count is
+    ///      therefore a credit going BACKWARD.
     uint256 public rentDirectionViolations;
 
     // ------------------------------------------------------------------------- coverage bookkeeping
@@ -565,6 +568,12 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
         uint256 rankBefore = hook.rankOfId(id);
         uint256 potBefore = _rentPot();
         uint256[] memory escBefore = _escrowById();
+        // **CAPTURED BEFORE THE CALL, AND IT HAS TO BE.** A settlement can FORECLOSE the payer,
+        // which demotes it to the tail and slides every seat that was behind it UP one place — so
+        // the after-ranking cannot tell you who stood behind the payer when the money moved. Under
+        // the old direction this did not matter (the seats AHEAD of a demoted payer do not move),
+        // which is why the old check could read the after-ranking and this one cannot.
+        uint256[] memory behindBefore = _idsBehind(rankBefore);
 
         vm.prank(_actor(callerSeed));
         try hook.settleRent(id) {
@@ -572,10 +581,10 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
             _noteSolvency();
             // I8a — rent settlement moves money INSIDE the rent pot and may not change its size.
             if (_rentPot() != potBefore) rentConservationViolations++;
-            // I8e — and it may only ever move BACKWARD. A settlement that credits a seat ahead of
-            // the payer conserves every wei while inverting the mechanism's entire economics; that
-            // is the shape of the bug that killed HardcapHook, and no conservation test can see it.
-            _checkRentDirection(rankBefore, escBefore);
+            // I8e — and it may only ever move FORWARD. A settlement that credits a seat BEHIND the
+            // payer conserves every wei while inverting the mechanism's entire economics; that is
+            // the shape of the bug that killed HardcapHook, and no conservation test can see it.
+            _checkRentDirection(behindBefore, escBefore);
             _noteForeclosures();
         } catch (bytes memory err) {
             _bad("settleRent", err);
@@ -685,14 +694,24 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
         }
     }
 
-    /// @dev I8e — rent may only be handed BACKWARD. Compared by RANK read before the settlement,
-    ///      because the settlement itself can demote the payer and slide everyone behind it.
-    function _checkRentDirection(uint256 payerRank, uint256[] memory escBefore) internal {
-        uint256[] memory ranking = hook.ranking();
-        for (uint256 r; r < payerRank && r < ranking.length; r++) {
-            (, uint256 esc,,,) = hook.leaseOf(ranking[r]);
-            // `ranking` may have been permuted by a demotion, so compare BY SEAT ID.
-            if (esc > escBefore[ranking[r]]) rentDirectionViolations++;
+    /// @dev I8e — rent may only be handed FORWARD, so no seat BEHIND the payer may gain escrow.
+    ///      Takes the ids captured before the call: a foreclosure permutes the ranking, and ids
+    ///      never move.
+    function _checkRentDirection(uint256[] memory behindIds, uint256[] memory escBefore) internal {
+        for (uint256 i; i < behindIds.length; i++) {
+            uint256 id = behindIds[i];
+            (, uint256 esc,,,) = hook.leaseOf(id);
+            if (esc > escBefore[id]) rentDirectionViolations++;
+        }
+    }
+
+    /// @dev The seat IDS standing behind `rank`, read before a settlement can permute them.
+    function _idsBehind(uint256 rank) internal view returns (uint256[] memory out) {
+        uint256 n = hook.seatCount();
+        uint256 k = n > rank + 1 ? n - rank - 1 : 0;
+        out = new uint256[](k);
+        for (uint256 i; i < k; i++) {
+            out[i] = hook.idAtRank(rank + 1 + i);
         }
     }
 
