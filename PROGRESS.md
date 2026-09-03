@@ -24,7 +24,7 @@ Newest entry first. Never delete an entry — supersede it.
 | 11 | Handoff §3.2/§3.3 closed + the economics re-measured on the contract's own premium rule | **COMPLETE 2026-09-02** | **YES** — 316 tests, 0 failed. INVARIANT W (5.175, closes 5.164); campaign aimed at the premium (5.133 closed); solvency meter repaired (5.176); `results-book.txt` was the EMPTY BLOB and 5.160 partly does not reproduce (5.177); **every published φ number was on a replaced basis (5.178) so `PREMIUM_BPS` was re-derived 7,900 → 5,100 (5.180)**; the flagship application is takeable for gas (5.181); a third φ mirror made the quoted gas figure wrong (5.182). `src/` untouched throughout |
 | 12 | Rent reversed + the TERM + c₁ 33.3→45% + docs rewritten | **CODE COMPLETE 2026-09-03** | **PARTLY** — 319 tests, 0 failed. Two mechanisms found pointing the wrong way and both fixed at the root (5.183, 5.185); `README.md` rewritten from scratch; `BUSINESS.md` §6B–6D give the per-seat P&L in dollars. **THE FULL MUTATION CAMPAIGN HAS NOT RUN AGAINST EITHER FIX — until it does, `_settleBehind` and `MIN_TENURE` are UNPROVEN**, and `M21` is a known equivalent mutant needing re-pointing first |
 | 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-02** | **PARTLY** — 224 tests. **THE MECHANISM IS SOUND AND THE BUSINESS CASE IS MISSING** — the 32 seats share one LP position, so they can at best TIE with not using the hook; the priority premium fixed the distribution (29/32 losing → 0/32) but creates no reason to participate. Next session is a BRAINSTORM for an outside payer, not a build. See `docs/research/seat-economics/VALUE.md`. Earlier note: 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
-| 13 | Free lane closed + the seat-count claim overturned + every doc realigned | **CODE COMPLETE 2026-09-03** | **PARTLY** — 324 tests, 0 failed. **A REAL FREE LANE FOUND AND CLOSED** (5.188): self-foreclosure was a zero-cost evacuation to the best seat, reachable inside a live term and escapable in ONE transaction. The confounded depth sweep is **RESOLVED and the claim OVERTURNED** (5.189) — the seat count was never the binding constraint, the head share was. `BUSINESS.md`, `README.md` and the frontend rebuilt on the shipped configuration, which no document had described. **THE MUTATION CAMPAIGN STILL HAS NOT RUN** — M21 re-pointed off a proven equivalent mutant, M29g/M29h newly registered, and all of `_settleBehind`, `MIN_TENURE` and the foreclosure arming remain UNPROVEN by it |
+| 13 | Free lane closed + the seat-count claim overturned + every doc realigned | **CODE COMPLETE 2026-09-03** | **PARTLY** — 324 tests, 0 failed. **A REAL FREE LANE FOUND AND CLOSED** (5.188): self-foreclosure was a zero-cost evacuation to the best seat, reachable inside a live term and escapable in ONE transaction. The confounded depth sweep is **RESOLVED and the claim OVERTURNED** (5.189) — the seat count was never the binding constraint, the head share was. `BUSINESS.md`, `README.md` and the frontend rebuilt on the shipped configuration, which no document had described. **A 12-CASE CAMPAIGN RAN — 10 RED, 2 SURVIVED, and both survivors are answered**: `M29b` was a real hole in the suite (`test_4_46` written, then re-run RED against the mutant) and `M29h` was an EQUIVALENT mutant of my own new line, so the dead guard was deleted and its false comment replaced by the proof. **The other 84 cases have still not run since Phase 11.** 325 tests |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
 
@@ -95,19 +95,48 @@ sponsor's cost and the LPs' gain to exactly zero. And the frontend's slider caug
 in §6C that I had just written (13.5% against a true 13.4467%) and **reported it instead of matching
 it**, which is the only correct behaviour.
 
-### 4. WHAT IS DONE, AND WHAT IS NOT
+### 4. THE CAMPAIGN RAN — 12 cases, and it earned its keep twice
+
+`M20b M21 M21b M28b M28c M29b M29c M29d M29e M29f M29g M29h`, none of which had ever executed.
+**10 RED / 2 SURVIVED / 0 NO-COMPILE / 0 BAD-PATTERN.**
+
+**Before a single case ran, the preflight refused three of them.** `M29c`, `M28b` and `M28c` had
+drifted behind ordinary refactors — a local renamed to stop it shadowing a view, and a hoisted
+`rank_`. They were registered in Phase 12 and had **never once run**. A case that cannot run is not
+a case, and only the preflight's own count made that visible.
+
+**`M29b` SURVIVED and it is a real hole.** `_settleBehind` advances only `if (order == before)`,
+because settling can foreclose, and a foreclosure demotes to the tail and slides every seat behind
+it *up* — so the index the walker stands on now holds a different seat. **It takes TWO consecutive
+delinquents to observe, which is exactly why 324 tests missed it: every one of them forecloses a
+single seat.** `test_4_46` written, then **re-run against the mutant** to confirm RED rather than
+trusting the pass.
+
+**`M29h` SURVIVED and it is an EQUIVALENT MUTANT — of a line I had written that morning.** I guarded
+the foreclosure deadline with `if (firmTo > l.firmUntil)` and commented that an unconditional write
+"could CUT an already longer window short". It cannot: every other write to `firmUntil` stores
+exactly `block.timestamp + FIRM_WINDOW`, `FIRM_WINDOW` is immutable, and `block.timestamp` is
+non-decreasing. **A branch that can never be taken, with a comment asserting a protection that does
+not exist — PITFALLS 5.55, in code hours old.** Guard deleted, comment replaced with the proof,
+M29h retired with the reason recorded.
+
+**And deleting it silently broke `M29g`'s pattern**, the case guarding the free-lane fix itself.
+Caught, re-pointed, and **both re-run: RED and RED.** A fix that turns another case into a
+BAD-PATTERN is how a campaign quietly stops testing the thing it was written for.
+
+### 5. WHAT IS DONE, AND WHAT IS NOT
 
 * **DONE** — the free lane closed with three red-first controls; the confound resolved; `AGENTS.md`
   §8 and `PLAN.md` §A.5 redefined against a real-world bar; every hackathon reference stripped from
   the live documents; `BUSINESS.md` §6B/6C/6E and §3/§4 rebuilt; `README.md` §1–9 rebuilt; the
   frontend rebuilt with **three hand-computed slider tests**, two of which I re-verified by
   executing the page's own code in node.
-* **NOT DONE, and it is the next session's first task** — **the mutation campaign**. M21 was a
-  proven equivalent mutant and is re-pointed; M29g/M29h are new. Until it runs, `_settleBehind`,
-  `MIN_TENURE` and the foreclosure arming are **UNPROVEN**.
+* **PARTLY DONE** — **the mutation campaign**. The 12 cases covering Phases 12–13 have now run and
+  are green (§4). **The other 84 have not run since Phase 11**, and `src/` has changed twice since,
+  so they are the next session's first task.
 * **NOT DONE** — the testnet broadcast, which is to be done with the owner.
 
-### 5. THE OPERATIONAL MISTAKE, RECORDED
+### 6. THE OPERATIONAL MISTAKE, RECORDED
 
 `git add -A` swept the frontend agent's in-progress work into a commit whose message described only
 documentation. Caught by reading the commit's own `--stat`. No remote exists, so the commit was

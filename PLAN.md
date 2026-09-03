@@ -35,7 +35,7 @@ done) → `PITFALLS.md` (the standing hazard ledger — re-read every session) �
 | **9** | The value question, answered in closed form | ✅ **COMPLETE** 2026-09-02 | — | **`SLACK = c₁·(LP − B₁)`** derived and confirmed to 2.4e-16 — the mechanism's entire value, independent of `N`, the ordering rule and φ (PITFALLS 5.137, `docs/research/seat-economics/FRONTIER.md`). The published φ windows were measured against a **handicapped competitor** (5.136) and the shipped φ = 7,900 sat in an empty one. Security: a **THIRD** evacuation door found and executed (sybil buyout, +267 bps); **INVARIANT L breaks by 20% of the position on an ordinary buyout, in band, on committed HEAD**; the exit path of a fixed-term instrument had zero coverage until this phase |
 | **11** | Handoff items closed + economics re-measured on the contract's own premium rule | ✅ **COMPLETE** 2026-09-02 | — | 316 tests. INVARIANT W; the solvency meter repaired; `results-book.txt` found to be an EMPTY BLOB; **every published φ number had been measured on a rule the contract replaced two phases earlier**, so `PREMIUM_BPS` was re-derived 7,900 → 5,100 |
 | **12** | Rent reversed + the TERM + c₁ 33.3% → 45% | ✅ **COMPLETE** 2026-09-03 | — | 321 tests. Two of three inverted mechanisms fixed at the root (5.183 rent direction, 5.185 the 7-day term). c₁ → 45% and φ → 5,500, closing the toxic hole at t = +5.4. **The third — foreclosure — was left open, and Phase 13 found it was a live free lane** |
-| **13** | The free lane closed + the seat-count claim overturned + every doc realigned | 🟨 **CODE COMPLETE** 2026-09-03 | — | **324 tests, 0 failed.** Self-foreclosure was a ZERO-COST evacuation to the best seat, reachable inside a live term and escapable in ONE transaction — closed by arming the firm quote foreclosure creates, with three controls that go RED first (5.188). The "five seats is the maximum" result was **CONFOUNDED** and is overturned: at a fixed 45% head every back seat clears at every depth to 32 in BENIGN and NORMAL (5.189). `BUSINESS.md`, `README.md` and the frontend rebuilt on the shipped configuration, which **no document had described**. **⚠ THE MUTATION CAMPAIGN HAS STILL NOT RUN** — M21 re-pointed off a proven equivalent mutant, M29g/M29h new |
+| **13** | The free lane closed + the seat-count claim overturned + every doc realigned | 🟨 **CODE COMPLETE** 2026-09-03 | — | **324 tests, 0 failed.** Self-foreclosure was a ZERO-COST evacuation to the best seat, reachable inside a live term and escapable in ONE transaction — closed by arming the firm quote foreclosure creates, with three controls that go RED first (5.188). The "five seats is the maximum" result was **CONFOUNDED** and is overturned: at a fixed 45% head every back seat clears at every depth to 32 in BENIGN and NORMAL (5.189). `BUSINESS.md`, `README.md` and the frontend rebuilt on the shipped configuration, which **no document had described**. **A 12-CASE CAMPAIGN RAN: 10 RED / 2 SURVIVED / 0 BAD-PATTERN**, both survivors answered — one a real suite hole (`test_4_46`), one an equivalent mutant whose dead guard was deleted. **⚠ THE OTHER 84 CASES HAVE NOT RUN SINCE PHASE 11** |
 
 **⚠ THE TWO NUMBERS BELOW WERE STALE FOR TWO PHASES — 183 was the Phase 7 count and this dashboard
 still carried it after Phase 8 took the suite to 248. Recorded rather than quietly corrected, because
@@ -45,11 +45,13 @@ answer to "what is done", and for two phases it was not.**
 **Whole suite as of 2026-09-03 (end of Phase 13): `forge test` → 324 passed, 0 failed, 1 loudly
 skipped (the fork suite, which needs `QUEUE_FORK=true`).**
 
-**⚠ THE MUTATION CAMPAIGN IS STALE AND HAS BEEN FOR THREE PHASES.** Its last clean run was 85 RED /
-0 SURVIVED at Phase 11. `src/` has changed in Phases 12 and 13, so that result does NOT cover
-`_settleBehind`, `MIN_TENURE`, or the foreclosure firm-quote arming — all three are **UNPROVEN by
-mutation** and every document says so. 96 cases are registered. Running it is the next session's
-first task.
+**⚠ THE MUTATION CAMPAIGN IS PARTLY STALE.** A **12-case run covering everything new in Phases 12
+and 13** completed on 2026-09-03: **10 RED / 2 SURVIVED / 0 NO-COMPILE / 0 BAD-PATTERN**, and both
+survivors are answered — `M29b` was a genuine hole in the suite (`test_4_46`, re-run RED against the
+mutant) and `M29h` was an equivalent mutant whose dead guard was deleted. So `_settleBehind`,
+`MIN_TENURE` and the foreclosure arming ARE now covered. **The other 84 cases have not run since
+Phase 11 and `src/` has changed twice since** — running them is the next session's first task.
+Expect more drifted patterns: the preflight refused three of the twelve before any case ran.
 
 *(Superseded, kept because §4 says a status board nobody updates is worse than none —* the
 2026-09-02 line read: 248 passed, mutation campaign 80 RED, 0 SURVIVED, 0 NO-COMPILE,
