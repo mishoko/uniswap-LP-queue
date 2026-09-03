@@ -325,15 +325,15 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
       <div class="card">
         <div class="k">Rent flow</div>
         <div class="v" id="rentFlow">0.00</div>
-        <div class="n">Paid by the front, received by the back, per 30 days at τ&nbsp;=&nbsp;10%/yr.
-          An LP-to-LP transfer — no new party is taxed.</div>
+        <div class="n">Paid by the BACK, received by the FRONT, per 30 days at &tau;&nbsp;=&nbsp;10%/yr.
+          The front supplies subordination and the back consumes it, so the back pays the front &mdash; the same way round as any insurance market. An LP-to-LP transfer; no new party is taxed.</div>
       </div>
       <div class="card">
         <div class="k">Network cost, not a trading fee</div>
-        <div class="v">+48%</div>
-        <div class="n">Same price, same 0.30%. Extra compute on a typical swap: 128,625 vs 87,039.
-          Flat from 1 to 32 seats. On an L2 this is cents, not 48% of the trade.
-          A walk of the whole line is a different number: 426k.</div>
+        <div class="v">+119%</div>
+        <div class="n">Same price, same 0.30%. Extra compute on a typical swap: <b>153,132</b>
+          vs <b>69,992</b> with no hook at all. Flat in roster depth &mdash; a constant a trader can
+          price, not something that grows with the book. On an L2 this is cents; on mainnet it is a real bill, so QUEUE is an L2 product. A full walk of the shipped roster is 620,690.</div>
       </div>
       <div class="card">
         <div class="k">Roster</div>
@@ -588,7 +588,7 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
         exposure anyway &mdash; and there are at most 31 of them, because the roster is capped.</li>
       <li><strong>Routing viability and seat value are anti-correlated.</strong> QUEUE is routed only
         where it is the deepest venue &mdash; long-tail pairs &mdash; which are exactly the pairs with
-        thin, adversely-selected flow. That, not the +48% gas, is the sharpest objection, and no
+        thin, adversely-selected flow. That, not the +119% gas, is the sharpest objection, and no
         engineering closes it.</li>
       <li><strong>The tail's protection fails in the event it most cares about.</strong> Untouched by
         every move that does not reach it &mdash; and reaching it means the price is at the band edge.
@@ -745,8 +745,8 @@ footer{padding:40px 0 60px;color:var(--tx3);font-size:12px}
 
 <footer>
   <div class="wrap">
-    <div>QUEUE — a Uniswap v4 hook. MIT. No mainnet deployment. No off-chain components.</div>
-    <div class="kv"><b>forge test</b> 183 passed, 0 failed &nbsp;·&nbsp;
+    <div>QUEUE &mdash; a Uniswap v4 hook. UNLICENSED. Not audited. No mainnet deployment. No off-chain components.</div>
+    <div class="kv"><b>forge test</b> 321 passed, 0 failed &nbsp;&middot;&nbsp;
       <b>hook</b> done &nbsp;·&nbsp;
       <b>video / broadcast</b> not done</div>
   </div>
