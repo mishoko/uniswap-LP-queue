@@ -22,9 +22,95 @@ Newest entry first. Never delete an entry — supersede it.
 | 10 | Value question CLOSED + all four open defects fixed | **COMPLETE 2026-09-02** | **YES** — 311 tests, 0 failed. Four defects fixed at the root, 11 tests inverted, 3 new. The constrained-buyer door closed by MEASUREMENT (PITFALLS 5.160) |
 | 9 | Evacuation doors + the closed-form surplus | **COMPLETE 2026-09-02** | **PARTLY** — 308 tests. Ten defects found; four left OPEN and all four are now closed by Phase 10 |
 | 11 | Handoff §3.2/§3.3 closed + the economics re-measured on the contract's own premium rule | **COMPLETE 2026-09-02** | **YES** — 316 tests, 0 failed. INVARIANT W (5.175, closes 5.164); campaign aimed at the premium (5.133 closed); solvency meter repaired (5.176); `results-book.txt` was the EMPTY BLOB and 5.160 partly does not reproduce (5.177); **every published φ number was on a replaced basis (5.178) so `PREMIUM_BPS` was re-derived 7,900 → 5,100 (5.180)**; the flagship application is takeable for gas (5.181); a third φ mirror made the quoted gas figure wrong (5.182). `src/` untouched throughout |
+| 12 | The rent direction reversed + the TERM + the docs rewritten | **CODE COMPLETE 2026-09-03** | **PARTLY** — 319 tests, 0 failed. Two mechanisms found pointing the wrong way and both fixed at the root (5.183, 5.185); `README.md` rewritten from scratch; `BUSINESS.md` §6B–6D give the per-seat P&L in dollars. **THE FULL MUTATION CAMPAIGN HAS NOT RUN AGAINST EITHER FIX — until it does, `_settleBehind` and `MIN_TENURE` are UNPROVEN**, and `M21` is a known equivalent mutant needing re-pointing first |
 | 7 | Testnet deploy + demo + video | **IN PROGRESS 2026-09-02** | **PARTLY** — 224 tests. **THE MECHANISM IS SOUND AND THE BUSINESS CASE IS MISSING** — the 32 seats share one LP position, so they can at best TIE with not using the hook; the priority premium fixed the distribution (29/32 losing → 0/32) but creates no reason to participate. Next session is a BRAINSTORM for an outside payer, not a build. See `docs/research/seat-economics/VALUE.md`. Earlier note: 223 tests. **THE PRIORITY PREMIUM (`PREMIUM_BPS`) IS SHIPPED** — a filled seat pays a share of the fee it earned to the seats standing behind it; 7 new mutations RED, 0 survivors. **ROTATION IS REJECTED** on evidence (all three of its headline numbers refuted — see the banner on `ROTATION.md`). Reference allocator does NOT yet model the premium; the invariant campaign has NOT run at φ > 0. Earlier note: 205 tests. Band + wings shipped and SOUND; `recenter()` **deleted** after the panel broke it three ways (PITFALLS 5.93). Band width is now a deploy parameter. Gas re-measured on the band: sweep was understated 79%. Demo rebuilt on band maths. `recenter()` v2 attempted and **not shipped** — unit-green, campaign-red (`docs/wip/recenter-v2/`). **MARGINAL PRICING SHIPPED** — the head's free lane is closed (PITFALLS 5.103). **ROTATION DECIDED, UNBUILT** — 29/32 seats lose under permanent rank; see `docs/research/seat-economics/ROTATION.md`. **Broadcast and video still outstanding.** |
 
 *(Phase definitions, entry/exit criteria and acceptance tests are in `PLAN.md` §C and §D.)*
+
+---
+
+## PHASE 12 — 2026-09-03 — the mechanism was pointing the wrong way in three places; two are now fixed
+
+**319 tests, 0 failed, 1 skipped.** `src/` changed, so **the 85-case mutation campaign is INVALID
+until re-run.** That is the single most important line in this entry.
+
+### The finding that organises the whole session
+
+The contract encodes **"front = good, back = bad"**. Phase 7's premium and Phase 8's marginal
+pricing **inverted that** — `BUSINESS.md` §2 has said in print for two phases that priority is worth
+*negative* money — and **three separate mechanisms were left pointing the old way:**
+
+| | mechanism | status |
+|---|---|---|
+| 1 | **rent flowed front → back**, compensating the seat that was already winning | **FIXED** (5.183) |
+| 2 | **demotion-as-punishment**: `withdraw` demotes, and the tail is the BEST seat | **FIXED** (5.185) |
+| 3 | **foreclosure-as-punishment**: defaulting on rent moves you to the tail | **OPEN** — now partly self-correcting, because under forward rent the tail pays the most rent, but not asserted |
+
+**This is PITFALLS 5.175's shape at full size:** *a conclusion that survives a dead argument is an
+unproven conclusion*, and **nothing goes red, because the code is still correct.**
+
+### What shipped
+
+* **The rent reverses.** The back buys subordination from the front, so the back pays the front.
+  Reversing a transfer **moves its defence** — `_settleAhead` guarded the old direction, so
+  `_settleBehind` was written and wired into both depth-changing entry points. Shipping the reversal
+  without it would have silently re-opened a closed hole.
+* **`MIN_TENURE` = 7 days.** A seat may not *voluntarily* give up its rank inside its term. Enforced
+  on the demotion, not the function. Involuntary rank loss (foreclosure, buyout) untouched, per §B.8.
+* **A `Governance` struct.** The constructor was already at the ABI decoder's stack limit — its own
+  comment says `_mintRoster` was split out *"for the STACK, not for tidiness"* — and a twelfth
+  parameter tripped it with a `Stack too deep` naming nothing. Five dials are now one struct: the
+  next dial is free, and the arguments are named at every call site.
+
+### Instrument failures found, in our own tests, against our own claims
+
+* **A mutation SURVIVED and the test was written for it.** Making the tenure stamp unconditional
+  (every deposit re-arms the term → an honest LP is locked forever by topping up) broke nothing in
+  319 tests, though `Lease.tenureFrom`'s docblock *claimed* that behaviour. `test_8_22` now fails by
+  name. A claim in a comment with no assertion behind it is a claim nobody checks.
+* **`test_3_12` passed for the wrong reason.** Its production arm asserted only that a reentrant
+  withdrawal was REFUSED — and after `MIN_TENURE` it was refused by the *term*, not by the
+  reentrancy guard it is named after. LAW 2 exactly. The attacker now records *which* selector.
+* **`test_4_14`'s bar was `stolen > honest × 10`,** which held only because the old grabber's honest
+  share happened to be 6.25%. On the re-aimed geometry the identical defect scores 5.9×, so the
+  hardcoded multiple would have reported the hole CLOSED while it was open. Its witness was also
+  being read *after* the mutant run inflated the weights — a baseline derived from the numerator.
+* **`test_4_14b` was doubly dead:** wrong geometry, and funded single-token, which stopped moving the
+  weights when Phase 8 moved them to `liquidity`. `_rentGrabAttempt` was fixed for exactly that and
+  nobody applied it here. Re-armed — and it surfaced a rule written down nowhere: **a mid-accrual
+  sale pays the DEPARTING holder.**
+* **I retracted my own headline within the hour.** `BUSINESS.md` §6B was committed claiming ranks
+  3–5 *"beat an ordinary LP in every regime including toxic"* and calling it the strongest claim in
+  the document. In TOXIC **rank 5 has zero turnover on 100% of paths** — it is never filled, so the
+  comparison credited non-participation as outperformance. Restated as capital preservation, which
+  is both true and stronger.
+
+### An operational mistake worth recording
+
+While chasing a `mutate.py` process that had been killed mid-case, I ran a blanket
+`git checkout -- src/` to clear the mutant it had left on disk (PITFALLS 5.79) — **and reverted my
+own uncommitted work on `QueueHook.sol` with it.** Caught immediately, all nine edits reconstructed,
+re-verified at 319/0/1. **The rule this earns: `git checkout -- src/` is only safe when `src/` has
+no uncommitted work of your own in it. Commit before you clean up after the campaign, or use
+`git checkout -- <the one file the campaign names>`.**
+
+### Docs
+
+`README.md` **rewritten from scratch** (old one archived); it was a Phase-9 banner over a Phase-4
+body with five verifiably false claims. `BUSINESS.md` gained §6B (the per-seat P&L in dollars
+against LPing elsewhere), §6C (what a seat costs and for how long, plus the Harberger equilibrium
+that turns rank 1's gross −10.4%/yr into a net −1.3%/yr) and §6D (the security answer).
+
+### What the next session must do first
+
+1. **Run the full mutation campaign.** It has not run since `src/` changed. Re-point **`M21`** first —
+   it is an **equivalent mutant**: the credit loop's `i < r` cannot differ from `i <= r`, because
+   `st.remaining` reaches zero at exactly rank `r`. Nine new cases are registered (`M20b`, `M21b`,
+   `M28b`, `M28c`, `M29b`, `M29c`–`M29f`).
+2. **Decide the head share.** `report_headsize.py` shows the all-regime window is **EMPTY at the
+   shipped c₁ = 33.3% and NON-EMPTY at 40%** (`[5668, 6447]`). If adopted, `PREMIUM_BPS`, the demo
+   roster, `Gas.t.sol` and `Deploy.t.sol` all move — **so do it BEFORE the campaign, not after.**
+3. **The frontend** (5.184) and the **broadcast**.
 
 ---
 
