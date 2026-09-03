@@ -398,13 +398,23 @@ those four do not tell them what to do next, the handoff has failed.
 
 ## 8. What "done" looks like
 
-The submission is judged on a published rubric: **30% Original Idea · 25% Unique Execution ·
-20% Impact · 15% Functionality · 10% Presentation.** Binary gates apply — public repo, a real v4
-hook, new code written during the window, tests **or** a working frontend, and a video under five
-minutes with a human voice.
+QUEUE is a real-world project and the bar is the one a stranger with capital would apply. Five
+things, and the first two are gates rather than scores:
 
-**Functionality is only 15%.** Do not gold-plate at the expense of the mechanism being legible and
-correct. But 15% of nothing is nothing: a hook whose core arithmetic is wrong scores zero everywhere,
-because the demo will not run.
+1. **THE MECHANISM IS CORRECT.** A hook whose core arithmetic is wrong is worth nothing at any
+   level of polish, because nothing built on it survives contact with a real pool. Conservation,
+   the fill ordering and the identity are load-bearing; everything else is downstream of them.
+2. **NO HIDDEN CAVEATS.** Every claim carries its cost, its counterparty and its evidence grade.
+   A return quoted without the rent and the purchase price that bought it is not a return. An
+   unproven claim says UNPROVEN next to it. If a number came from a simulation, it says so.
+3. **A DECISION-MAKER CAN FOLLOW IT.** Someone who controls a budget and does not write Solidity
+   must be able to read the docs and understand what they would be buying, what it costs them,
+   and who is on the other side of the trade.
+4. **AN ENGINEER CAN VERIFY IT.** The tests, the negative controls and the mutation campaign are
+   the argument. `docs/research/` holds the numbers behind every economic claim, and every
+   headline is reproducible from a named file.
+5. **IT RUNS.** A deploy script that has itself been executed under test, against real v4
+   contracts and against a fork of a real chain.
 
-Full criteria and the phase-by-phase definition of done are in `PLAN.md` §D.
+Do not gold-plate at the expense of the mechanism being legible and correct. The phase-by-phase
+definition of done is in `PLAN.md` §D.

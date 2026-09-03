@@ -2354,10 +2354,10 @@ appears in no document. It is a business/pitch question, not a correctness one.
 **PHASE 0 IS COMPLETE. All six exit criteria (PLAN §C.0) met. Gate §D.2 passes.**
 
 Toolchain entry criteria verified before anything else: `forge 1.5.0-stable`, commit SHA
-`1c57854462289b2e71ee7654cd6666217ed86ffd` — the exact SHA §A.8 records. `foundry.lock` revisions
+`1c57854462289b2e71ee7654cd6666217ed86ffd` — the exact SHA §A.7 records. `foundry.lock` revisions
 unchanged, `lib/` complete (forge-std, hookmate, uniswap-hooks). No submodule init needed.
 
-Copied per §A.9 into the live tree (previously `test/` did not exist at all):
+Copied per §A.8 into the live tree (previously `test/` did not exist at all):
 `test/utils/BaseTest.sol`, `test/utils/Deployers.sol`, `test/spike/QueueAllocator.t.sol` —
 `diff -q` confirms `QueueAllocator.t.sol` is **byte-identical to the archive copy**. `src/queue/`
 and `src/queue/libraries/` created empty. **No mechanism code written.**

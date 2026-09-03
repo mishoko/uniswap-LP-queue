@@ -100,9 +100,25 @@ MUTS = [
     ("M20", HOOK, "the payer receives its own rent (weight loop includes its own rank)",
      "        for (uint256 i; i < r; i++) {\n            w += q[_idAt(ord, i)].liquidity;",
      "        for (uint256 i; i <= r; i++) {\n            w += q[_idAt(ord, i)].liquidity;"),
-    ("M21", HOOK, "the credit loop includes the payer's own rank",
+    # RE-POINTED 2026-09-03 (Phase 13). THE OLD M21 WAS A PROVEN EQUIVALENT MUTANT AND COULD NEVER
+    # HAVE GONE RED. It widened the credit loop from `i < r` to `i <= r`, on the theory that the
+    # payer would then be credited its own rent. It cannot be: `st` is initialised with a total of
+    # `w`, and `w` is the summed `liquidity` of ranks `0 .. r-1` — the SAME ranks the credit loop
+    # walks. So `st.remaining` reaches exactly zero as rank `r-1` is credited, the `st.remaining > 0`
+    # guard fails, and index `r` is never visited. A mutation that cannot change behaviour is not a
+    # test of the suite; leaving it registered would have bought a free green.
+    #
+    # RE-AIMED AT THE REACHABLE DEFECT OF THE SAME SHAPE: make the CREDIT loop stop one rank SHORT
+    # of the WEIGHT loop. `w` is then computed over `0 .. r-1` while the pot is only distributed
+    # over `0 .. r-2`, so the last seat ahead of the payer is silently skipped and its share is left
+    # in `st.remaining`. `escrowTotal` is nevertheless advanced by the WHOLE pot on line 2893
+    # (`escrowTotal - amount + pot`), so the aggregate claims money that no `lease[id].escrow` holds.
+    # This is exactly the numerator/denominator disagreement the credit loop's own comment warns
+    # about ("the weight loop above and this one must read the SAME field"), and it is reachable for
+    # any payer at rank >= 1.
+    ("M21", HOOK, "the credit loop stops one rank short of the weight loop (last recipient skipped, escrowTotal still advanced by the whole pot)",
      "        for (uint256 i; i < r && st.remaining > 0; i++) {",
-     "        for (uint256 i; i <= r && st.remaining > 0; i++) {"),
+     "        for (uint256 i; i + 1 < r && st.remaining > 0; i++) {"),
     # NEW 2026-09-03 (Phase 12). THE DIRECTION ITSELF. It conserves every wei while inverting the
     # mechanism's economics, which is why no conservation test can see it and why it needs its own
     # case rather than relying on `Harberger.t.sol:RentPaidBehindHook` — a test-side subclass proves

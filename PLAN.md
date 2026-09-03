@@ -109,10 +109,10 @@ buys nothing at any price.
 
 ## A.1 What this project is
 
-This repository is a submission-in-progress for **UHI10**, cohort 10 of the Uniswap Hook Incubator
-(Atrium Academy). The theme is *"Sustainable Liquidity and MEV Protection."* Exactly **one**
-submission is permitted. The product is a **Uniswap v4 hook** — a smart contract that the v4
-`PoolManager` calls at defined points in a pool's lifecycle.
+This repository builds **QUEUE**, a **Uniswap v4 hook** — a smart contract that the v4
+`PoolManager` calls at defined points in a pool's lifecycle. The problem it addresses is
+**sustainable liquidity**: how a protocol gets depth for its pair without printing tokens to rent
+it.
 
 Everything that came before this plan — four dead candidates, ~100 rejected ideas, a security
 platform, a compliance-gate lane, four fee mechanisms — has been archived under
@@ -121,10 +121,9 @@ platform, a compliance-gate lane, four fee mechanisms — has been archived unde
 `archive/2026-08-26/CLAUDE.md` **§5**, the 25 hard-won v4 facts; those are reproduced and expanded in
 §E of this document so you do not have to go looking.
 
-The candidate that survived is **QUEUE**. It was honestly scored **4.33 / 5** on the published
-rubric after a spike that executed rather than asserted its riskiest claim. The scoring, the
-alternatives, and the reasons the alternatives died are in
-`archive/2026-08-26/docs/research/IDEAS_OBJECTS.md`.
+The candidate that survived is **QUEUE**. It survived a spike that **executed** rather than asserted
+its riskiest claim — which is why it is here and the others are not. The alternatives, and the
+reasons they died, are in `archive/2026-08-26/docs/research/IDEAS_OBJECTS.md`.
 
 ## A.2 What QUEUE is — three paragraphs
 
@@ -224,61 +223,20 @@ let anyone dress it up as the same question.
 
 ## A.5 What "done" means
 
-Two bars. Clear both.
+The bar is the one a stranger with capital would apply, and `AGENTS.md` §8 states it in full. In
+short:
 
-**Bar 1 — the binary gates.** Miss any one of these and the submission is not judged at all. Source:
-`archive/2026-08-26/docs/research/HACKATHON_CONTEXT.md` §1.
-
-1. Public GitHub repo.
-2. Demo/explainer video, **≤ 5 minutes, no AI voices** (an AI voice marks you down *and* blocks Demo
-   Day).
-3. A real Uniswap v4 hook.
-4. Code newly written during the hookathon window.
-5. README listing partner integrations, or stating "No partner integrations."
-6. New code for returning teams.
-7. Originality — no uncredited curriculum or workshop code.
-8. **Tests OR a working frontend.** We are shipping tests. No tests and no frontend = no prize
-   judging.
-
-**Bar 2 — the scored rubric** (weights are the organizers', verbatim):
-
-| Weight | Criterion |
-|---:|---|
-| **30%** | Original Idea |
-| **25%** | Unique Execution |
-| **20%** | Impact |
-| **15%** | Functionality |
-| **10%** | Presentation |
-
-**Read that honestly: 55% is novelty plus distinctiveness of construction; only 15% is "does it work
-well."** That is not licence to ship something broken — "robust and sustainable code is a hard
-requirement" from the owner, and a hook whose core arithmetic is wrong is worthless at any weight.
-It *is* licence to stop gold-plating once the mechanism is correct, legible and demonstrated.
+1. **The mechanism is correct.** Conservation, the fill ordering and the identity are load-bearing.
+   A hook whose core arithmetic is wrong is worth nothing at any level of polish.
+2. **No hidden caveats.** Every claim carries its cost, its counterparty and its evidence grade.
+3. **A decision-maker can follow it**, and **an engineer can verify it** — `docs/research/` holds
+   the numbers behind every economic claim.
+4. **It runs**: a deploy script that has itself been executed under test, against real v4 contracts
+   and against a fork of a real chain.
 
 **Done, operationally**, is the checklist in §D.9.
 
-## A.6 The deadline — and a contradiction you must resolve in thirty seconds
-
-Two archived sources disagree, and neither is wrong on its own terms:
-
-| Source | Says |
-|---|---|
-| `archive/2026-08-26/docs/research/HACKATHON_CONTEXT.md` §3, from the organizers' own PDFs | **2026-09-03, 11:59pm PST.** The research pass looked hard and found **no evidence of an extension** — but explicitly could not read Atrium's X account or Discord. |
-| `archive/2026-08-26/CLAUDE.md` §3 | **~2026-11-03. LOCKED, owner-confirmed 2026-08-26.** Marked "do not re-litigate." |
-
-**Resolution: the owner-confirmed date governs, and this plan is phased so it does not matter.** The
-authoritative check takes thirty seconds and you should do it once, at the start: **Atrium emails the
-Progress Update forms to whoever holds the Project ID (`HK-UHI10-####`). That inbox is the truth.**
-Ask the owner to check it. Do not spend an hour on web archaeology; a prior session already did and
-came back with a blind spot rather than an answer.
-
-Regardless of which date is real, **the phase order below produces a submittable project at the end
-of Phase 3** (working hook, real tests, README, video-able demo). Phases 4–7 strengthen it. If the
-deadline turns out to be near, you ship after Phase 3 and say plainly what is unbuilt. If it is far,
-you build the whole thing. **Never reorder the phases to chase a date** — the ordering exists because
-each phase validates an assumption the next one stands on.
-
-## A.7 Repo layout
+## A.6 Repo layout
 
 The repository was deliberately cleared on 2026-08-26. `src/` and `test/` **do not exist yet**; you
 create them. This is what you start with and what you will build:
@@ -290,9 +248,9 @@ UHI10/
 ├── PLAN.md                THIS FILE. What to build, phased, with acceptance criteria.
 ├── BUSINESS.md            why it exists, who uses it, what to say. (may not exist yet)
 ├── PROGRESS.md            the project's memory. UPDATE IT EVERY SESSION.
-├── README.md              ships with the submission. Written in Phase 7. (does not exist yet)
+├── README.md              the public face of the project. Written in Phase 7.
 ├── foundry.toml           solc 0.8.30, evm cancun, ffi=true, src="src", out="out"
-├── remappings.txt         see A.8
+├── remappings.txt         see A.7
 ├── foundry.lock           pinned submodule revisions — do NOT bump without a reason
 ├── lib/                   git submodules: forge-std, uniswap-hooks (which vendors v4-core,
 │                          v4-periphery, solmate, permit2, openzeppelin-contracts), hookmate
@@ -309,8 +267,8 @@ UHI10/
 │
 ├── test/                  ** YOU CREATE THIS **
 │   ├── utils/
-│   │   ├── BaseTest.sol            COPY from archive (A.9)
-│   │   └── Deployers.sol           COPY from archive (A.9)
+│   │   ├── BaseTest.sol            COPY from archive (A.8)
+│   │   └── Deployers.sol           COPY from archive (A.8)
 │   ├── spike/
 │   │   └── QueueAllocator.t.sol    COPY from archive. The reference implementation. Phase 0.
 │   └── queue/
@@ -324,12 +282,12 @@ UHI10/
 │       ├── Invariant.t.sol         Phase 6
 │       └── handlers/QueueHandler.sol  Phase 6
 │
-├── script/                ** YOU CREATE THIS ** Phase 7. Templates in archive (A.9).
+├── script/                ** YOU CREATE THIS ** Phase 7. Templates in archive (A.8).
 │
 └── archive/2026-08-26/    ALL prior research, source and spikes. Read-only history. See §I.
 ```
 
-## A.8 Toolchain
+## A.7 Toolchain
 
 **Foundry.** Verified working on this machine on 2026-08-26:
 
@@ -390,7 +348,7 @@ git submodule update --init --recursive
 Do **not** bump `foundry.lock` revisions. The spike results in this plan were produced against those
 exact revisions, and a bump silently invalidates every number here.
 
-## A.9 Files you must copy out of the archive before you can do anything
+## A.8 Files you must copy out of the archive before you can do anything
 
 These are not optional; nothing compiles without the first two.
 
@@ -1228,7 +1186,7 @@ use.
 - `lib/` submodules present (`git submodule update --init --recursive` if not).
 
 **Do**
-1. Copy the three files from §A.9.
+1. Copy the three files from §A.8.
 2. `forge build`.
 3. `forge test --match-path "test/spike/QueueAllocator.t.sol" -vv`.
 4. **Read `QueueAllocator.t.sol` end to end.** It is ~585 lines and it is the reference
@@ -2849,7 +2807,7 @@ evidence** — read on demand, do not treat as instructions.
 | `docs/research/protocol-fee/` | The §E.5 experiment: `experiment.md` (executed, 7 tests + 3 mutations), `v4-mechanics.md`, `queue-exposure.md`, and `VERDICT.md` (**§5–§7 SUPERSEDED — banner in the file**) | Before Phase 1, and before touching anything fee-related |
 | `docs/research/premise-review/` | `economics.md` + `fairness.md` — the premise review. ANALYSIS, nothing executed. The Fairness Theorem, the leverage identity, and the full-range capital-efficiency attack live here | Before the pitch, the README or the video; before proposing any "fairness mechanism" |
 | `docs/research/price-then-queue/` | Spike: can a SwapMath replay attribute a crossing swap to the wei from one `afterSwap` delta? **Yes, for a non-overlapping 3-band ladder.** 8/8, two mutants red. Overlapping per-seat ranges UNPROVEN. | Before building v2b. Do not skip to arbitrary ranges. |
-| `README.md` | Ships with the submission | Phase 7 |
+| `README.md` | The public face of the project | Phase 7 |
 
 ## I.2 The essential archive — read these
 
@@ -2858,7 +2816,6 @@ evidence** — read on demand, do not treat as instructions.
 | **`archive/2026-08-26/docs/research/IDEAS_OBJECTS.md`** | **§1 is QUEUE's full design** — the object, the thesis, who buys and who sells, the free-lane audit, the attack analysis, the prior-art counts, and an honest 4.33 score. **Plus the dated SPIKE section with all executed results.** | **Before Phase 1.** The single most important archived document. |
 | **`archive/2026-08-26/test/spike/QueueAllocator.t.sol`** | **The reference implementation of the allocator**, 585 lines, 9 tests, three negative controls, the gas harness, the residual experiments. | **Phase 0, end to end.** Then again whenever you touch the allocator. |
 | **`archive/2026-08-26/CLAUDE.md` §5** | **25 hard-won v4 facts.** Every one was paid for. Distilled into §E of this document, but the originals have context this summary does not. | When something in §E does not make sense, or before doing anything unusual with v4 |
-| `archive/2026-08-26/docs/research/HACKATHON_CONTEXT.md` | The binary gates, the scored rubric, dates, sponsor tracks, the organizers' own framing of the theme, and what past winners actually looked like | Phase 7, and once at the start for the gates |
 
 ## I.3 The theorems that bound the design space
 
@@ -2886,7 +2843,7 @@ Read these when you are tempted to expand scope. Each closes a direction permane
 
 | Path | For |
 |---|---|
-| `archive/2026-08-26/test/utils/BaseTest.sol`, `Deployers.sol` | **Required.** Copy in Phase 0 (§A.9). |
+| `archive/2026-08-26/test/utils/BaseTest.sol`, `Deployers.sol` | **Required.** Copy in Phase 0 (§A.8). |
 | `archive/2026-08-26/script/base/BaseScript.sol` | Phase 7 deploy scripting |
 | `archive/2026-08-26/script/01_CreatePoolAndAddLiquidity.s.sol` | Pool creation + seeding |
 | `archive/2026-08-26/script/03_Swap.s.sol` | Demo swaps |
