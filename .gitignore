@@ -22,3 +22,15 @@ docs/research/perp_chat.md
 # Python
 __pycache__/
 *.pyc
+
+# ---------------------------------------------------------------- presentation work products
+# Slides, the spoken transcript and the rendered video are DELIBERATELY NOT COMMITTED. They are
+# large, they are regenerated wholesale rather than diffed, and the owner re-records over them.
+# The repo keeps the SOURCE OF TRUTH they are built from (BUSINESS.md, README.md, PITFALLS.md,
+# docs/research/) so anything here can be rebuilt from the tree.
+presentation/
+
+# The next-session handoff prompt. Working scaffolding for whoever picks the project up, not part
+# of the project. The DURABLE record lives in PROGRESS.md, PITFALLS.md and PLAN.md.
+NEXT_SESSION_PROMPT.md
+session_summary.md
