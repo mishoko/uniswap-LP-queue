@@ -8,11 +8,13 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   phi swept 0-9500 step 500 for all crossovers; phi = 5100 measured
   SEPARATELY for the gap/spread statistics and deliberately NOT inserted into the
   crossover grid (see the header).
-  4 worker processes (a mutation campaign owned the rest of the machine).
+  8 worker processes (a mutation campaign owned the rest of the machine).
 
   *** EVERY WINDOW IN THIS FILE IS RENT-FREE. ***  sim.py models no Harberger rent at all
-  (grepped: zero references), while the deployed hook charges RENT_BPS = 1_000 per
-  RENT_PERIOD on each seat's self-price and -- as of this session -- pays it FORWARD, from
+  (verified: its only 'rent' match is the substring in 'CURRENT'), while the deployed hook
+  charges Harberger rent on each seat's self-price -- reported as RENT_BPS = 1_000 per
+  RENT_PERIOD, attributed not verified, since src/ was off-limits to this author during a
+  live mutation campaign -- and -- as of this session -- pays it FORWARD, from
   the back seats to the front.  That is a second transfer channel running OPPOSITE to the
   premium.  These windows are therefore a LOWER bound on what the front can bear and an
   UPPER bound on what the back keeps.  A back seat clearing the LP by less than its rent
@@ -24,6 +26,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   THE CAPITAL VECTOR AT EVERY HEAD SHARE (integer weights, caps = BOOK*w/sum(w)):
     N      c1                    integer weights                                              capital, $k
     5   33.3%                    (5, 4, 3, 2, 1)                         333.3  266.7  200.0  133.3  66.7
+    5   35.0%               (70, 52, 39, 26, 13)                         350.0  260.0  195.0  130.0  65.0
+    5   37.5%                    (6, 4, 3, 2, 1)                         375.0  250.0  187.5  125.0  62.5
     5   40.0%                  (20, 12, 9, 6, 3)                         400.0  240.0  180.0  120.0  60.0
     5   45.0%               (90, 44, 33, 22, 11)                         450.0  220.0  165.0  110.0  55.0
     5   50.0%                   (10, 4, 3, 2, 1)                         500.0  200.0  150.0  100.0  50.0
@@ -73,7 +77,38 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
     NORMAL         [2560, 6251]         [2560, 6251]      YES
      TOXIC                EMPTY                EMPTY      YES
 
-  ALL THREE REPRODUCE -- the harness is the published harness
+  AND THE FIFTEEN UNDERLYING CROSSOVERS, which is the sharper form of the same control:
+  the phi = 0 column above is printed to one decimal and can only agree to 0.05pp, whereas
+  each crossover below is an interpolated phi to the unit -- a function of the whole mean
+  curve, the LP bar and the wing bar at once.  Fifteen of those agreeing to the unit is
+  not something that happens by accident.
+  A first draft of this parser silently matched only the 3 FRONT bounds while this heading
+  promised twelve -- it printed '3 published crossovers checked', and that COUNT is how it
+  was caught.  A control must print how many things it actually checked, or the heading
+  becomes the claim and nobody audits the loop underneath it.
+
+    regime   which     computed    published    agree
+    BENIGN   front         5670         5670      YES
+    BENIGN      s2         4542         4542      YES
+    BENIGN      s3         4228         4228      YES
+    BENIGN      s4         4132         4132      YES
+    BENIGN      s5         4135         4135      YES
+
+    NORMAL   front         6251         6251      YES
+    NORMAL      s2         2560         2560      YES
+    NORMAL      s3         1726         1726      YES
+    NORMAL      s4         1563         1563      YES
+    NORMAL      s5          772          772      YES
+
+     TOXIC   front         1636         1636      YES
+     TOXIC      s2        NEVER        NEVER      YES
+     TOXIC      s3      all phi      all phi      YES
+     TOXIC      s4      all phi      all phi      YES
+     TOXIC      s5      all phi      all phi      YES
+
+  15 published crossovers checked, all reproduced: YES
+
+  ALL THREE WINDOWS AND EVERY CROSSOVER REPRODUCE -- the harness is the published harness
 
 ====================================================================================================
 3.  EVERY CELL -- the front, the back, the window, and who binds
@@ -92,6 +127,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 / BENIGN ---   passive pro-rata LP +5.02% (se 0.573pp)   in-band life 61.0d
        c1     r1@0   r1@9500   wingbar    w   phi_LP   phi_max   phi_2   phi_3   phi_4   phi_5         window   binds   spread
     33.3%    14.7%     -6.5%    +2.00%   5%     4317      5670    4542    4228    4132    4135   [4542, 5670]      s2    0.58p
+    35.0%    14.0%     -6.2%    +1.58%   5%     4208      5824    4432    4095    4043    4043   [4432, 5824]      s2    0.59p
+    37.5%    13.1%     -5.8%    +0.92%   5%     4046      6104    4280    3896    3910    3900   [4280, 6104]      s2    0.61p
     40.0%    12.3%     -5.5%    +0.23%   5%     3885      6447    4122    3703    3777    3757   [4122, 6447]      s2    0.63p
     45.0%    11.0%     -4.9%    -1.28%   5%     3558      7340    3777    3343    3508    3465   [3777, 7340]      s2    0.66p
     50.0%     9.9%     -4.4%    -2.99%   5%     3225      8554    3400    3020    3221    3171   [3400, 8554]      s2    0.67p
@@ -102,6 +139,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 / NORMAL ---   passive pro-rata LP +0.49% (se 0.271pp)   in-band life 19.1d
        c1     r1@0   r1@9500   wingbar    w   phi_LP   phi_max   phi_2   phi_3   phi_4   phi_5         window   binds   spread
     33.3%     2.2%     -6.4%    -3.46%   5%     1876      6251    2560    1726    1563     772   [2560, 6251]      s2    1.35p
+    35.0%     2.1%     -6.1%    -3.75%   5%     1814      6734    2441    1696    1500     760   [2441, 6734]      s2    1.31p
+    37.5%     1.9%     -5.8%    -4.21%   5%     1718      7535    2259    1664    1397     742   [2259, 7535]      s2    1.24p
     40.0%     1.7%     -5.5%    -4.70%   5%     1642      8444    2128    1639    1296     725   [2128, 8444]      s2    1.19p
     45.0%     1.5%     -5.0%    -5.79%   5%     1438      none    1740    1588    1104     690  [1740, 9500+]      s2    1.10p
     50.0%     1.2%     -4.6%    -7.05%   5%     1214      none    1309    1516     916     640  [1516, 9500+]      s3    0.91p
@@ -112,6 +151,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 / TOXIC ---   passive pro-rata LP -2.17% (se 0.022pp)   in-band life 1.4d
        c1     r1@0   r1@9500   wingbar    w   phi_LP   phi_max   phi_2   phi_3   phi_4   phi_5         window   binds   spread
     33.3%    -3.3%     -4.1%    -3.41%   5%  below@0      1636   NEVER     all     all     all          EMPTY      s2    2.91p
+    35.0%    -3.3%     -4.0%    -3.51%   5%  below@0      3077   NEVER     all     all     all          EMPTY      s2    2.86p
+    37.5%    -3.2%     -4.0%    -3.67%   5%  below@0      5619    9290     all     all     all  EMPTY (cross)      s2    2.78p
     40.0%    -3.2%     -3.9%    -3.84%   5%  below@0      8628    5668     all     all     all   [5668, 8628]      s2    2.71p
     45.0%    -3.2%     -3.8%    -4.23%   5%  below@0      none     all     all     all     all     [0, 9500+]      s2    2.53p
     50.0%    -3.1%     -3.7%    -4.69%   5%  below@0      none     all     all     all     all     [0, 9500+]      s2    2.35p
@@ -131,6 +172,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 ---
     regime      c1    s2 ret        LP    gap pp   se_pair  t_paired   t_indep  worst back   its gap   spread
     BENIGN   33.3%    +5.62%    +5.02%   +0.595p    0.201p      +3.0      +0.7          s2   +0.595p    0.58p
+    BENIGN   35.0%    +5.76%    +5.02%   +0.731p    0.204p      +3.6      +0.8          s2   +0.731p    0.59p
+    BENIGN   37.5%    +5.97%    +5.02%   +0.942p    0.209p      +4.5      +1.0          s2   +0.942p    0.61p
     BENIGN   40.0%    +6.20%    +5.02%   +1.174p    0.217p      +5.4      +1.3          s2   +1.174p    0.63p
     BENIGN   45.0%    +6.77%    +5.02%   +1.742p    0.251p      +6.9      +1.8          s2   +1.742p    0.66p
     BENIGN   50.0%    +7.50%    +5.02%   +2.474p    0.296p      +8.3      +2.5          s2   +2.474p    0.67p
@@ -139,6 +182,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
     BENIGN   66.7%   +11.91%    +5.02%   +6.884p    0.593p     +11.6      +5.4          s4   +6.739p    0.17p
 
     NORMAL   33.3%    +1.50%    +0.49%   +1.014p    0.218p      +4.6      +1.9          s2   +1.014p    1.35p
+    NORMAL   35.0%    +1.60%    +0.49%   +1.111p    0.225p      +4.9      +2.1          s2   +1.111p    1.31p
+    NORMAL   37.5%    +1.76%    +0.49%   +1.269p    0.240p      +5.3      +2.3          s2   +1.269p    1.24p
     NORMAL   40.0%    +1.90%    +0.49%   +1.414p    0.251p      +5.6      +2.5          s2   +1.414p    1.19p
     NORMAL   45.0%    +2.22%    +0.49%   +1.730p    0.279p      +6.2      +3.0          s2   +1.730p    1.10p
     NORMAL   50.0%    +2.68%    +0.49%   +2.194p    0.326p      +6.7      +3.5          s2   +2.194p    0.91p
@@ -147,6 +192,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
     NORMAL   66.7%    +4.31%    +0.49%   +3.826p    0.405p      +9.5      +5.5          s2   +3.826p    0.84p
 
      TOXIC   33.3%    -2.45%    -2.17%   -0.275p    0.028p      -9.7      -6.2          s2   -0.275p    2.91p
+     TOXIC   35.0%    -2.38%    -2.17%   -0.211p    0.029p      -7.4      -4.7          s2   -0.211p    2.86p
+     TOXIC   37.5%    -2.29%    -2.17%   -0.115p    0.030p      -3.8      -2.5          s2   -0.115p    2.78p
      TOXIC   40.0%    -2.19%    -2.17%   -0.017p    0.032p      -0.5      -0.4          s2   -0.017p    2.71p
      TOXIC   45.0%    -1.98%    -2.17%   +0.195p    0.039p      +5.0      +3.7          s2   +0.195p    2.53p
      TOXIC   50.0%    -1.76%    -2.17%   +0.412p    0.037p     +11.2      +7.9          s2   +0.412p    2.35p
@@ -165,6 +212,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 ---   spread = (best back seat - worst back seat), pp, at phi = 5100
        c1     BENIGN     NORMAL      TOXIC   best seat BENIGN   best seat TOXIC
     33.3%      0.58p      1.35p      2.91p                 s5                s5
+    35.0%      0.59p      1.31p      2.86p                 s5                s5
+    37.5%      0.61p      1.24p      2.78p                 s5                s5
     40.0%      0.63p      1.19p      2.71p                 s5                s5
     45.0%      0.66p      1.10p      2.53p                 s3                s5
     50.0%      0.67p      0.91p      2.35p                 s3                s5
@@ -189,6 +238,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 ---   share of paths with zero turnover at phi = 5100
     regime      c1       s2       s3       s4       s5  mean |s_N| ret
     BENIGN   33.3%     0.0%     0.0%     1.7%    65.0%         6.2044%
+    BENIGN   35.0%     0.0%     0.0%     3.3%    65.8%         6.3474%
+    BENIGN   37.5%     0.0%     0.0%     4.2%    65.8%         6.5792%
     BENIGN   40.0%     0.0%     0.0%     5.8%    67.5%         6.8303%
     BENIGN   45.0%     0.0%     0.0%     7.5%    74.2%         7.4048%
     BENIGN   50.0%     0.0%     0.0%    11.7%    79.2%         8.0937%
@@ -197,6 +248,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
     BENIGN   66.7%     0.0%     0.8%    28.3%    92.5%        11.9205%
 
     NORMAL   33.3%     0.0%     0.0%     0.0%    54.2%         2.8450%
+    NORMAL   35.0%     0.0%     0.0%     0.0%    56.7%         2.9017%
+    NORMAL   37.5%     0.0%     0.0%     0.0%    61.7%         2.9920%
     NORMAL   40.0%     0.0%     0.0%     0.0%    66.7%         3.0909%
     NORMAL   45.0%     0.0%     0.0%     0.8%    75.0%         3.3156%
     NORMAL   50.0%     0.0%     0.0%     1.7%    80.8%         3.5917%
@@ -205,6 +258,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
     NORMAL   66.7%     0.0%     0.0%    20.8%    95.8%         5.1536%
 
      TOXIC   33.3%     0.0%     0.0%     1.7%    60.0%         0.4632%
+     TOXIC   35.0%     0.0%     0.0%     1.7%    62.5%         0.4743%
+     TOXIC   37.5%     0.0%     0.0%     3.3%    65.0%         0.4916%
      TOXIC   40.0%     0.0%     0.0%     3.3%    65.8%         0.5153%
      TOXIC   45.0%     0.0%     0.0%     5.0%    68.3%         0.5517%
      TOXIC   50.0%     0.0%     0.0%     7.5%    78.3%         0.5894%
@@ -222,6 +277,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 ---
        c1       BENIGN win       NORMAL win        TOXIC win       INTERSECTION    width                  binds
     33.3%     [4542, 5670]     [2560, 6251]            EMPTY              EMPTY                          TOX:s2
+    35.0%     [4432, 5824]     [2441, 6734]            EMPTY              EMPTY                          TOX:s2
+    37.5%     [4280, 6104]     [2259, 7535]    EMPTY (cross)              EMPTY                       TOX:front
     40.0%     [4122, 6447]     [2128, 8444]     [5668, 8628]       [5668, 6447]      780                       
     45.0%     [3777, 7340]    [1740, 9500+]       [0, 9500+]       [3777, 7340]     3563                       
     50.0%     [3400, 8554]    [1516, 9500+]       [0, 9500+]       [3400, 8554]     5153                       
@@ -231,6 +288,36 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
 
   SMALLEST HEAD SHARE WITH A NON-EMPTY INTERSECTION AT N=5: c1 = 40.0%
   intersected window [5668, 6447], midpoint phi = 6057
+
+====================================================================================================
+6b.  DOES THE BINDING SEAT CLEAR WITH A MARGIN, OR ONLY ON THE POINT ESTIMATE?
+====================================================================================================
+  Section 6 finds the smallest c1 whose intersected window is non-empty.  That is a
+  statement about where a MEAN CURVE crosses a bar, and a crossing is only as trustworthy
+  as the standard error of the quantity that crosses.  Reporting the first c1 whose point
+  estimate crosses zero, and shipping it, is precisely the green-number-chasing AGENTS.md
+  section 2 calls the first sin.
+
+  So: at each c1's own intersected-window MIDPOINT, the WORST back seat's gap to the
+  passive LP in the WORST regime, with the PAIRED standard error of that difference.
+  t is computed per path (queue and LP share a seed, hence a price path).
+
+  --- N=5 ---
+       c1           window  phi used   regime  seat    gap pp   se_pair  t_paired                    verdict
+    33.3%            EMPTY        --       --    --        --        --        --          no window to test
+    35.0%            EMPTY        --       --    --        --        --        --          no window to test
+    37.5%            EMPTY        --       --    --        --        --        --          no window to test
+    40.0%     [5668, 6447]      6000    TOXIC    s2   +0.010p    0.032p      +0.3        POINT ESTIMATE ONLY
+    45.0%     [3777, 7340]      5500    TOXIC    s2   +0.209p    0.039p      +5.4              CLEARS, t > 5
+    50.0%     [3400, 8554]      6000   NORMAL    s2   +2.709p    0.359p      +7.5              CLEARS, t > 5
+    55.0%    [3024, 9500+]      6500   NORMAL    s2   +3.586p    0.434p      +8.3              CLEARS, t > 5
+    60.0%    [2618, 9500+]      6000   NORMAL    s2   +3.811p    0.455p      +8.4              CLEARS, t > 5
+    66.7%    [2189, 9500+]      6000   NORMAL    s2   +4.645p    0.470p      +9.9              CLEARS, t > 5
+
+  READ THIS BEFORE QUOTING SECTION 6's MINIMUM.  A window whose binding seat clears by
+  less than its own standard error is a window on a coin flip.  The smallest DEFENSIBLE
+  head share is the smallest one in this table whose verdict is not 'POINT ESTIMATE
+  ONLY' -- not the smallest one in section 6.
 
 ====================================================================================================
 7.  IS IT MONOTONE IN c1?  The hypothesis stands or falls here
@@ -244,6 +331,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 / BENIGN ---
        c1   back bound  front bound   wing bar     r1@5100   s2 gap pp
     33.3%         4542         5670     +2.00%        3.3%     +0.595p
+    35.0%         4432         5824     +1.58%        3.1%     +0.731p
+    37.5%         4280         6104     +0.92%        2.9%     +0.942p
     40.0%         4122         6447     +0.23%        2.7%     +1.174p
     45.0%         3777         7340     -1.28%        2.5%     +1.742p
     50.0%         3400         8554     -2.99%        2.2%     +2.474p
@@ -256,6 +345,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 / NORMAL ---
        c1   back bound  front bound   wing bar     r1@5100   s2 gap pp
     33.3%         2560         6251     -3.46%       -2.4%     +1.014p
+    35.0%         2441         6734     -3.75%       -2.3%     +1.111p
+    37.5%         2259         7535     -4.21%       -2.3%     +1.269p
     40.0%         2128         8444     -4.70%       -2.2%     +1.414p
     45.0%         1740     no bound     -5.79%       -2.0%     +1.730p
     50.0%         1516     no bound     -7.05%       -1.9%     +2.194p
@@ -268,6 +359,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   --- N=5 / TOXIC ---
        c1   back bound  front bound   wing bar     r1@5100   s2 gap pp
     33.3%        NEVER         1636     -3.41%       -3.7%     -0.275p
+    35.0%        NEVER         3077     -3.51%       -3.7%     -0.211p
+    37.5%         9290         5619     -3.67%       -3.6%     -0.115p
     40.0%         5668         8628     -3.84%       -3.6%     -0.017p
     45.0%            0     no bound     -4.23%       -3.5%     +0.195p
     50.0%            0     no bound     -4.69%       -3.4%     +0.412p
@@ -292,6 +385,56 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
   would mean the head is not paying for its priority at all.
 
 ====================================================================================================
+8b.  THE CLOSED FORM -- why the head share is the lever, algebraically
+====================================================================================================
+  PITFALLS 5.178 records the one quantity immune to the premium-basis question:
+
+      the back's excess per unit of back capital  =  c1 * (LP - r1) / (1 - c1)
+
+  It follows from sum_i c_i r_i = LP -- the premium is a transfer INSIDE the book, so it
+  cannot change the pool's total -- and therefore holds under ANY weighting.
+
+  READ THIS AS ALGEBRA, NOT AS EVIDENCE.  It is a rearrangement of the SAME identity that
+  section 9 checks, so the agreement below is guaranteed by section 9 passing and could not
+  read FAIL for any reason section 9 would not already have caught.  LAW 5: a control whose
+  baseline is derived from the same quantity as its numerator is not a control.  It is
+  printed because it EXPLAINS the mechanism -- the factor c1/(1 - c1) goes from 0.50 at
+  c1 = 33.3% to 2.00 at c1 = 66.7%, a 4x amplification of whatever the head gives up --
+  and not because it corroborates anything.
+
+  --- N=5 ---   at phi = 5100
+    regime      c1  c1/(1-c1)   LP - r1  predicted  actual back   resid pp
+    BENIGN   33.3%       0.50    +1.75p     +5.90%       +5.90%   -0.0001p
+    BENIGN   35.0%       0.54    +1.90p     +6.05%       +6.05%   -0.0001p
+    BENIGN   37.5%       0.60    +2.10p     +6.29%       +6.29%   -0.0001p
+    BENIGN   40.0%       0.67    +2.28p     +6.54%       +6.54%   -0.0001p
+    BENIGN   45.0%       0.82    +2.57p     +7.13%       +7.13%   -0.0001p
+    BENIGN   50.0%       1.00    +2.82p     +7.85%       +7.85%   -0.0000p
+    BENIGN   55.0%       1.22    +3.03p     +8.73%       +8.73%   -0.0000p
+    BENIGN   60.0%       1.50    +3.21p     +9.84%       +9.84%   -0.0000p
+    BENIGN   66.7%       2.00    +3.43p    +11.89%      +11.89%   -0.0000p
+
+    NORMAL   33.3%       0.50    +2.91p     +1.94%       +1.94%   -0.0007p
+    NORMAL   35.0%       0.54    +2.83p     +2.01%       +2.01%   -0.0007p
+    NORMAL   37.5%       0.60    +2.74p     +2.13%       +2.13%   -0.0005p
+    NORMAL   40.0%       0.67    +2.65p     +2.25%       +2.25%   -0.0004p
+    NORMAL   45.0%       0.82    +2.48p     +2.52%       +2.52%   -0.0003p
+    NORMAL   50.0%       1.00    +2.39p     +2.88%       +2.88%   -0.0003p
+    NORMAL   55.0%       1.22    +2.29p     +3.29%       +3.29%   -0.0002p
+    NORMAL   60.0%       1.50    +2.18p     +3.75%       +3.75%   -0.0001p
+    NORMAL   66.7%       2.00    +2.03p     +4.55%       +4.55%   -0.0000p
+
+     TOXIC   33.3%       0.50    +1.53p     -1.41%       -1.41%   -0.0017p
+     TOXIC   35.0%       0.54    +1.50p     -1.37%       -1.37%   -0.0016p
+     TOXIC   37.5%       0.60    +1.46p     -1.30%       -1.30%   -0.0014p
+     TOXIC   40.0%       0.67    +1.42p     -1.23%       -1.23%   -0.0014p
+     TOXIC   45.0%       0.82    +1.33p     -1.08%       -1.08%   -0.0014p
+     TOXIC   50.0%       1.00    +1.25p     -0.93%       -0.93%   -0.0012p
+     TOXIC   55.0%       1.22    +1.16p     -0.76%       -0.76%   -0.0011p
+     TOXIC   60.0%       1.50    +1.06p     -0.58%       -0.59%   -0.0008p
+     TOXIC   66.7%       2.00    +0.93p     -0.32%       -0.32%   +0.0000p
+
+====================================================================================================
 9.  CONTROL -- the identity
 ====================================================================================================
   Worst per-path |capital-weighted queue return - the INDEPENDENTLY simulated pro-rata LP
@@ -301,6 +444,8 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
 
     N      c1       BENIGN       NORMAL        TOXIC
     5   33.3%     1.13e-04     1.49e-04     3.08e-04
+    5   35.0%     1.13e-04     1.49e-04     3.08e-04
+    5   37.5%     1.13e-04     1.49e-04     2.27e-04
     5   40.0%     1.13e-04     1.49e-04     2.27e-04
     5   45.0%     6.78e-05     1.49e-04     2.27e-04
     5   50.0%     1.46e-05     1.49e-04     2.27e-04
@@ -322,6 +467,12 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
     33.3%      1%        67    +18.30%    -17.26%     -8.63%      -61.60%     -69.19%    -69.19%
                2%        20    +15.88%    -10.16%     -2.68%      -20.20%     -17.17%    -17.17%
                5%         3    +11.27%     -4.99%     -0.48%       -3.80%      +2.00%     +2.00%
+    35.0%      1%        67    +17.68%    -17.26%     -8.63%      -66.34%     -74.56%    -74.56%
+               2%        20    +15.46%    -10.16%     -2.68%      -21.76%     -19.15%    -19.15%
+               5%         3    +11.14%     -4.99%     -0.48%       -4.09%      +1.58%     +1.58%
+    37.5%      1%        67    +16.81%    -17.26%     -8.63%      -73.92%     -83.00%    -83.00%
+               2%        20    +14.87%    -10.16%     -2.68%      -24.24%     -22.22%    -22.22%
+               5%         3    +10.95%     -4.99%     -0.48%       -4.56%      +0.92%     +0.92%
     40.0%      1%        67    +16.03%    -17.26%     -8.63%      -82.13%     -92.00%    -92.00%
                2%        20    +14.33%    -10.16%     -2.68%      -26.94%     -25.46%    -25.46%
                5%         3    +10.76%     -4.99%     -0.48%       -5.06%      +0.23%     +0.23%
@@ -346,6 +497,12 @@ THE HEAD-SHARE SWEEP -- does a bigger head open a phi window in ALL THREE REGIME
     33.3%      1%         9     +0.77%     -4.45%     -1.23%       -9.79%     -14.70%    -14.70%
                2%         4     +0.73%     -3.36%     -0.56%       -4.49%      -7.68%     -7.68%
                5%         1     +0.54%     -2.59%     -0.15%       -1.21%      -3.41%     -3.41%
+    35.0%      1%         9     +0.74%     -4.45%     -1.23%      -10.54%     -15.48%    -15.48%
+               2%         4     +0.71%     -3.36%     -0.56%       -4.84%      -8.05%     -8.05%
+               5%         1     +0.54%     -2.59%     -0.15%       -1.31%      -3.51%     -3.51%
+    37.5%      1%         9     +0.71%     -4.45%     -1.23%      -11.75%     -16.73%    -16.73%
+               2%         4     +0.68%     -3.36%     -0.56%       -5.39%      -8.63%     -8.63%
+               5%         1     +0.53%     -2.59%     -0.15%       -1.46%      -3.67%     -3.67%
     40.0%      1%         9     +0.67%     -4.45%     -1.23%      -13.06%     -18.07%    -18.07%
                2%         4     +0.66%     -3.36%     -0.56%       -5.99%      -9.26%     -9.26%
                5%         1     +0.52%     -2.59%     -0.15%       -1.62%      -3.84%     -3.84%

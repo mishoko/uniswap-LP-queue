@@ -390,10 +390,11 @@ def published_crossovers():
         if t.startswith("--- "):
             cur = t[4:].split()[0]
         if cur and "first phi at which each seat beats the LP" in t:
-            for tok in t.split("->", 1)[1].replace(":", " ").split("  "):
-                q = tok.split()
-                if len(q) >= 2 and q[0].startswith("s"):
-                    out[(cur, q[0])] = " ".join(q[1:])
+            # the published form is "s2: 4542  s3: all phi  s4: NEVER"; a naive split on the
+            # double space drops every one of them, which is how a first draft of this control
+            # printed "3 checked" under a heading that promised twelve.
+            for mm in re.finditer(r"s(\d+):\s*(NEVER|all phi|[0-9]+(?:\.[0-9]+)?)", t):
+                out[(cur, "s" + mm.group(1))] = mm.group(2)
         if cur and "rank 1 falls below the managed wing" in t:
             out[(cur, "front")] = t.split("=")[-1].strip()
     return out
@@ -545,11 +546,15 @@ def main():
         ok2 = ok2 and a
         r(f"  {rn:>8} {ws:>20} {p:>20} {('YES' if a else 'NO'):>8}")
     r()
-    r("  AND THE TWELVE UNDERLYING CROSSOVERS, which is the sharper form of the same control:")
+    r("  AND THE FIFTEEN UNDERLYING CROSSOVERS, which is the sharper form of the same control:")
     r("  the phi = 0 column above is printed to one decimal and can only agree to 0.05pp, whereas")
     r("  each crossover below is an interpolated phi to the unit -- a function of the whole mean")
-    r("  curve, the LP bar and the wing bar at once.  Twelve of those agreeing to the unit is not")
-    r("  something that happens by accident.")
+    r("  curve, the LP bar and the wing bar at once.  Fifteen of those agreeing to the unit is")
+    r("  not something that happens by accident.")
+    r("  A first draft of this parser silently matched only the 3 FRONT bounds while this heading")
+    r("  promised twelve -- it printed '3 published crossovers checked', and that COUNT is how it")
+    r("  was caught.  A control must print how many things it actually checked, or the heading")
+    r("  becomes the claim and nobody audits the loop underneath it.")
     r()
     pc = published_crossovers()
     r(f"  {'regime':>8} {'which':>7} {'computed':>12} {'published':>12} {'agree':>8}")
@@ -765,6 +770,61 @@ def main():
             r(f"  NO HEAD SHARE ON THIS GRID GIVES A NON-EMPTY INTERSECTION AT N={n}.")
             r("  That is the answer, not a failure to find one.  Section 4 says which seat binds")
             r("  in which regime and by how much.")
+        r()
+
+    # ------------------------------------------- the margin, not just the point estimate
+    r.rule("6b.  DOES THE BINDING SEAT CLEAR WITH A MARGIN, OR ONLY ON THE POINT ESTIMATE?")
+    r("  Section 6 finds the smallest c1 whose intersected window is non-empty.  That is a")
+    r("  statement about where a MEAN CURVE crosses a bar, and a crossing is only as trustworthy")
+    r("  as the standard error of the quantity that crosses.  Reporting the first c1 whose point")
+    r("  estimate crosses zero, and shipping it, is precisely the green-number-chasing AGENTS.md")
+    r("  section 2 calls the first sin.")
+    r()
+    r("  So: at each c1's own intersected-window MIDPOINT, the WORST back seat's gap to the")
+    r("  passive LP in the WORST regime, with the PAIRED standard error of that difference.")
+    r("  t is computed per path (queue and LP share a seed, hence a price path).")
+    r()
+    for n in NS:
+        r(f"  --- N={n} ---")
+        r(f"  {'c1':>7} {'window':>16} {'phi used':>9} {'regime':>8} {'seat':>5}"
+          f" {'gap pp':>9} {'se_pair':>9} {'t_paired':>9} {'verdict':>26}")
+        for c1 in HEADS:
+            los, his, empty = [], [], False
+            for rn, _, _ in REG:
+                lo, hi, hst, lows, sw = window(n, c1, rn)
+                if sw.startswith("EMPTY"):
+                    empty = True
+                else:
+                    los.append(lo); his.append(hi)
+            if empty:
+                r(f"  {hlabel(c1):>7} {'EMPTY':>16} {'--':>9} {'--':>8} {'--':>5}"
+                  f" {'--':>9} {'--':>9} {'--':>9} {'no window to test':>26}")
+                continue
+            L, H = max(los), min(his)
+            phi = L + (min(H, 9500.0) - L) / 2
+            k = min(range(len(PHIS)), key=lambda j: abs(PHIS[j] - phi))
+            worst = None
+            for rn, _, _ in REG:
+                lpv = Z[(n, c1)][f"{rn}_lp"]
+                A = Z[(n, c1)][f"{rn}_ret"][:, k, :]
+                for i in range(1, n):
+                    d = A[:, i] - lpv
+                    g = float(d.mean()); sp = float(d.std(ddof=1) / math.sqrt(len(d)))
+                    t = g / sp if sp > 0 else float('inf')
+                    if worst is None or t < worst[0]:
+                        worst = (t, rn, i + 1, g, sp)
+            t, rn, si, g, sp = worst
+            vd = ("CLEARS, t > 5" if t > 5 else
+                  "clears, t > 2" if t > 2 else
+                  "POINT ESTIMATE ONLY" if t > 0 else "DOES NOT CLEAR")
+            r(f"  {hlabel(c1):>7} {f'[{L:.0f}, {chr(57)+chr(53)+chr(48)+chr(48)+chr(43)}]' if H == math.inf else f'[{L:.0f}, {H:.0f}]':>16}"
+              f" {PHIS[k]:>9} {rn:>8} {('s'+str(si)):>5} {100*g:>+8.3f}p {100*sp:>8.3f}p"
+              f" {t:>+9.1f} {vd:>26}")
+        r()
+        r("  READ THIS BEFORE QUOTING SECTION 6's MINIMUM.  A window whose binding seat clears by")
+        r("  less than its own standard error is a window on a coin flip.  The smallest DEFENSIBLE")
+        r("  head share is the smallest one in this table whose verdict is not 'POINT ESTIMATE")
+        r("  ONLY' -- not the smallest one in section 6.")
         r()
 
     # ---------------------------------------------------------------- monotonicity
