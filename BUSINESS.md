@@ -288,6 +288,218 @@ only because re-anchoring is worth something to the front. What that costs to re
 
 ---
 
+## 6B. WHAT EACH SEAT EARNS — the per-seat P&L, in dollars
+
+**This is the table the whole product stands on.** Fixture stated once and true of every row: 5
+seats, capital 5:4:3:2:1 on a $1,000,000 book, band ±10%, fee 0.30%, φ = 5,100, **BENIGN** regime,
+61-day band. Source: `docs/research/seat-economics/results-shipping-basis.txt`. The benchmark is
+**the same capital in an ordinary pro-rata Uniswap position on the same pair, band and path** —
+"going elsewhere" — which returned **+5.02%** over that band.
+
+```
+  ┌────────┬───────────┬────────┬───────────┬───────────┬────────────┬──────────┐
+  │  SEAT  │  CAPITAL  │  RATE  │ $ EARNED  │ $ AS A    │  DIFFERENCE│  BEATS   │
+  │        │           │        │           │ PLAIN LP  │            │ PLAIN LP?│
+  ├────────┼───────────┼────────┼───────────┼───────────┼────────────┼──────────┤
+  │ RANK 1 │  $333,333 │ +3.28% │   $10,933 │   $16,733 │    -$5,800 │  NO — by │
+  │        │           │        │           │           │            │  DESIGN  │
+  ├────────┼───────────┼────────┼───────────┼───────────┼────────────┼──────────┤
+  │ RANK 2 │  $266,667 │ +5.50% │   $14,667 │   $13,387 │    +$1,280 │   YES    │
+  │ RANK 3 │  $200,000 │ +5.90% │   $11,800 │   $10,040 │    +$1,760 │   YES    │
+  │ RANK 4 │  $133,333 │ +6.00% │    $8,000 │    $6,693 │    +$1,307 │   YES    │
+  │ RANK 5 │   $66,667 │ +6.10% │    $4,067 │    $3,347 │      +$720 │   YES    │
+  ├────────┼───────────┼────────┼───────────┼───────────┼────────────┼──────────┤
+  │ TOTAL  │$1,000,000 │        │           │           │        ~$0 │          │
+  └────────┴───────────┴────────┴───────────┴───────────┴────────────┴──────────┘
+   The column sums to -$733 rather than to exactly $0 because the published per-seat
+   rates are rounded to 0.1pp. The identity itself is exact: the capital-weighted mean
+   IS the LP return, measured residual 2.98e-14. Do not read the -$733 as leakage.
+```
+
+### The same table annualised, and what a seat is actually worth
+
+```
+   ~6 benign bands a year
+   ─────────────────────────────────────────────────────────────────────
+     RANK 1   -$34,800/yr   =  -10.4%/yr  on its own capital
+     RANK 2    +$7,680/yr   =   +2.9%/yr  ON TOP OF an ordinary LP
+     RANK 3   +$10,560/yr   =   +5.3%/yr  ON TOP OF an ordinary LP
+     RANK 4    +$7,840/yr   =   +5.9%/yr  ON TOP OF an ordinary LP
+     RANK 5    +$4,320/yr   =   +6.5%/yr  ON TOP OF an ordinary LP
+   ─────────────────────────────────────────────────────────────────────
+   ▶ SO THE PITCH TO AN EXTERNAL LP IS: the same pair, the same band, the
+     same fee tier, +2.9% to +6.5% a year MORE than the pool next door —
+     paid by a named counterparty who volunteered, not by a token print.
+```
+
+**Annualisation assumes the band is redeployed when it dies.** `recenter()` is deliberately
+unshipped (§7 of `PITFALLS`), so redeployment is manual today. We do **not** annualise the NORMAL
+and TOXIC regimes: their bands die in 19 and 1.4 days, so multiplying them by 19 and 260 would
+produce enormous numbers that assume a redeployment loop nobody has built.
+
+### Are they motivated in every regime? Three of the four back seats, yes. One, no.
+
+```
+              BENIGN      NORMAL      TOXIC        BEATS A PLAIN LP IN…
+   LP bar     +5.02%      +0.49%      -2.17%              —
+   ────────────────────────────────────────────────────────────────────
+   RANK 1     +3.28%      -2.40%      -3.70%        0 of 3   ON PURPOSE
+   RANK 2     +5.50%      +1.50%      -2.50%        2 of 3   ◀ THE GAP
+   RANK 3     +5.90%      +2.00%      -1.40%        3 of 3   ✓
+   RANK 4     +6.00%      +2.20%      -0.40%        3 of 3   ✓
+   RANK 5     +6.10%      +2.80%      +0.50%        3 of 3   ✓
+   ────────────────────────────────────────────────────────────────────
+   ▶ RANKS 3, 4 AND 5 BEAT AN ORDINARY UNISWAP LP IN EVERY REGIME WE
+     MEASURED, INCLUDING THE TOXIC ONE. That is 40% of the book's capital
+     with unconditional outperformance, and it is the strongest claim in
+     this document.
+   ▶ RANK 2 MISSES IN TOXIC, BY 0.33 pp. It is the mezzanine: nearest the
+     first-loss seat, so it is reached second by any move large enough to
+     exhaust rank 1. We do not hide this and no premium rate fixes it —
+     the coupon is skimmed from VOLUME, and a toxic band has almost none.
+```
+
+**And the caveat we put next to every mean:** at φ = 5,000 the fraction of *individual* (path, seat)
+outcomes in ranks 2–5 that beat a plain LP is **68.1% benign, 84.8% normal, 75.8% toxic.** A seat
+holder lives one path, not an ensemble. These are better odds than a plain LP position on the same
+pair — but they are not certainty and we never present them as certainty.
+
+---
+
+## 6C. WHAT A SEAT COSTS, AND FOR HOW LONG YOU HAVE IT
+
+Three separate numbers, and they are often confused. All are on-chain and visible before you buy.
+
+```
+   1. THE PRICE OF THE RANK  —  paid ONCE, to the incumbent
+   ─────────────────────────────────────────────────────────────────────
+      Whatever that seat's holder has posted as their own self-price.
+      `buyPrice(seatId)` is the ask. You pay it to THEM.
+      A never-priced seat asks ZERO — the founding roster starts there.
+
+   2. YOUR CAPITAL  —  not a cost, you still own it
+   ─────────────────────────────────────────────────────────────────────
+      The seat changes hands EMPTY: the seller's capital is returned to
+      the seller, to the wei. You then fund the seat yourself, or the
+      seat drops to the tail for want of depth. Rank is BACKED BY DEPTH.
+
+   3. RENT  —  paid CONTINUOUSLY, forward, to the seats ahead of you
+   ─────────────────────────────────────────────────────────────────────
+      tau = 10%/yr of YOUR OWN posted self-price. You set the number.
+      Post a high price and you are safe but you pay for it; post a low
+      one and you pay little but anyone may take the seat at it.
+      That is Harberger, and it is the whole of it.
+
+   THE TERM  —  7 days  (`MIN_TENURE`)
+   ─────────────────────────────────────────────────────────────────────
+      For 7 days after funding a seat you may NOT voluntarily give up
+      its rank. You can still SELL it at your own posted price, in any
+      block. It is a lock on the RANK, never on the capital.
+```
+
+### Why the rent runs FORWARD — the reversal, and what it does to the front seat's cost
+
+Until this phase the rent ran **backward**, from the front to the back. That was written when being
+first was believed to be the prize; Phases 7–8 disproved that and nobody revisited it, so the
+contract was charging the seat that absorbs the losses and paying the seats it was already
+subsidising. **The front SUPPLIES subordination and the back CONSUMES it, so the back pays the
+front** — the same way round as every insurance market. Reversed, tested, and the old direction is
+now the negative control (`Harberger.t.sol::test_4_9b`).
+
+**This is how rank 1 monetises what it provides, and it answers the one question we previously said
+no simulator could answer.**
+
+```
+   In a Harberger market a seat's posted price settles where the RENT
+   equals the EXCESS RETURN the rank delivers — otherwise somebody takes it.
+   So at tau = 10%/yr the equilibrium self-prices are:
+
+      RANK 2   excess $7,680/yr   →  posts ~$76,800   →  pays $7,680/yr
+      RANK 3   excess $10,560/yr  →  posts ~$105,600  →  pays $10,560/yr
+      RANK 4   excess $7,840/yr   →  posts ~$78,400   →  pays $7,840/yr
+      RANK 5   excess $4,320/yr   →  posts ~$43,200   →  pays $4,320/yr
+                                                        ─────────────
+                                        forward to rank 1  $30,400/yr
+
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  RANK 1's GROSS SUBSIDY        -$34,800/yr   (-10.4% of capital) │
+   │  RENT IT COLLECTS AT EQUILIB.  +$30,400/yr                       │
+   │  ────────────────────────────────────────────────────────────────│
+   │  NET COST OF RUNNING THE       -$4,400/yr    ( -1.3% of capital) │
+   │  PROGRAMME                                                       │
+   └──────────────────────────────────────────────────────────────────┘
+```
+
+**THE HONEST BOOKENDS, because the number above is an equilibrium and not a measurement:**
+
+| how contested the seats are | rent that flows | rank 1's net cost |
+|---|---|---|
+| **nobody competes** — all self-prices stay at 0 | $0 | **−$34,800/yr (−10.4%)** |
+| **fully contested** — Harberger equilibrium | ~$30,400/yr | **−$4,400/yr (−1.3%)** |
+
+> The subsidy's true cost is **set by an on-chain market, continuously, not by us.** `BUSINESS.md`
+> used to say *"we did not measure demand, and no simulator can."* That is still true of the
+> simulator — and it is now beside the point, because **the seat market prices demand directly and
+> the price is a public number.** That is what the Harberger layer is FOR, and until the reversal it
+> was pointed the wrong way and priced nothing.
+
+**Labelled honestly: the equilibrium prices above are DERIVED** — from the measured per-seat excess,
+the identity in §3, and τ — **not simulated.** `sim.py` models no rent at all. The direction is
+proven in the contract; the magnitude is arithmetic on top of measured returns.
+
+---
+
+## 6D. CAN A SEAT BE DROPPED THE MOMENT TOXIC FLOW ARRIVES? — the security answer
+
+This is the question a subordinated instrument lives or dies on, and we found the hole ourselves.
+
+```
+   THE ATTACK, EXECUTED AGAINST THE REAL CONTRACT  (`test_8_20`)
+   ─────────────────────────────────────────────────────────────────────
+     a holder sees an adverse swap coming
+              │
+              ▼
+     withdraw(seat, 1 wei)   ── costs ONE WEI ──▶  lands at the TAIL
+              │                                    with its depth intact
+              └──▶ AND PROMOTES THE SEAT BEHIND IT INTO THE RANK IT LEFT
+
+     Our own numbers make that a strict UPGRADE in every regime:
+     the tail beats rank 2 by +0.6pp benign, +1.3pp normal, +3.0pp toxic.
+
+   ▶ Nobody had asked this. Four evacuation doors were found and closed by
+     asking "can a holder DODGE a fill and KEEP its rank?" This is the
+     opposite direction, and it was wide open.
+```
+
+**Three layers now answer it, and the third is new:**
+
+```
+   LAYER 1  ANY PAYOUT COSTS THE RANK.            (Phase 10)
+            You cannot be subordinate and liquid at the same time.
+
+   LAYER 2  THE SEAT YOU LAND ON IS UNDER-PRICED. (Harberger)
+            You posted a number for the rank you LEFT. For FIRM_WINDOW
+            you are takeable at it. Stepping aside costs you the seat,
+            or costs you a higher price and the rent on it.
+
+   LAYER 3  THE TERM — `MIN_TENURE` = 7 DAYS.     (NEW, this phase)
+            Inside it, a withdrawal that would demote is REFUSED by
+            name (`SeatWithinTerm`). The one-wei dodge is not on the
+            menu at all, and neither is the atomic evacuation round
+            trip that Phase 10 could only PRICE (`test_8_4` part A).
+```
+
+**What the term does NOT do, said by us rather than found by a reviewer:** it does not stop a holder
+whose 7 days have elapsed from stepping aside. Nothing mechanical can — Phase 10 hit the same wall
+and recorded it: *no rule can claw back a loss the attacker never took.* Layer 2 prices that case;
+layer 3 closes the free one. **`test_8_4` asserts both halves so neither can be quoted alone.**
+
+**And it is a lock on RANK, not on capital.** A locked holder is still sellable at their own posted
+price, in any block, by anyone (`test_8_21`, claim 3). Posting a low price is how you leave in a
+hurry, and what it costs you is exactly what the rank is worth — a number you set, not one we set.
+
+---
+
 ## 7. WHAT WE KILLED — five theses, pre-registered criteria, our own numbers
 
 | the thesis | what killed it |
