@@ -350,14 +350,52 @@ produce enormous numbers that assume a redeployment loop nobody has built.
    RANK 5     +6.10%      +2.80%      +0.50%        3 of 3   ✓
    ────────────────────────────────────────────────────────────────────
    ▶ RANKS 3, 4 AND 5 BEAT AN ORDINARY UNISWAP LP IN EVERY REGIME WE
-     MEASURED, INCLUDING THE TOXIC ONE. That is 40% of the book's capital
-     with unconditional outperformance, and it is the strongest claim in
-     this document.
+     MEASURED, INCLUDING THE TOXIC ONE — but READ THE NEXT BLOCK BEFORE
+     QUOTING THAT, because in TOXIC it is not what it sounds like.
    ▶ RANK 2 MISSES IN TOXIC, BY 0.33 pp. It is the mezzanine: nearest the
      first-loss seat, so it is reached second by any move large enough to
      exhaust rank 1. We do not hide this and no premium rate fixes it —
      the coupon is skimmed from VOLUME, and a toxic band has almost none.
 ```
+
+### ⚠ THE TOXIC ROW IS CAPITAL PRESERVATION, NOT YIELD — and the difference is the product
+
+**Caught by our own instrument review, against our own headline.** In the TOXIC regime **rank 5 has
+zero turnover on 100% of paths.** It does not out-earn the LP; **it is never filled at all.** An
+unreached seat scores exactly `0.0000` while a plain LP is down 2.17%, so a naive reading of "beats
+the LP in every regime" credits non-participation as outperformance. That is the seat-32 trap
+`AGENTS.md` LAW 5 names, live in a number we were about to lead with.
+
+```
+   WHAT "RANK 5 BEATS THE LP IN TOXIC" ACTUALLY MEANS
+   ─────────────────────────────────────────────────────────────────────
+     a plain LP    is converted at bad prices all the way down   -2.17%
+     rank 5        IS NEVER REACHED. Its inventory is untouched.  +0.50%
+                            ▲
+                            └── this is not a fee. It is the ABSENCE of
+                                adverse selection, which is exactly what
+                                the seats in front of it were there for.
+
+   ▶ SAY IT THIS WAY INSTEAD, because it is both true and stronger:
+     "In a crash the deep seats are not filled. Their capital keeps its
+      composition while a plain LP's is converted at the worst prices of
+      the move. That is what subordination BUYS, and it is the only
+      regime where the mechanism pays out as protection rather than
+      as yield."
+
+   ▶ AND SAY THE COST OF IT: an unreached seat earns almost no fees
+     either. In TOXIC the deep seats are idle capital that was spared,
+     not capital that worked. In BENIGN they are filled and DO earn —
+     rank 5 makes +6.10% against the LP's +5.02%.
+```
+
+**Rank 2's toxic miss is a genuine fill-based result** — it *is* reached in a crash, so its −2.50%
+is money actually lost at bad prices, not a non-participation artefact. The binding constraint is
+therefore real, and so is the fix for it (§6E).
+
+**Per-seat, per-regime turnover shares are being reported alongside every return** in
+`docs/research/seat-economics/results-headsize.txt` §5b, so no reader can mistake one for the other
+again.
 
 **And the caveat we put next to every mean:** at φ = 5,000 the fraction of *individual* (path, seat)
 outcomes in ranks 2–5 that beat a plain LP is **68.1% benign, 84.8% normal, 75.8% toxic.** A seat
