@@ -32,11 +32,8 @@ contract SettleWithoutChargingHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _settleSeat(uint256 seatId) internal override {
         Lease storage l = lease[seatId];
@@ -75,11 +72,8 @@ contract RentPaidBehindHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _distributeRent(uint256 payerId, uint256 amount) internal override {
         uint256 held = unallocatedRent0;
@@ -121,11 +115,8 @@ contract NoFirmQuoteHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function buyPrice(uint256 seatId) public view override returns (uint256) {
         return lease[seatId].selfPrice;
@@ -143,11 +134,8 @@ contract RentFromSeatCapitalHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _settleSeat(uint256 seatId) internal override {
         Lease storage l = lease[seatId];
@@ -181,11 +169,8 @@ contract NoSettleAheadHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function addToSeatNoSettle(uint256 seatId, uint256 amount0, uint256 amount1) external nonReentrant {
         if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
@@ -833,6 +818,14 @@ contract HarbergerTest is QueueFixture {
         assertEq(hook.rentDue(0), 0, "plain rank: an unpriced seat somehow owes rent");
 
         // ---- ARM 2: HARBERGER, PRICED. The same sequence now has a meter running through it.
+        //
+        // Arm 1 re-funded seat 0 from EMPTY, which arms a fresh `MIN_TENURE`. Serve it before arm 2
+        // starts, because arm 2 is about what the RENT METER charges for an abandonment and not
+        // about the term — `Evacuation.t.sol::test_8_4` is where the term itself is asserted.
+        // **The warp goes BEFORE the price is posted, deliberately:** `_setPrice` stamps
+        // `lastSettled` when a price comes into existence, so serving the term here accrues no rent
+        // and every number in this arm is unchanged from before the term existed.
+        _ageRoster();
         _setPrice(ALICE, 0, 100e18);
         _prepay(ALICE, 0, 20e18);
         uint256 escStart = _escrow(0);

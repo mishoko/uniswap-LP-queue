@@ -79,6 +79,12 @@ abstract contract QueueFixture is BaseTest {
     uint256 constant RENT_PERIOD = 365 days;
     uint256 constant FIRM_WINDOW = 1 hours;
 
+    /// @dev **THE TERM.** How long a seat may not voluntarily give up its rank. Mirrors
+    ///      `QueueDeployBase.MIN_TENURE`; `Hygiene.t.sol::test_7_8` pins the two together, because
+    ///      three copies of the shipped φ drifted apart behind a comment naming their source
+    ///      (PITFALLS 5.180) and a comment is not an interlock.
+    uint256 constant MIN_TENURE = 7 days;
+
     /// @dev φ — the priority premium, **ZERO for the shared fixture, and that is a deliberate
     ///      experimental control rather than a default worth shipping.**
     ///
@@ -122,6 +128,29 @@ abstract contract QueueFixture is BaseTest {
     ///      learn φ and the fee tier the hook was actually built with — WITHOUT reading them back
     ///      off the deployed contract, which would make a constructor that stored the wrong number
     ///      invisible to the witness meant to catch it.
+    /// @dev The governance bundle every fixture builds. **`MIN_TENURE` IS OVERRIDABLE AND DEFAULTS
+    ///      TO THE SHIPPED VALUE**, so the term is LIVE in every suite rather than switched off in
+    ///      the fixtures and tested in one place — a fixture that disables the feature under test is
+    ///      the shape of LAW 1's 1:1 price and 18/18 decimals. Suites that need to withdraw simply
+    ///      warp past it, which is what a real holder does.
+    function _minTenure() internal view virtual returns (uint256) {
+        return MIN_TENURE;
+    }
+
+    function _gov(uint256 bps, uint256 period, uint256 window, uint256 phi)
+        internal
+        view
+        returns (QueueHook.Governance memory)
+    {
+        return QueueHook.Governance({
+            rentBps: bps,
+            rentPeriod: period,
+            firmWindow: window,
+            premiumBps: phi,
+            minTenure: _minTenure()
+        });
+    }
+
     function _ctorArgs(address[] memory roster) internal returns (bytes memory) {
         return _ctorArgs(roster, FEE);
     }
@@ -139,10 +168,7 @@ abstract contract QueueFixture is BaseTest {
             SPACING,
             BAND_HALF_WIDTH,
             roster,
-            RENT_BPS,
-            RENT_PERIOD,
-            FIRM_WINDOW,
-            _premiumBps()
+            _gov(RENT_BPS, RENT_PERIOD, FIRM_WINDOW, _premiumBps())
         );
     }
 
@@ -155,7 +181,7 @@ abstract contract QueueFixture is BaseTest {
         refPhi = premiumBps;
         refFee = FEE;
         return abi.encode(
-            poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW, premiumBps
+            poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, _gov(RENT_BPS, RENT_PERIOD, FIRM_WINDOW, premiumBps)
         );
     }
 
@@ -168,7 +194,7 @@ abstract contract QueueFixture is BaseTest {
         refPhi = _premiumBps();
         refFee = FEE;
         return
-            abi.encode(poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, bps, period, window, _premiumBps());
+            abi.encode(poolManager, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, _gov(bps, period, window, _premiumBps()));
     }
 
     Currency c0;
@@ -363,9 +389,45 @@ abstract contract QueueFixture is BaseTest {
         refDriftHi1.push(0);
     }
 
+    /// @notice Move past `MIN_TENURE` so a freshly built roster is free to leave.
+    ///
+    /// @dev **CALLED AT THE END OF EVERY ROSTER-BUILDING SETUP, AND THAT IS DELIBERATE.** The term
+    ///      is LIVE in every suite rather than switched off in the fixtures: a fixture that disables
+    ///      the feature under test is LAW 1's 1:1 price one dimension over, and the whole point of
+    ///      `MIN_TENURE` is that it changes what `withdraw` does. Aging the roster puts it in the
+    ///      state a real holder is in — funded a while ago — instead of pretending the guard is not
+    ///      there.
+    ///
+    ///      Call it BEFORE any self-price is posted. `_setPrice` stamps `lastSettled` when a price
+    ///      comes into existence, so aging first cannot accrue rent behind a test's back; aging
+    ///      after would.
+    /// @dev True while no seat has a self-price, i.e. while warping cannot accrue rent anywhere.
+    function _noSelfPricesPosted() internal view returns (bool) {
+        uint256 n = hook.seatCount();
+        for (uint256 i; i < n; i++) {
+            (uint256 price,,,,) = hook.leaseOf(i);
+            if (price != 0) return false;
+        }
+        return true;
+    }
+
+    function _ageRoster() internal {
+        vm.warp(block.timestamp + MIN_TENURE + 1);
+    }
+
     function _seedAt(uint256[] memory bps, int24 tl, int24 tu) private {
         (uint256 s0, uint256 s1) = hook.seed(k, tl, tu, LIQ, bps);
         require(s0 != s1, "LAW 1: fixture is unit-priced");
+
+        // **AGE THE ROSTER PAST ITS TERM.** `MIN_TENURE` is live in every suite — a fixture that
+        // switched the feature off would be LAW 1's 1:1 price one dimension over — so the seeded
+        // seats are aged here, once, to the state a real holder is in: funded a while ago and free
+        // to leave. Suites that test the TERM itself do not use this path, or warp their own way
+        // back inside it (`Evacuation.t.sol::test_8_21`).
+        //
+        // It runs BEFORE any self-price is posted, so it cannot accrue rent behind a test's back:
+        // `_setPrice` stamps `lastSettled` when the price comes into existence.
+        _ageRoster();
 
         _refAdoptSeed(bps, LIQ);
         expT0 = s0;
@@ -1404,6 +1466,17 @@ abstract contract QueueFixture is BaseTest {
     ///      that used to create the seat as a side effect, so the seat id is an input now, not an
     ///      output — which is exactly the property that made the head dust-griefable.
     function _addTo(address who, uint256 seatId, uint256 a0, uint256 a1) internal {
+        // **AGE PAST THE TERM WHEN THIS DEPOSIT ARMS ONE.** `_fundSeat` stamps `tenureFrom` only
+        // when a seat is funded FROM EMPTY, so that is the only case that needs aging — and doing
+        // it here means every suite that builds its roster through this helper gets a roster that
+        // is free to leave, without the term being switched off anywhere.
+        //
+        // **THE PRICE GUARD IS NOT COSMETIC.** Warping accrues rent on any seat that already has a
+        // self-price, which would silently change the answer in every rent test that funds after
+        // pricing. Aging only while the seat is unpriced keeps this invisible to them. A suite that
+        // funds an empty seat AFTER pricing it does not get aged and must warp for itself — which
+        // is correct, because there the term and the rent clock genuinely interact.
+        bool armsTerm = hook.seatLiquidity(seatId) == 0;
         _fund(who, a0, a1);
         // Derived BEFORE the call: `_liquidityForAmounts` reads the price and the position's own
         // liquidity as they stand when the deposit lands, and the second of those moves.
@@ -1414,6 +1487,7 @@ abstract contract QueueFixture is BaseTest {
         // paid at the depth it actually provided rather than at the depth it is about to provide —
         // which is also what stops a flash-loaned deposit weighing on premium it was not there for.
         _refSettle(seatId);
+        if (armsTerm && hook.seatLiquidity(seatId) != 0 && _noSelfPricesPosted()) _ageRoster();
         if (ok) {
             refL[seatId] += dl;
             refStandingL += dl;

@@ -66,6 +66,27 @@ abstract contract QueueDeployBase is CommonBase {
     uint256 internal constant RENT_PERIOD = 365 days;
     uint256 internal constant FIRM_WINDOW = 1 hours;
 
+    /// @notice **THE TERM A SEAT IS BOUGHT FOR: 7 DAYS.**
+    ///
+    /// @dev A seat may not VOLUNTARILY give up its rank inside this window. It is what makes a seat
+    ///      a COMMITMENT rather than a position somebody can drop the instant it is about to cost
+    ///      them something — see `QueueHook.MIN_TENURE`, and `Evacuation.t.sol::test_8_20` for the
+    ///      manoeuvre it answers (one wei of withdrawal reaches the TAIL, which our own economics
+    ///      make the best seat in the book in every regime measured).
+    ///
+    ///      **SEVEN DAYS IS A POLICY CHOICE, NOT A MEASUREMENT, AND IT IS LABELLED AS ONE.** It is
+    ///      sized against the window an informed trader actually exploits — a stale price lives for
+    ///      blocks to hours, not days — so a term of days puts the dodge out of reach while leaving
+    ///      the seat a tradeable instrument rather than a prison. Nothing in this repo measures an
+    ///      optimal term, and claiming otherwise would be the green-number-chasing AGENTS §2 names.
+    ///
+    ///      **IT IS NOT A CAPITAL LOCK.** A holder inside the term can still be bought out at their
+    ///      own posted price by anyone, in any block. Posting a low price is how you leave in a
+    ///      hurry, and what it costs you is exactly what the rank is worth — set by the holder,
+    ///      not by us. Foreclosure and buyout are unaffected: §B.8 requires the evacuation path to
+    ///      stay unblockable or every incumbent gets a veto on their own buyout.
+    uint256 internal constant MIN_TENURE = 7 days;
+
     /// @dev φ — the share of the LP fee a filled seat hands to the seats still standing behind it.
     ///      7,900 bps = 79%.
     ///
@@ -269,7 +290,20 @@ abstract contract QueueDeployBase is CommonBase {
         returns (bytes memory)
     {
         return abi.encode(
-            pm, c0, c1, FEE, SPACING, BAND_HALF_WIDTH, roster, RENT_BPS, RENT_PERIOD, FIRM_WINDOW, PREMIUM_BPS
+            pm,
+            c0,
+            c1,
+            FEE,
+            SPACING,
+            BAND_HALF_WIDTH,
+            roster,
+            QueueHook.Governance({
+                rentBps: RENT_BPS,
+                rentPeriod: RENT_PERIOD,
+                firmWindow: FIRM_WINDOW,
+                premiumBps: PREMIUM_BPS,
+                minTenure: MIN_TENURE
+            })
         );
     }
 

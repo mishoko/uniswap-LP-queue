@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {QueueFixture} from "./QueueFixture.sol";
 import {QueueHarness} from "./QueueHarness.sol";
+import {QueueHook} from "../../src/queue/QueueHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
@@ -91,11 +92,8 @@ contract NoExclusionHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _accruePremium(bool inIsZero, uint256 pot, uint256 excludedL) internal override {
         excludedL = 0; // THE MUTATION, and nothing else on either branch.
@@ -144,11 +142,8 @@ contract HalfPotHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _accruePremium(bool inIsZero, uint256 pot, uint256 excludedL) internal override {
         if (inIsZero) {
@@ -198,11 +193,8 @@ contract InventoryWeightHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _syncSeat(Seat storage s) internal override returns (uint256 a0, uint256 a1) {
         a0 = s.a0;
@@ -253,11 +245,8 @@ contract WrongTokenHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _syncSeat(Seat storage s) internal override returns (uint256 a0, uint256 a1) {
         uint256 wl = s.liquidity;

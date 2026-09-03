@@ -190,6 +190,10 @@ contract EvacuationTest is QueueFixture {
         // Push the unconsumed leg back into the position so the pool's depth reflects the capital
         // that was actually committed. Permissionless, credits nobody — see `sweepFloatIntoPosition`.
         QueueHarness(a).sweepFloatIntoPosition();
+        // Age past MIN_TENURE, exactly as `QueueFixture._seedAt` does — this suite builds its own
+        // rosters and would otherwise be testing evacuation against seats still inside their term.
+        // `test_8_21` is the one that deliberately stays inside it.
+        _ageRoster();
         return (QueueHarness(a), k);
     }
 
@@ -632,6 +636,33 @@ contract EvacuationTest is QueueFixture {
         // ... and the informed trader's own capital.
         uint256 amountIn = _inputToReach(_target());
         MockERC20(Currency.unwrap(c0)).mint(address(e), amountIn);
+
+        // ---- PART A: INSIDE THE TERM, THE ROUND TRIP IS NOT AVAILABLE AT ALL.
+        //
+        // **THIS IS THE PHASE 12 RESULT AND IT IS A CHANGE OF KIND, NOT OF DEGREE.** Phase 10 could
+        // only PRICE this dodge — `withdraw` demotes, so the attacker paid a rank for it — and
+        // PROGRESS recorded plainly that "no rule can claw back a loss the attacker never took".
+        // `MIN_TENURE` does not try to. It removes the manoeuvre from the menu while the seat is
+        // inside the term it took on when it funded: the round trip opens with a `withdraw`, and a
+        // seat inside its term cannot voluntarily give up its rank.
+        //
+        // The setup above re-funded seat 0 from EMPTY, which arms a fresh term — so the attacker
+        // here is in exactly the position a newly-committed subordinated LP is in.
+        {
+            uint256 unlock = atkHook.unlockAt(0);
+            assertGt(unlock, block.timestamp, "the term already elapsed: PART A proves nothing");
+            vm.expectRevert(
+                abi.encodeWithSelector(QueueHook.SeatWithinTerm.selector, uint256(0), unlock, block.timestamp)
+            );
+            e.strike(0, amountIn);
+        }
+
+        // ---- PART B: OUTSIDE THE TERM IT IS AVAILABLE AGAIN, AND IT STILL COSTS THE RANK.
+        //
+        // Stated rather than hidden: the term closes the window, it does not abolish the attack. A
+        // holder who has served their term can still step aside — and Phase 10's demotion is what
+        // charges them for it. Both halves are asserted so neither can be quoted alone.
+        vm.warp(block.timestamp + atkHook.MIN_TENURE() + 1);
 
         (uint256 s0Before, uint256 s1Before) = atkHook.seat(0);
         (, uint256 r1Before) = atkHook.seat(atkHook.idAtRank(1));
@@ -1944,5 +1975,150 @@ contract EvacuationTest is QueueFixture {
         vm.prank(atkRoster[seatId]);
         (uint256 p0, uint256 p1) = atkHook.withdraw(seatId, a0 > 0 ? 1 : 0, a0 > 0 ? 0 : 1);
         assertEq(p0 + p1, 1, "a one-wei request did not pay exactly one wei: the premise has moved");
+    }
+
+    /// @notice **THE TERM — a seat cannot be dropped the moment it is about to cost something.**
+    ///
+    /// @dev This is the directed test for `MIN_TENURE`. `test_8_20` proves the manoeuvre it
+    ///      answers: one wei of withdrawal reaches the TAIL, carrying the seat's depth intact, and
+    ///      our own economics make the tail the best seat in the book in every regime measured. So
+    ///      without a term, a holder who sees an adverse swap coming steps out of the front for the
+    ///      price of gas and puts somebody else in it.
+    ///
+    ///      **FOUR CLAIMS, AND THE LAST TWO ARE WHAT KEEP THIS FROM BEING A LOCKUP.**
+    ///        1. Inside the term, a withdrawal that would demote is REFUSED, by name.
+    ///        2. A withdrawal that pays NOTHING is still allowed — the term guards the RANK, not
+    ///           the function, and dust policy F1 clamping a request to zero must not be punished
+    ///           as an exit attempt.
+    ///        3. **The seat is still SELLABLE inside the term.** A holder who wants out posts a
+    ///           price and anyone may take it. That is the exit, and what it costs is what the rank
+    ///           is worth — set by the holder, not by us.
+    ///        4. Once the term is served, the withdrawal goes through.
+    ///
+    ///      AGENTS §3 LAW 5's question — what would have to be true for this to read FAIL? Delete
+    ///      the guard and (1) goes green-to-red. Put the guard on the whole function instead of on
+    ///      the demotion and (2) breaks. Make it a capital lock and (3) breaks. Make it permanent
+    ///      and (4) breaks. Four independent ways to be wrong, and each has its own assertion.
+    function test_8_21_theTermRefusesAVoluntaryDemotionAndTheSeatIsStillSellable() public {
+        _use(atkHook, atkKey);
+
+        // Re-fund a seat FROM EMPTY so it is inside a fresh term. The fixture ages its roster past
+        // `MIN_TENURE`, so without this the seat would be free to leave and every claim below would
+        // hold for the wrong reason.
+        uint256 id = atkHook.ranking()[1];
+        address who = atkRoster[id];
+        (uint256 a0, uint256 a1) = atkHook.seat(id);
+        vm.prank(who);
+        atkHook.withdraw(id, a0, a1); // legal: the term has been served
+        _give(who, a0, a1);
+        vm.prank(who);
+        atkHook.addToSeat(id, a0, a1); // ...and this arms a NEW term
+
+        uint256 unlock = atkHook.unlockAt(id);
+        assertGt(unlock, block.timestamp, "the deposit did not arm a term: this test proves nothing");
+        assertEq(unlock, block.timestamp + atkHook.MIN_TENURE(), "the term is not MIN_TENURE long");
+
+        uint256 rankBefore = atkHook.rankOfId(id);
+        (uint256 b0, uint256 b1) = atkHook.seat(id);
+        assertGt(b0 + b1, 0, "the seat holds nothing: the refusal below would be vacuous");
+
+        // ---- (1) A WITHDRAWAL THAT WOULD DEMOTE IS REFUSED, BY NAME.
+        vm.prank(who);
+        vm.expectRevert(abi.encodeWithSelector(QueueHook.SeatWithinTerm.selector, id, unlock, block.timestamp));
+        atkHook.withdraw(id, b0 > 0 ? 1 : 0, b0 > 0 ? 0 : 1);
+        assertEq(atkHook.rankOfId(id), rankBefore, "the refused withdrawal moved the rank anyway");
+
+        // ---- (2) A WITHDRAWAL THAT PAYS NOTHING IS STILL ALLOWED.
+        vm.prank(who);
+        (uint256 z0, uint256 z1) = atkHook.withdraw(id, 0, 0);
+        assertEq(z0 + z1, 0, "a zero request paid something");
+        assertEq(atkHook.rankOfId(id), rankBefore, "a zero withdrawal moved the rank");
+
+        // ---- (3) THE SEAT IS STILL SELLABLE INSIDE THE TERM, and (4) once the term is served the
+        //      withdrawal goes through. Scoped into a helper to stay inside the stack limit.
+        _sellThenServeTheTerm(id, who, b0, b1);
+
+        _checkInvariantL("after the term");
+        _checkInvariantF("after the term", 64);
+    }
+
+    /// @dev Halves (3) and (4) of `test_8_21`, factored out for the stack.
+    ///
+    ///      (3) THE ESCAPE VALVE. Without it the term would be a capital lock rather than a rank
+    ///      commitment: a holder who wants out posts a price and anybody may take it, and what that
+    ///      costs them is exactly what the rank is worth.
+    ///      (4) THE TERM ENDS. A served term permits the withdrawal, and it still demotes.
+    function _sellThenServeTheTerm(uint256 id, address who, uint256 b0, uint256 b1) internal {
+        address buyer = address(0xB0FFEE);
+        vm.prank(who);
+        atkHook.setSelfPrice(id, 1e18);
+        _give(buyer, 1e18, 0);
+        vm.prank(buyer);
+        atkHook.buySeat(id, 1e18, 1e18);
+        assertEq(atkHook.ownerOf(id), buyer, "the seat could not be sold inside its term");
+
+        // The buyout emptied the seat, so re-fund it — which arms a new term — and serve that.
+        _give(buyer, b0, b1);
+        vm.prank(buyer);
+        atkHook.addToSeat(id, b0, b1);
+        vm.warp(atkHook.unlockAt(id));
+
+        (uint256 d0,) = atkHook.seat(id);
+        vm.prank(buyer);
+        (uint256 p0, uint256 p1) = atkHook.withdraw(id, d0 > 0 ? 1 : 0, d0 > 0 ? 0 : 1);
+        assertEq(p0 + p1, 1, "the served term did not permit a withdrawal");
+        assertEq(atkHook.rankOfId(id), N - 1, "the served withdrawal did not demote");
+    }
+
+    /// @notice **A TOP-UP DOES NOT RE-ARM THE TERM — an honest LP cannot be locked by their own
+    ///         good behaviour.**
+    ///
+    /// @dev **WRITTEN BECAUSE A MUTATION SURVIVED.** `Lease.tenureFrom`'s docblock states that only
+    ///      a funding FROM EMPTY starts a term, and changing `if (s.liquidity == 0) lease[...] =
+    ///      ...` to an unconditional stamp broke nothing in the whole suite. A claim in a comment
+    ///      with no assertion behind it is a claim nobody checks (AGENTS §3b), and this one is not
+    ///      cosmetic: under the mutant every deposit restarts the lock, so a holder who tops up
+    ///      weekly can never withdraw, and anyone able to fund somebody else's seat could extend
+    ///      their lock indefinitely.
+    ///
+    ///      AGENTS §3 LAW 5's question — what would have to be true for this to read FAIL? The
+    ///      stamp becoming unconditional. That is a one-character edit somebody could plausibly
+    ///      make while "simplifying", and it is exactly what this now catches.
+    function test_8_22_aTopUpDoesNotRestartTheTerm() public {
+        _use(atkHook, atkKey);
+
+        uint256 id = atkHook.ranking()[1];
+        address who = atkRoster[id];
+
+        // Empty the seat and re-fund it, so we know precisely when its term started.
+        (uint256 a0, uint256 a1) = atkHook.seat(id);
+        vm.prank(who);
+        atkHook.withdraw(id, a0, a1);
+        _give(who, a0, a1);
+        vm.prank(who);
+        atkHook.addToSeat(id, a0, a1);
+
+        uint256 armedAt = atkHook.unlockAt(id);
+        assertEq(armedAt, block.timestamp + atkHook.MIN_TENURE(), "the refund did not arm a term");
+
+        // Serve most of it, then TOP UP. Under the mutant this restarts the clock.
+        vm.warp(block.timestamp + atkHook.MIN_TENURE() - 1);
+        _give(who, a0, a1);
+        vm.prank(who);
+        atkHook.addToSeat(id, a0, a1);
+        assertGt(atkHook.seatLiquidity(id), 0, "the top-up minted no depth: this test proves nothing");
+
+        // ---- THE CLAIM, AS AN IDENTITY RATHER THAN A BOUND (PITFALLS 5.53). The unlock time is
+        //      the one the ORIGINAL funding set, unchanged to the second.
+        assertEq(atkHook.unlockAt(id), armedAt, "THE TOP-UP RESTARTED THE TERM: an honest LP is locked by depositing");
+
+        // ...and the consequence, executed rather than described: one second later the holder is
+        // free, which under the mutant they would not be for another MIN_TENURE.
+        vm.warp(armedAt);
+        (uint256 b0,) = atkHook.seat(id);
+        vm.prank(who);
+        (uint256 p0, uint256 p1) = atkHook.withdraw(id, b0 > 0 ? 1 : 0, b0 > 0 ? 0 : 1);
+        assertEq(p0 + p1, 1, "the holder was still locked after serving the ORIGINAL term");
+        assertEq(atkHook.rankOfId(id), N - 1, "the withdrawal did not demote");
     }
 }

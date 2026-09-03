@@ -19,11 +19,8 @@ contract FaceValueQueueHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     error FloatShort(uint256 want, uint256 have);
 

@@ -85,11 +85,8 @@ contract NoSweptBookQueueHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _settlePremium(uint256 ord, uint256 start, uint256 touchedEnd, bool outIsOne, uint256 pot)
         internal
@@ -154,11 +151,8 @@ contract UnfixedTransferQueueHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _onSeatTransfer(uint256 seatId, address from) internal override {
         uint256 unattBefore = liquidityUnattributed;
@@ -181,11 +175,8 @@ contract FaceValueQueueHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _applyDustPolicy(uint256 w0, uint256 w1) internal pure override returns (uint256, uint256) {
         return (w0, w1);

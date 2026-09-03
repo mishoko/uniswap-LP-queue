@@ -94,13 +94,25 @@ MUTS = [
      "        uint256 nr = rankOfId(seatId);\n        if (short_) {\n            l.selfPrice = 0;\n            nr = _demoteToTail(seatId);\n        }\n        _distributeRent(seatId, charged);\n        if (short_) emit Foreclosed(seatId, due, charged, nr);"),
 
     # ----------------------------------------------------------------------- distribution
-    ("M20", HOOK, "the payer receives its own rent (loop starts at its own rank)",
-     # REPAIRED 2026-09-02 (Phase 10): rent is weighted by `liquidity`, not `a0`.
-     "        for (uint256 i = r + 1; i < n; i++) {\n            w += q[_idAt(ord, i)].liquidity;",
-     "        for (uint256 i = r; i < n; i++) {\n            w += q[_idAt(ord, i)].liquidity;"),
-    ("M21", HOOK, "the credit loop starts at the payer's own rank",
-     "        for (uint256 i = r + 1; i < n && st.remaining > 0; i++) {",
-     "        for (uint256 i = r; i < n && st.remaining > 0; i++) {"),
+    # REPAIRED 2026-09-02 (Phase 10): rent is weighted by `liquidity`, not `a0`.
+    # RE-POINTED 2026-09-03 (Phase 12): rent moves FORWARD, so the recipient loops run `0 .. r-1`
+    # and "includes the payer" is now the OFF-BY-ONE AT THE TOP of the range rather than the bottom.
+    ("M20", HOOK, "the payer receives its own rent (weight loop includes its own rank)",
+     "        for (uint256 i; i < r; i++) {\n            w += q[_idAt(ord, i)].liquidity;",
+     "        for (uint256 i; i <= r; i++) {\n            w += q[_idAt(ord, i)].liquidity;"),
+    ("M21", HOOK, "the credit loop includes the payer's own rank",
+     "        for (uint256 i; i < r && st.remaining > 0; i++) {",
+     "        for (uint256 i; i <= r && st.remaining > 0; i++) {"),
+    # NEW 2026-09-03 (Phase 12). THE DIRECTION ITSELF. It conserves every wei while inverting the
+    # mechanism's economics, which is why no conservation test can see it and why it needs its own
+    # case rather than relying on `Harberger.t.sol:RentPaidBehindHook` — a test-side subclass proves
+    # the SUITE can detect the inversion; this proves it detects it in PRODUCTION source.
+    ("M20b", HOOK, "rent flows BACKWARD again — the pre-Phase-12 direction, restored",
+     "        uint256 w;\n        for (uint256 i; i < r; i++) {\n            w += q[_idAt(ord, i)].liquidity;\n        }",
+     "        uint256 w;\n        for (uint256 i = r + 1; i < q.length; i++) {\n            w += q[_idAt(ord, i)].liquidity;\n        }"),
+    ("M21b", HOOK, "the CREDIT loop flows backward while the WEIGHT loop still runs forward",
+     "        Allocation.State memory st = Allocation.init(pot, w);\n        for (uint256 i; i < r && st.remaining > 0; i++) {",
+     "        Allocation.State memory st = Allocation.init(pot, w);\n        for (uint256 i = r + 1; i < q.length && st.remaining > 0; i++) {"),
     ("M22", HOOK, "the rent split never absorbs its remainder (the last recipient is short)",
      "        Allocation.State memory st = Allocation.init(pot, w);",
      "        Allocation.State memory st = Allocation.init(pot, w + 1);"),
@@ -116,11 +128,44 @@ MUTS = [
     ("M27", HOOK, "the held pot is never folded into the next distribution",
      "        uint256 pot = amount + held;", "        uint256 pot = amount;"),
 
-    # -------------------------------------------------------------------------- settleAhead
+    # ------------------------------------------------------------------------------ the TERM
+    # NEW 2026-09-03 (Phase 12). `MIN_TENURE` is what makes a seat a COMMITMENT rather than a
+    # position somebody drops the instant it is about to cost them something (`test_8_20`). All
+    # three lines below were run as negative controls when the guard was written; the THIRD ONE
+    # SURVIVED and `test_8_22` was written for it, which is why it is in the campaign by name.
+    ("M29c", HOOK, "a seat can voluntarily give up its rank inside its term",
+     "            uint256 unlockAt = uint256(lease[seatId].tenureFrom) + MIN_TENURE;\n            if (block.timestamp < unlockAt) revert SeatWithinTerm(seatId, unlockAt, block.timestamp);\n",
+     ""),
+    ("M29d", HOOK, "funding a seat from empty never arms a term",
+     "            if (s.liquidity == 0) lease[seatId].tenureFrom = uint64(block.timestamp);\n",
+     ""),
+    ("M29e", HOOK, "every deposit re-arms the term (an honest LP is locked by topping up)",
+     "            if (s.liquidity == 0) lease[seatId].tenureFrom = uint64(block.timestamp);",
+     "            lease[seatId].tenureFrom = uint64(block.timestamp);"),
+    ("M29f", HOOK, "the term is checked on the FUNCTION rather than on the demotion (a zero-payout withdrawal is punished as an exit)",
+     "        if (p0 != 0 || p1 != 0) {\n            // **THE TERM (`MIN_TENURE`), ENFORCED AT THE ONE VOLUNTARY EXIT.**",
+     "        if (true) {\n            // **THE TERM (`MIN_TENURE`), ENFORCED AT THE ONE VOLUNTARY EXIT.**"),
+
+    # ------------------------------------------------------------- settleAhead / settleBehind
     ("M28", HOOK, "funding a seat does not settle the seats in front of it",
-     "        _settleAhead(rankOfId(seatId));\n        _fundSeat", "        _fundSeat"),
+     "        _settleAhead(rankOfId(seatId));\n        _settleBehind(rankOfId(seatId));\n        _fundSeat",
+     "        _settleBehind(rankOfId(seatId));\n        _fundSeat"),
     ("M29", HOOK, "settleAhead does not compensate for a demotion shifting the ranks",
      "            if (order == before) i++;\n            else rank--;", "            i++;"),
+    # NEW 2026-09-03 (Phase 12). `_settleBehind` is the defence the reversal MOVED. Under the new
+    # direction the seats that can pay INTO a depositor stand behind it, so removing this re-opens
+    # the rent-weight flash grab that `_settleAhead` used to close. Mutated at BOTH entry points,
+    # separately, because a rule that appears twice has been covered in only one place four times on
+    # this project (PITFALLS 5.37, 5.50, 5.52 twice).
+    ("M28b", HOOK, "funding a seat does not settle the seats BEHIND it (the flash grab, re-opened)",
+     "        _settleAhead(rankOfId(seatId));\n        _settleBehind(rankOfId(seatId));\n        _fundSeat",
+     "        _settleAhead(rankOfId(seatId));\n        _fundSeat"),
+    ("M28c", HOOK, "a FUNDED BUYOUT does not settle the seats behind it",
+     "            _settleAhead(rankOfId(seatId));\n            _settleBehind(rankOfId(seatId));",
+     "            _settleAhead(rankOfId(seatId));"),
+    ("M29b", HOOK, "settleBehind skips a seat when a foreclosure slides the ranks up under it",
+     "            _settleSeat(_idAt(before, i));\n            if (order == before) i++;\n        }\n    }",
+     "            _settleSeat(_idAt(before, i));\n            i++;\n        }\n    }"),
 
     # ------------------------------------------------------------------ self-price / firm quote
     ("M30", HOOK, "repricing does not settle first (the raise is retroactive)",

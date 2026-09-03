@@ -352,6 +352,36 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     /// @dev Four numbers, and every one of them is set by the seat's own holder. There is no mark,
     ///      no oracle, no collateral and no liquidation anywhere in this struct or anything that
     ///      touches it — see `_settleSeat` for why foreclosure is a DEMOTION and not a seizure.
+    /// @notice **THE FIVE GOVERNANCE DIALS, IN ONE ARGUMENT.**
+    ///
+    /// @dev They were five loose `uint256` parameters until Phase 12, and the constructor was
+    ///      ALREADY at Solidity's ABI-decoder stack limit — the comment on `_mintRoster` records
+    ///      that it was split out of the constructor "for the STACK, not for tidiness", because
+    ///      "one more live slot and the ABI decoder's `headStart` goes too deep to reach". Adding
+    ///      `minTenure` as a twelfth parameter did exactly that, and the failure is a `Stack too
+    ///      deep` at COMPILE time with no hint about which parameter caused it.
+    ///
+    ///      A struct decodes as ONE memory pointer instead of five stack slots, so this removes the
+    ///      cliff rather than stepping back from it — the next dial after `minTenure` costs nothing.
+    ///      It also NAMES the arguments at every call site, which eleven positional `uint256`s did
+    ///      not: this repo shipped a stale permission mask once because a positional constant was
+    ///      copied rather than derived (PITFALLS 5.82), and that is the same hazard one field over.
+    ///
+    ///      **These are GOVERNANCE PARAMETERS, not discovered constants.** They are immutable
+    ///      because a rent rate somebody can change afterwards is a rate nobody can price against.
+    struct Governance {
+        /// @dev τ, in basis points per `rentPeriod`.
+        uint256 rentBps;
+        /// @dev The period τ is quoted against. Seconds, never blocks.
+        uint256 rentPeriod;
+        /// @dev How long a posted self-price stays binding after it is changed.
+        uint256 firmWindow;
+        /// @dev φ — the share of the LP fee the filled seats hand backward.
+        uint256 premiumBps;
+        /// @dev The TERM: how long a seat may not voluntarily give up its rank. See `MIN_TENURE`.
+        uint256 minTenure;
+    }
+
     struct Lease {
         /// @dev The holder's own assessment, in `currency0`. Rent is charged on it and the seat is
         ///      always for sale at it. Zero is a legal assessment and means "free to take".
@@ -364,6 +394,19 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         uint256 escrow;
         uint64 firmUntil;
         uint64 lastSettled;
+        /// @dev **WHEN THIS SEAT'S TERM STARTED.** Stamped when the seat is funded FROM EMPTY and
+        ///      when it changes hands — the two moments somebody takes on the position — and read
+        ///      only by `withdraw`. See `MIN_TENURE`.
+        ///
+        ///      A TOP-UP OF AN ALREADY-FUNDED SEAT DOES NOT RESTAMP IT, deliberately. Re-arming the
+        ///      term on every deposit would lock an honest LP indefinitely by their own good
+        ///      behaviour. **That claim is asserted, not merely written here:** the unconditional
+        ///      stamp SURVIVED the first negative-control run, and `Evacuation.t.sol::test_8_22`
+        ///      was written for it (campaign case `M29e`).
+        ///
+        ///      It shares a slot with `firmUntil` and `lastSettled` (3 x uint64 + uint8 = 200 bits),
+        ///      so it costs no additional storage word.
+        uint64 tenureFrom;
         /// @dev **THE RANK THIS SEAT WAS PRICED AT.** Stamped wherever a self-price is written, and
         ///      nowhere else — so it costs no extra `SSTORE` (it shares the slot `lastSettled` is
         ///      already written in) and it cannot drift from the price it describes.
@@ -396,6 +439,39 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     ///      reactively repricing out of a buyout they can see coming, which would defeat the only
     ///      property Harberger has.
     uint256 public immutable FIRM_WINDOW;
+
+    /// @notice **THE TERM. How long a seat is a COMMITMENT rather than a position.**
+    ///
+    /// @dev A seat may not VOLUNTARILY give up its rank until `MIN_TENURE` has elapsed since it was
+    ///      funded from empty or last changed hands. `withdraw` is the only voluntary path and it
+    ///      demotes on any payout, so this is enforced there and nowhere else.
+    ///
+    ///      **WHY IT EXISTS, STATED AS THE ATTACK IT ANSWERS.** `test_8_20` executes the manoeuvre:
+    ///      one wei of withdrawal moves a seat to the TAIL, carrying its contributed depth intact,
+    ///      and promotes an unconsenting seat into the rank it left. Our own economics make that a
+    ///      strict upgrade in every regime measured — at the shipped φ the tail beats rank 2 by
+    ///      +0.6 pp benign, +1.3 pp normal and +3.0 pp toxic. So without a term, a holder who sees
+    ///      an adverse swap coming steps out of the front for the price of gas and puts somebody
+    ///      else in it. **Subordination that can be dropped the instant it is about to cost
+    ///      something is not subordination.**
+    ///
+    ///      **WHAT IT DOES NOT DO, AND THIS IS NOT A HEDGE.** It does not stop a holder whose term
+    ///      has already elapsed from stepping aside. Nothing mechanical can: Phase 10 reached the
+    ///      same wall on the sibling attack — *no rule can claw back a loss the attacker never
+    ///      took*. What prices THAT is Harberger, not a lock: the seat you land on is worth more
+    ///      than the number you posted for the rank you left, and for `FIRM_WINDOW` you are
+    ///      takeable at the old number. The term closes the FREE case; the market prices the rest.
+    ///      `test_8_4` asserts BOTH halves so neither can be quoted alone.
+    ///
+    ///      **IT IS NOT A LOCKUP OF CAPITAL — IT IS A LOCKUP OF RANK, AND THERE IS ALWAYS AN EXIT.**
+    ///      A locked holder can still be bought out at their own posted price, in any block, by
+    ///      anyone (`test_8_21` claim 3). Posting a low price is how you leave in a hurry, and it
+    ///      costs you exactly what the rank is worth — set by the holder rather than by us.
+    ///
+    ///      Involuntary rank loss is UNAFFECTED — foreclosure and buyout both demote a seat that is
+    ///      inside its term. §B.8 requires the evacuation path to be unblockable, because a revert
+    ///      there hands every incumbent a veto on their own buyout.
+    uint256 public immutable MIN_TENURE;
 
     /// @dev What the buyer just paid, handed to `_onSeatTransfer` so the firm quote can be armed at
     ///      it. TRANSIENT, so a plain `transfer` reads zero without anyone having to remember to
@@ -494,6 +570,9 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     /// @dev Rule A of PITFALLS 5.123(b): a seat whose rank improved in THIS block cannot be taken
     ///      at the price its holder set for the worse rank. See `_buySeat`.
     error SeatWasJustPromoted(uint256 seatId, uint256 rank, uint256 rankAtPrice);
+    /// @dev `withdraw` refused: the seat is inside its term. `unlockAt` is when it may leave.
+    error SeatWithinTerm(uint256 seatId, uint256 unlockAt, uint256 nowAt);
+    error BadTenure(uint256 minTenure, uint256 rentPeriod);
     /// @dev The buyer named the worst rank they would accept and the seat is behind it. See
     ///      `buySeatAndFund`.
     error RankBelowMinimum(uint256 seatId, uint256 rank, uint256 maxRank);
@@ -568,10 +647,7 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         int24 tickSpacing,
         int24 bandHalfWidth,
         address[] memory foundingRoster,
-        uint256 rentBps,
-        uint256 rentPeriod,
-        uint256 firmWindow,
-        uint256 premiumBps
+        Governance memory g
     ) BaseHook(pm) {
         expected0 = currency0;
         expected1 = currency1;
@@ -587,8 +663,8 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // arithmetic. They are not taste: an unbounded `firmWindow` makes a seat unbuyable forever
         // at a stale price, and an unbounded `rentPeriod` makes rent unpayably slow.
         if (
-            rentBps > Rent.MAX_BPS || rentPeriod == 0 || rentPeriod > 3650 days || firmWindow == 0
-                || firmWindow > 365 days
+            g.rentBps > Rent.MAX_BPS || g.rentPeriod == 0 || g.rentPeriod > 3650 days || g.firmWindow == 0
+                || g.firmWindow > 365 days
         ) revert BadRentParameters();
 
         // The band must be at least one spacing wide (a zero-width position holds nothing and
@@ -603,13 +679,17 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // that to give. A φ over 100% would credit a filled seat LESS than the marginal price it
         // absorbed — the seat would pay to be filled, which is not a price for rank, it is a
         // penalty for trading, and it makes the head's optimal play "hold no inventory".
-        if (premiumBps > 10_000) revert BadPremium(premiumBps);
-        PREMIUM_BPS = premiumBps;
+        if (g.premiumBps > 10_000) revert BadPremium(g.premiumBps);
+        PREMIUM_BPS = g.premiumBps;
 
         BAND_HALF_WIDTH = bandHalfWidth;
-        RENT_BPS = rentBps;
-        RENT_PERIOD = rentPeriod;
-        FIRM_WINDOW = firmWindow;
+        RENT_BPS = g.rentBps;
+        RENT_PERIOD = g.rentPeriod;
+        FIRM_WINDOW = g.firmWindow;
+        // A term longer than one whole billing cycle of the market that is meant to price the seat
+        // makes the Harberger escape valve useless. Refused here rather than discovered.
+        if (g.minTenure > g.rentPeriod) revert BadTenure(g.minTenure, g.rentPeriod);
+        MIN_TENURE = g.minTenure;
 
         _mintRoster(foundingRoster);
     }
@@ -634,6 +714,10 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
             // seat has no retroactive claim and needs no initialising write.
             q.push(Seat({a0: 0, a1: 0, snap0: 0, snap1: 0, liquidity: 0}));
             _mintSeat(holder, i);
+            // The founding roster's term starts at deployment. A founding seat is EMPTY, so its
+            // first funding restamps this anyway; stamping here keeps an unfunded seat off a zero
+            // timestamp that would read as "term expired in 1970".
+            lease[i].tenureFrom = uint64(block.timestamp);
             // The founding order is the identity permutation: seat i starts at rank i. Every seat
             // starts UNPRICED, which under Harberger means free to take — see `buyPrice`.
             ord |= i << (8 * i);
@@ -1729,6 +1813,12 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         standing0 += amount0;
         standing1 += amount1;
         if (dl != 0) {
+            // **THE TERM STARTS WHEN A SEAT IS FUNDED FROM EMPTY, AND ONLY THEN.** See
+            // `Lease.tenureFrom` for why a top-up must not restamp it. `s.liquidity` is read BEFORE
+            // the addition, so "from empty" means the seat contributed no depth a moment ago —
+            // which is the state a fresh position, a refunded evacuation and a just-transferred
+            // seat are all in.
+            if (s.liquidity == 0) lease[seatId].tenureFrom = uint64(block.timestamp);
             s.liquidity += dl;
             standingL += dl;
         }
@@ -1860,7 +1950,24 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
         // and the adjustment is exact in both directions — a seat below a cursor holds zero of that
         // token by INVARIANT C, so the seats that shift down past it were zero too, and a seat at
         // or above the cursor moves nothing the cursor describes.
-        if (p0 != 0 || p1 != 0) _demoteToTail(seatId);
+        if (p0 != 0 || p1 != 0) {
+            // **THE TERM (`MIN_TENURE`), ENFORCED AT THE ONE VOLUNTARY EXIT.** Read the full
+            // argument on `MIN_TENURE`; in one line: a payout gives up the rank, and giving up a
+            // rank is an UPGRADE under this mechanism, so without a term a holder steps out of the
+            // front for the price of gas the moment it is about to cost them something.
+            //
+            // Checked HERE, on the demotion, rather than at the top of the function: a withdrawal
+            // that pays nothing changes no rank and must stay callable, and a request clamped to
+            // zero by dust policy F1 must not be punished as an exit attempt (`test_8_21` claim 2,
+            // campaign case `M29f`).
+            //
+            // Foreclosure and `buySeat` do NOT consult this. Rank loss they impose is involuntary,
+            // and §B.8 requires the evacuation path to stay unblockable or every incumbent gets a
+            // veto on their own buyout.
+            uint256 unlockAt_ = uint256(lease[seatId].tenureFrom) + MIN_TENURE;
+            if (block.timestamp < unlockAt_) revert SeatWithinTerm(seatId, unlockAt_, block.timestamp);
+            _demoteToTail(seatId);
+        }
 
         _send(msg.sender, p0, p1);
     }
@@ -3177,6 +3284,15 @@ contract QueueHook is BaseHook, QueueSeats, IUnlockCallback {
     {
         Lease storage l = lease[seatId];
         return (l.selfPrice, l.escrow, l.firmPrice, l.firmUntil, l.lastSettled);
+    }
+
+    /// @notice When this seat may next voluntarily give up its rank — the end of its TERM.
+    ///
+    /// @dev A separate view rather than a sixth return on `leaseOf`, because `leaseOf`'s tuple is
+    ///      destructured positionally in dozens of places and growing it is a silent, wide-radius
+    ///      edit. This answers the question a frontend and a prospective buyer actually ask.
+    function unlockAt(uint256 seatId) external view returns (uint256) {
+        return uint256(lease[seatId].tenureFrom) + MIN_TENURE;
     }
 
     /// @notice Rent this seat has accrued but not yet paid. Uncapped by the escrow on purpose: the

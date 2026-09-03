@@ -908,6 +908,15 @@ contract QueueHandler is CommonBase, StdCheats, StdUtils {
             // listed: this handler always passes `type(uint256).max` through the three-argument
             // `buySeat`, so that guard cannot fire here and listing it would hide a real defect.
             || sel == QueueHook.SeatWasJustPromoted.selector
+            // **A SEAT INSIDE ITS TERM CANNOT VOLUNTARILY GIVE UP ITS RANK** (`MIN_TENURE`). A
+            // REFUSAL, not a defect: the handler funds seats from empty during the campaign, which
+            // arms a fresh term, and `warp` then decides whether it has elapsed. Listing it is what
+            // keeps I7 meaningful — an unlisted expected revert makes I7 fire on correct behaviour
+            // and teaches whoever sees it to widen the list, which is how a real defect gets waved
+            // through. What stops the listing from hiding a term that refuses EVERYTHING is the
+            // coverage floor already in `Invariant.t.sol`: `calls["withdraw"] > 0` counts only
+            // withdrawals that actually landed, so a term that blocked them all goes red there.
+            || sel == QueueHook.SeatWithinTerm.selector
             // v4's own refusals on a degenerate swap: a zero specified amount, and a swap large enough
             // to walk the price out of the usable tick range. Both are the ROUTER refusing, not the
             // hook, and neither is reachable through any hook-controlled input.

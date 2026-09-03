@@ -29,11 +29,8 @@ contract QueueHarness is QueueHook {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHook(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHook(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     /// @dev TEST-ONLY. `_afterInitialize` now snaps a ±10% Uniswap band. Tests written against
     ///      a full-range blob (reentrancy, packing fuzz that walks the whole curve) call this

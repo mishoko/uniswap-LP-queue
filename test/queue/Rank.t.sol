@@ -27,11 +27,8 @@ contract ForgetfulTransferFromHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function transferFrom(address sender, address receiver, uint256 seatId, uint256) public override returns (bool) {
         if (seatHolder[seatId] != sender) revert NotSeatOwner(seatId, sender);
@@ -54,11 +51,8 @@ contract MintingDepositHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function deposit(uint256 amount0, uint256 amount1) external returns (uint256 seatId) {
         seatId = q.length;
@@ -84,11 +78,8 @@ contract LedgerOnlyEvacuationHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function _onSeatTransfer(uint256 seatId, address from) internal override {
         Seat storage s = q[seatId];
@@ -113,11 +104,8 @@ contract UnguardedTransferHook is QueueHarness {
         int24 sp,
         int24 bhw,
         address[] memory roster,
-        uint256 rb,
-        uint256 rp,
-        uint256 fw,
-        uint256 pb
-    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, rb, rp, fw, pb) {}
+        QueueHook.Governance memory g
+    ) QueueHarness(pm, c0_, c1_, f, sp, bhw, roster, g) {}
 
     function transfer(address receiver, uint256 seatId, uint256 amount) public override returns (bool) {
         if (seatHolder[seatId] != msg.sender) revert NotSeatOwner(seatId, msg.sender);
@@ -158,6 +146,13 @@ contract SeatReentrancyAttacker {
     QueueHarness public immutable hook;
     uint256 public immutable seatId;
     bool public reentryRefused;
+    /// @dev **WHICH error refused the reentry, not merely that one did.** Phase 12 added
+    ///      `MIN_TENURE`, and the rig's seat was funded from empty a moment earlier — so for one
+    ///      commit `reentryRefused` was true because the seat was inside its TERM, and the
+    ///      production arm of `test_3_12` passed while proving nothing about the reentrancy guard
+    ///      it is named after. That is AGENTS §3 LAW 2 exactly: a control that fails for an
+    ///      unrelated reason proves nothing. The selector is captured so it cannot happen again.
+    bytes4 public refusalSelector;
 
     constructor(QueueHarness h, uint256 id) {
         hook = h;
@@ -194,8 +189,9 @@ contract SeatReentrancyAttacker {
         // written here dies with the transaction if the outer call later reverts. So the control
         // asserts the difference that IS observable: whether the outer transfer completes.
         try hook.withdraw(seatId, 0, a1) {}
-        catch {
+        catch (bytes memory e) {
             reentryRefused = true;
+            if (e.length >= 4) refusalSelector = bytes4(e);
         }
     }
 }
@@ -804,6 +800,11 @@ contract RankTest is QueueFixture {
         vm.prank(address(atkA));
         atkA.sellSeat(DAVE);
         assertTrue(atkA.reentryRefused(), "production did not refuse the reentrant withdrawal");
+        assertEq(
+            atkA.refusalSelector(),
+            QueueSeats.Reentrancy.selector,
+            "production refused the reentry for the WRONG reason: this control is not testing the guard"
+        );
 
         (, uint256 pendA) = hook.pendingOf(address(atkA));
         assertEq(_bal(c1, address(atkA)) + pendA, owedA, "production paid the seller something other than the seat");
@@ -912,6 +913,13 @@ contract RankTest is QueueFixture {
 
         (, uint256 f1) = hook.floats();
         require(f1 > 100e18, "rig drifted: the float cannot cover the reentrant leg");
+
+        // **SERVE THE TERM BEFORE ARMING.** Both seats were just funded from empty, which arms a
+        // fresh `MIN_TENURE`. Without this the reentrant `withdraw` below is refused by the TERM
+        // rather than by the reentrancy guard, and the control silently stops controlling — see
+        // `SeatReentrancyAttacker.refusalSelector`. No self-price exists yet, so warping here
+        // accrues no rent and changes no other number in this rig.
+        vm.warp(block.timestamp + MIN_TENURE + 1);
 
         (, seatValue) = hook.seat(0);
         if (arm) evil.arm(address(atk));
