@@ -54,12 +54,12 @@ not quotable.
           ▼
      ┌──────────┐   ┌────────┐   ┌──────┐   ┌────┐   ┌──┐
      │  RANK 1  │──▶│ RANK 2 │──▶│ RANK3│──▶│ R4 │──▶│R5│
-     │  33% of  │   │        │   │      │   │    │   │  │
+     │  45% of  │   │  22%   │   │ 16.5%│   │11% │   │5%│
      │  the book│   │        │   │      │   │    │   │  │
      └──────────┘   └────────┘   └──────┘   └────┘   └──┘
-       filled by      reached      rarely     almost never
-       ~96% of        by large     reached    reached
-       all trades     trades
+      filled by       reached      reached    reached    reached on
+      EVERY trade     on every     on 92%     on 26%     26% of paths
+      (111 turns)     trade        of paths   of paths   (0.09 turns)
 
        ▲                                              ▲
        │                                              │
@@ -121,14 +121,24 @@ fixture:
               r₁ = the front seat's realised return
               LP = what a passive pro-rata LP made on the same path
 
-        At the SHIPPED c₁ = 1/3:
+        At the SHIPPED c₁ = 45%:   0.45 / 0.55  =  0.818
         ────────────────────────────────────────────────────────────
-        ONE POINT the front gives up  buys the back  EXACTLY HALF A POINT.
+        ONE POINT the front gives up buys the back  0.82 OF A POINT.
         100% efficient. Zero leakage. Zero creation.
+
+        The back gets LESS than a point because there is more capital
+        behind the front than in it — the same dollars, spread wider.
+        (At the old c₁ = 1/3 the ratio was exactly 0.5.)
 ```
 
-**Verified against simulation on the contract's real premium rule, all three regimes:**
-closed form `+0.87 / +1.44 / +0.77 pp` against simulated `+0.87 / +1.47 / +0.73 pp`.
+**Verified against simulation on the contract's real premium rule, all three regimes** — and this is
+an independent check, because the closed form knows nothing about the allocator:
+
+```
+                        BENIGN     NORMAL      TOXIC
+   closed form          +2.65 pp   +2.26 pp   +1.11 pp
+   simulated            +2.66 pp   +2.26 pp   +1.17 pp
+```
 
 ---
 
@@ -144,7 +154,10 @@ closed form `+0.87 / +1.44 / +0.77 pp` against simulated `+0.87 / +1.47 / +0.73 
 ### What QUEUE offers instead
 
 * The protocol posts **its own capital at the FRONT** and accepts the worse fills.
-* External LPs fund the **BACK** and out-earn passive LPing.
+* External LPs fund the **BACK**. They are filled last, so they trade LESS than a plain LP — and
+  a coupon paid forward out of the front seat's fees more than compensates them for it. **They
+  are not better LPs; they are LPs who are PAID to stand behind someone.** §6B proves this with
+  a φ = 0 control in which they collapse.
 * **Nothing is printed. Nobody is diluted. The protocol keeps its capital** — it simply earns less
   on it, on purpose.
 * **It is not a promise.** It is the order the contract fills people in, executed inside `swap`.
@@ -155,63 +168,71 @@ closed form `+0.87 / +1.44 / +0.77 pp` against simulated `+0.87 / +1.47 / +0.73 
 ```
    SETUP — the roster QueueDeployBase actually deploys
    ─────────────────────────────────────────────────────────────────────────
-   $1,000,000 book · 5 seats · capital weights 5:4:3:2:1 · band ±10% · fee 0.30%
+   $1,000,000 book · 5 seats · capital 90:44:33:22:11 · band ±10% · fee 0.30%
 
         PROTOCOL TREASURY            EXTERNAL LPs
-             $333,333                   $666,667
-           (c₁ = 1/3)              (ranks 2,3,4,5)
+             $450,000                   $550,000
+            (c₁ = 45%)              (ranks 2,3,4,5)
                 │                         │
                 ▼                         ▼
         ┌───────────────┐   ┌──────┬──────┬──────┬──────┐
         │    RANK 1     │──▶│ R2   │ R3   │ R4   │ R5   │
-        │  first-loss   │   │$266k │$200k │$133k │ $67k │
+        │  first-loss   │   │$220k │$165k │$110k │ $55k │
         └───────────────┘   └──────┴──────┴──────┴──────┘
 
 
-   OVER ONE 61-DAY BAND, BENIGN CONDITIONS (φ = 5,100, contract basis)
+   OVER ONE 61-DAY BAND, BENIGN CONDITIONS (φ = 5,500, contract basis)
    ─────────────────────────────────────────────────────────────────────────
    A passive pro-rata LP on the same path returns              +5.02%
 
-        RANK 1  realises  +3.28%   →  gives up  1.74 pp  →  −$5,800
-        RANKS 2–5 realise +5.89%   →  gain      0.87 pp  →  +$5,800
-                                                             ═══════
-                                     net created                  $0
+        RANK 1  realises  +1.78%  →  gives up 3.24 pp  →  −$14,604
+        RANKS 2-5 realise +7.68%  →  gain     2.66 pp  →  +$14,603
+                                                          ═════════
+                                     net created                 −$0
 ```
 
-**The two figures are equal because they must be.** 1.74% of $333,333 and 0.87% of $666,667 are the
-same $5,800. That is the identity in §3, in dollars.
+**The two figures are equal because they must be.** 3.24% of $450,000 and 2.66% of $550,000 are the
+same $14,604. That is the identity in §3, in dollars.
 
 ### Annualised, and compared honestly against emissions
 
 ```
    61-day band → ~6 bands a year
 
-   COST TO THE PROTOCOL      $5,800 × 6  =  ~$34,700/yr
-                             on its own $333,333  =  10.4%/yr of its capital
+   WHAT THE EXTERNAL LPs RECEIVE     +$87,624/yr on $550,000 of TVL
+                                      = a +15.9% APR UPLIFT over the pool
+                                        next door
 
-   BENEFIT TO EXTERNAL LPs   +0.87 pp × 6  =  ~+5.2%/yr
-                             on $666,667 of external TVL
+   COST TO THE PROTOCOL, GROSS       −$87,624/yr, on its own $450,000
+                                      = 19.5%/yr of its capital
+   LESS RENT IT COLLECTS BACK        +$18,936/yr  (Harberger equilibrium,
+                                      §6C — the back pays the front)
+                                     ─────────────
+   NET COST OF THE PROGRAMME         −$68,688/yr  = 15.3% of its capital
 
-   THE SAME BOOST VIA EMISSIONS would cost ~$34,700/yr of printed tokens.
+
+   BUYING THAT SAME +15.9% UPLIFT WITH EMISSIONS costs ~$87,624/yr of
+   printed tokens.
    ─────────────────────────────────────────────────────────────────────────
-   SO: QUEUE IS NOT CHEAPER. IT IS THE SAME DOLLAR NUMBER, PAID DIFFERENTLY.
+   ▶ SO QUEUE IS ~22% CHEAPER IN CASH — and that is the SMALLER half of
+     the argument. The bigger half is WHAT KIND of cost it is:
 
-     emissions            QUEUE
-     ─────────            ─────
-     dilutes holders      no dilution
-     creates sell         no new supply
-       pressure
-     zero capital         requires ~$333k of REAL capital, locked in a
-       required             fixed band
-     reversible by a      mechanical — enforced in the fill order
-       vote
-     capital leaves       capital stays until the band is redeployed
-       when it stops
+     emissions                      QUEUE
+     ─────────                      ─────
+     dilutes every holder           nobody is diluted
+     permanent new sell pressure    no new supply, ever
+     value is issued away and       the cost is OPPORTUNITY COST on capital
+       never comes back               the treasury STILL OWNS
+     zero capital required          requires ~$450k of REAL capital locked
+                                      in a fixed band
+     reversible by a vote           mechanical — enforced in the fill order
+     capital leaves when it stops   capital stays until the band is redeployed
 ```
 
-**We are stating clearly:** the case for QUEUE over emissions is *not*
-cost. It is **no dilution, no sell pressure, and the subsidy being an invariant rather than a
-promise** — bought at the price of locking real treasury capital.
+**Said plainly, because the older version of this section said the opposite:** QUEUE is now
+*cheaper* than emissions as well as cleaner — but **only when the seats are contested.** If nobody
+bids for a seat, no rent flows, and the sponsor pays the full $87,624/yr. §6C gives both bookends
+and refuses to quote only the flattering one.
 
 ---
 
@@ -253,237 +274,322 @@ position at one distance*.** That ordering is what makes contract-enforced subor
 
 ## 6. THE NUMBERS — shipped configuration only
 
-**Fixture, stated once and true of every row:** 5 seats, capital 5:4:3:2:1, $333,333 head
-(c₁ = 1/3), $1,000,000 book, band ±10%, fee 0.30%, retail flow 15/hr, 4 disjoint seed ranges × 30 =
-120 paths per cell, **φ = 5,100**, premium weighted by **contributed liquidity with the payers
-excluded — the rule the contract implements**. Source: `docs/research/seat-economics/results-shipping-basis.txt`.
+**Fixture, stated once and true of every row:** 5 seats, capital **90 : 44 : 33 : 22 : 11** on a
+$1,000,000 book (head $450,000, **c₁ = 45%**), band ±10%, fee 0.30%, retail flow 15/hr, 4 disjoint
+seed ranges × 30 = 120 paths per cell, **φ = 5,500**, premium weighted by **contributed liquidity
+with the payers excluded — the rule the contract implements**. Source:
+`docs/research/seat-economics/results-shipped45.txt`.
 
-| regime | band life | passive LP | rank 1 | front gives up | ranks 2–5 gain | outcomes beating LP |
+| regime | band life | passive LP | rank 1 | front gives up | ranks 2–5 gain | worst back seat, t |
 |---|---|---|---|---|---|---|
-| **Benign** | 61.0 d | +5.02% | +3.28% | **−1.74 pp** | **+0.87 pp** | 68.1% |
-| **Normal** | 19.1 d | +0.49% | −2.40% | **−2.89 pp** | **+1.47 pp** | 84.8% |
-| **Toxic** | 1.4 d | −2.17% | −3.70% | **−1.53 pp** | **+0.73 pp** | 75.8% |
+| **Benign** | 61.0 d | +5.02% | +1.78% | **−3.24 pp** | **+2.66 pp** | +8.2 |
+| **Normal** | 19.1 d | +0.49% | −2.27% | **−2.76 pp** | **+2.26 pp** | +6.6 |
+| **Toxic** | 1.4 d | −2.17% | −3.53% | **−1.36 pp** | **+1.17 pp** | +5.4 |
 
-*"Outcomes beating LP" is the fraction of individual (path, seat) results in ranks 2–5 that beat a
-pro-rata LP, at the φ = 5,000 grid point. **It is not 100%, and we do not say it is.***
+*The last column is the **paired** t-statistic of the worst-performing back seat against a plain
+pro-rata LP in that regime — the queue run and the LP run share a seed and therefore a
+bit-identical price path. **Every back seat clears in every regime, and the tightest margin is
+still t = +5.4.** At the old 33.3% head the toxic column had no working φ at all.*
+
+**But read §6B before quoting any of this.** The back seats' gain is a **coupon**, not better
+trading: strip the premium and they fall 4.6–5.0 pp *below* a plain LP.
 
 ### The premium rate, and how it was chosen
 
-`PREMIUM_BPS` is the share of the fee the front seat hands backward. Two constraints, solved rather
-than swept for a nice number:
+`PREMIUM_BPS` (φ) is the share of the LP fee a **filled** seat hands **backward** to the seats it
+did not reach. It was solved for, not swept for a nice number: two constraints have to hold at once
+in **every** regime, and the shipped 5,500 is the midpoint of what survives.
 
 ```
-   the BACK needs φ high enough to beat a passive LP        →  φ ≥ 4,542
-   the FRONT needs φ low enough to still beat its own
-     cheapest alternative (a keeper-managed ATM range)      →  φ ≤ 5,670
-                                                               ────────────
-   feasible window [4542, 5670]  ·  midpoint  ·  SHIPPED φ = 5,100
+   the BACK needs φ HIGH enough that every back seat beats a plain LP    →  φ ≥ 3,777
+   the FRONT needs φ LOW enough that the sponsor still beats ITS OWN
+     best alternative — a keeper-managed ATM range, gas itemised        →  φ ≤ 7,340
+                                                                           ─────────────
+   all-regime window [3777, 7340]  ·  midpoint  ·  SHIPPED φ = 5,500
 ```
 
-**The sensitivity that decides the product, and we state it ourselves:** hold the front to the
-*passive-LP* bar instead of the managed-range bar and it falls below at 4,317 — under the 4,542 the
-back needs — so **both windows are empty and no shipping constant exists**. The window is non-empty
-only because re-anchoring is worth something to the front. What that costs to replicate is measured;
-**what a buyer would pay for it is not, and no simulator can say.**
+**§6E has the full sweep, the head shares that produce no window at all, and — the part that
+matters — why the 40% head was rejected even though its point estimate crosses.**
+
+**The sensitivity that decides the product, and we state it ourselves:** the upper bound exists only
+because *re-anchoring is worth something to the front.* Hold the front to the **passive-LP** bar
+instead of the managed-range bar and the ceiling collapses. What the managed alternative costs to
+replicate is measured; **what a buyer would pay for the seat is not simulated at all — it is set by
+the on-chain seat market, and §6C explains why that is a feature rather than a gap.**
 
 ---
 
 ## 6B. WHAT EACH SEAT EARNS — the per-seat P&L, in dollars
 
-**This is the table the whole product stands on.** Fixture stated once and true of every row: 5
-seats, capital 5:4:3:2:1 on a $1,000,000 book, band ±10%, fee 0.30%, φ = 5,100, **BENIGN** regime,
-61-day band. Source: `docs/research/seat-economics/results-shipping-basis.txt`. The benchmark is
-**the same capital in an ordinary pro-rata Uniswap position on the same pair, band and path** —
-"going elsewhere" — which returned **+5.02%** over that band.
+**This is the table the whole product stands on.** Fixture stated once and true of every row:
+**5 seats, capital 90 : 44 : 33 : 22 : 11 on a $1,000,000 book** (so the head is $450,000 = **c₁ =
+45%**), band ±10%, fee 0.30%, **φ = 5,500**, premium weighted on the basis the contract actually
+implements (`liquidity_excl`), 120 paths per cell. Source:
+`docs/research/seat-economics/results-shipped45.txt`. The benchmark is **the same capital in an
+ordinary pro-rata Uniswap position on the same pair, band and price path** — "going elsewhere".
 
 ```
-  ┌────────┬───────────┬────────┬───────────┬───────────┬────────────┬──────────┐
-  │  SEAT  │  CAPITAL  │  RATE  │ $ EARNED  │ $ AS A    │  DIFFERENCE│  BEATS   │
-  │        │           │        │           │ PLAIN LP  │            │ PLAIN LP?│
-  ├────────┼───────────┼────────┼───────────┼───────────┼────────────┼──────────┤
-  │ RANK 1 │  $333,333 │ +3.28% │   $10,933 │   $16,733 │    -$5,800 │  NO — by │
-  │        │           │        │           │           │            │  DESIGN  │
-  ├────────┼───────────┼────────┼───────────┼───────────┼────────────┼──────────┤
-  │ RANK 2 │  $266,667 │ +5.50% │   $14,667 │   $13,387 │    +$1,280 │   YES    │
-  │ RANK 3 │  $200,000 │ +5.90% │   $11,800 │   $10,040 │    +$1,760 │   YES    │
-  │ RANK 4 │  $133,333 │ +6.00% │    $8,000 │    $6,693 │    +$1,307 │   YES    │
-  │ RANK 5 │   $66,667 │ +6.10% │    $4,067 │    $3,347 │      +$720 │   YES    │
-  ├────────┼───────────┼────────┼───────────┼───────────┼────────────┼──────────┤
-  │ TOTAL  │$1,000,000 │        │           │           │        ~$0 │          │
-  └────────┴───────────┴────────┴───────────┴───────────┴────────────┴──────────┘
-   The column sums to -$733 rather than to exactly $0 because the published per-seat
-   rates are rounded to 0.1pp. The identity itself is exact: the capital-weighted mean
-   IS the LP return, measured residual 2.98e-14. Do not read the -$733 as leakage.
+  BENIGN — a calm 61-day band. Passive pro-rata LP returns +5.02%.
+  ┌──────┬───────────┬────────┬──────────┬──────────┬──────────┬───────┬────────┐
+  │ SEAT │  CAPITAL  │ RETURN │ $ EARNED │ $ AS A   │DIFFERENCE│ TURNS │ FILLED │
+  │      │           │        │          │ PLAIN LP │          │       │        │
+  ├──────┼───────────┼────────┼──────────┼──────────┼──────────┼───────┼────────┤
+  │RANK 1│  $450,000 │ +1.78% │  +$8,230 │ +$22,833 │ -$14,604 │111.57 │  100%  │
+  ├──────┼───────────┼────────┼──────────┼──────────┼──────────┼───────┼────────┤
+  │RANK 2│  $220,000 │ +7.29% │ +$16,187 │ +$11,163 │  +$5,024 │  2.22 │  100%  │
+  │RANK 3│  $165,000 │ +7.97% │ +$13,238 │  +$8,372 │  +$4,866 │  1.52 │  100%  │
+  │RANK 4│  $110,000 │ +7.84% │  +$8,671 │  +$5,582 │  +$3,089 │  0.80 │   92%  │
+  │RANK 5│   $55,000 │ +7.99% │  +$4,415 │  +$2,791 │  +$1,624 │  0.09 │   26%  │
+  ├──────┼───────────┼────────┼──────────┼──────────┼──────────┼───────┼────────┤
+  │TOTAL │$1,000,000 │ +5.02% │ +$50,741 │ +$50,741 │      -$0 │       │        │
+  └──────┴───────────┴────────┴──────────┴──────────┴──────────┴───────┴────────┘
+   TURNS = how many times the seat's own capital was traded through.
+   FILLED = the share of the 120 paths on which the seat was reached at all.
+   ▶ READ THE RETURN AND THE TURNOVER TOGETHER, NEVER THE RETURN ALONE.
 ```
 
-### The same table annualised, and what a seat is actually worth
+### ⚠ WHERE THE BACK SEATS' MONEY ACTUALLY COMES FROM — read this before quoting any row above
+
+The rows above are true and they are **not** what a reader assumes. A seat's edge over a plain LP
+splits **exactly** into two legs, as an identity rather than an inference:
 
 ```
-   ~6 benign bands a year
-   ─────────────────────────────────────────────────────────────────────
-     RANK 1   -$34,800/yr   =  -10.4%/yr  on its own capital
-     RANK 2    +$7,680/yr   =   +2.9%/yr  ON TOP OF an ordinary LP
-     RANK 3   +$10,560/yr   =   +5.3%/yr  ON TOP OF an ordinary LP
-     RANK 4    +$7,840/yr   =   +5.9%/yr  ON TOP OF an ordinary LP
-     RANK 5    +$4,320/yr   =   +6.5%/yr  ON TOP OF an ordinary LP
-   ─────────────────────────────────────────────────────────────────────
-   ▶ SO THE PITCH TO AN EXTERNAL LP IS: the same pair, the same band, the
-     same fee tier, +2.9% to +6.5% a year MORE than the pool next door —
-     paid by a named counterparty who volunteered, not by a token print.
+        edge  =  ACTIVITY  +  COUPON
+
+   ACTIVITY  what the seat earned by TRADING — its own fills and its own
+             inventory markout — measured against the plain LP.
+   COUPON    the premium φ handed BACKWARD to it by the seats in front
+             that were filled and it was not.
 ```
 
-**Annualisation assumes the band is redeployed when it dies.** `recenter()` is deliberately
-unshipped (§7 of `PITFALLS`), so redeployment is manual today. We do **not** annualise the NORMAL
-and TOXIC regimes: their bands die in 19 and 1.4 days, so multiplying them by 19 and 260 would
-produce enormous numbers that assume a redeployment loop nobody has built.
-
-### Are they motivated in every regime? Three of the four back seats, yes. One, no.
-
 ```
-              BENIGN      NORMAL      TOXIC        BEATS A PLAIN LP IN…
-   LP bar     +5.02%      +0.49%      -2.17%              —
-   ────────────────────────────────────────────────────────────────────
-   RANK 1     +3.28%      -2.40%      -3.70%        0 of 3   ON PURPOSE
-   RANK 2     +5.50%      +1.50%      -2.50%        2 of 3   ◀ THE GAP
-   RANK 3     +5.90%      +2.00%      -1.40%        3 of 3   ✓
-   RANK 4     +6.00%      +2.20%      -0.40%        3 of 3   ✓
-   RANK 5     +6.10%      +2.80%      +0.50%        3 of 3   ✓
-   ────────────────────────────────────────────────────────────────────
-   ▶ RANKS 3, 4 AND 5 BEAT AN ORDINARY UNISWAP LP IN EVERY REGIME WE
-     MEASURED, INCLUDING THE TOXIC ONE — but READ THE NEXT BLOCK BEFORE
-     QUOTING THAT, because in TOXIC it is not what it sounds like.
-   ▶ RANK 2 MISSES IN TOXIC, BY 0.33 pp. It is the mezzanine: nearest the
-     first-loss seat, so it is reached second by any move large enough to
-     exhaust rank 1. We do not hide this and no premium rate fixes it —
-     the coupon is skimmed from VOLUME, and a toxic band has almost none.
+  ACTIVITY LEG — what each seat earned by TRADING, coupon stripped out (pp vs LP)
+  ─────────────────────────────────────────────────────────────────────────────
+   regime        RANK 1     RANK 2     RANK 3     RANK 4     RANK 5
+   BENIGN        -3.26      -5.21      -4.69      -5.00      -5.03
+   NORMAL        -2.77      -1.10      -0.99      -0.74      -0.45
+   TOXIC         -1.37      -0.07      +0.79      +1.61      +2.15
+  ─────────────────────────────────────────────────────────────────────────────
+   ▶ IN CALM AND NORMAL MARKETS EVERY BACK SEAT TRADES **WORSE** THAN A PLAIN
+     LP. It is rarely filled, so it earns few fees. The coupon is the entire
+     reason it comes out ahead.
+   ▶ ONLY IN A CRASH do ranks 3-5 out-trade on their own leg — because the
+     seats in front absorbed the bad fills. That is subordination paying out.
 ```
 
-### ⚠ THE TOXIC ROW IS CAPITAL PRESERVATION, NOT YIELD — and the difference is the product
-
-**Caught by our own instrument review, against our own headline.** In the TOXIC regime **rank 5 has
-zero turnover on 100% of paths.** It does not out-earn the LP; **it is never filled at all.** An
-unreached seat scores exactly `0.0000` while a plain LP is down 2.17%, so a naive reading of "beats
-the LP in every regime" credits non-participation as outperformance. That is the seat-32 trap
-`AGENTS.md` LAW 5 names, live in a number we were about to lead with.
+**The negative control that proves it, and it could have gone the other way.** Set φ = 0 so nothing
+is handed backward, and the back seats collapse:
 
 ```
-   WHAT "RANK 5 BEATS THE LP IN TOXIC" ACTUALLY MEANS
-   ─────────────────────────────────────────────────────────────────────
-     a plain LP    is converted at bad prices all the way down   -2.17%
-     rank 5        IS NEVER REACHED. Its inventory is untouched.  +0.50%
-                            ▲
-                            └── this is not a fee. It is the ABSENCE of
-                                adverse selection, which is exactly what
-                                the seats in front of it were there for.
-
-   ▶ SAY IT THIS WAY INSTEAD, because it is both true and stronger:
-     "In a crash the deep seats are not filled. Their capital keeps its
-      composition while a plain LP's is converted at the worst prices of
-      the move. That is what subordination BUYS, and it is the only
-      regime where the mechanism pays out as protection rather than
-      as yield."
-
-   ▶ AND SAY THE COST OF IT: an unreached seat earns almost no fees
-     either. In TOXIC the deep seats are idle capital that was spared,
-     not capital that worked. In BENIGN they are filled and DO earn —
-     rank 5 makes +6.10% against the LP's +5.02%.
+   BENIGN, φ = 0        passive LP  +5.02%
+   ──────────────────────────────────────────────────────────
+     RANK 2   +0.02%  ┐
+     RANK 3   +0.44%  │  every one of them 4.6 – 5.0 pp BELOW
+     RANK 4   +0.07%  │  the pool next door
+     RANK 5   -0.00%  ┘
+   ──────────────────────────────────────────────────────────
+   ▶ THE BACK SEATS ARE NOT BETTER LPs. THEY ARE WORSE LPs WHO ARE PAID.
+     That is the honest sentence, and it is also the product: the payment
+     comes from a named counterparty who volunteered, not from a token print.
 ```
 
-**Rank 2's toxic miss is a genuine fill-based result** — it *is* reached in a crash, so its −2.50%
-is money actually lost at bad prices, not a non-participation artefact. The binding constraint is
-therefore real, and so is the fix for it (§6E).
+### The two things a seat actually is
 
-**Per-seat, per-regime turnover shares are being reported alongside every return** in
-`docs/research/seat-economics/results-headsize.txt` §5b, so no reader can mistake one for the other
-again.
+```
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  RANK 1 — WORKING CAPITAL                                               │
+  │  111 turns · fees +7.54% · markout −5.77% · filled by 100% of paths     │
+  │  High volume, high adverse selection. Held by the SPONSOR.              │
+  ├─────────────────────────────────────────────────────────────────────────┤
+  │  RANK 5 — STANDBY CAPITAL                                               │
+  │  0.09 turns · fees +0.01% · coupon +8.00% · idle on 74% of paths        │
+  │  It is not trading. It holds capacity in reserve and is PAID for it.    │
+  │  A standby facility, not a trading position.                            │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
 
-**And the caveat we put next to every mean:** at φ = 5,000 the fraction of *individual* (path, seat)
-outcomes in ranks 2–5 that beat a plain LP is **68.1% benign, 84.8% normal, 75.8% toxic.** A seat
-holder lives one path, not an ensemble. These are better odds than a plain LP position on the same
-pair — but they are not certainty and we never present them as certainty.
+### All three regimes, and the verdict per seat
+
+```
+                BENIGN      NORMAL      TOXIC       BEATS A PLAIN LP IN…
+   LP bar       +5.02%      +0.49%      -2.17%             —
+   ──────────────────────────────────────────────────────────────────────
+   RANK 1       +1.78%      -2.27%      -3.53%       0 of 3   ON PURPOSE
+   RANK 2       +7.29%      +2.42%      -1.96%       3 of 3   ✓
+   RANK 3       +7.97%      +2.67%      -1.04%       3 of 3   ✓
+   RANK 4       +7.84%      +3.06%      -0.13%       3 of 3   ✓
+   RANK 5       +7.99%      +3.57%      +0.60%       3 of 3   ✓
+   ──────────────────────────────────────────────────────────────────────
+   ▶ EVERY BACK SEAT NOW BEATS A PLAIN LP IN EVERY REGIME MEASURED, and the
+     binding one (rank 2 in TOXIC) clears by +0.209pp against a paired
+     standard error of 0.039pp — t = +5.4.
+   ▶ AT THE OLD 33.3% HEAD THIS WAS FALSE: rank 2 lost in TOXIC and no φ
+     fixed it. Closing that hole is what the 45% head was adopted for, and
+     §6E prices what it cost.
+```
+
+**And the caveat we put next to every mean:** a seat holder lives **one path, not an ensemble.**
+Rank 5 is *never reached at all* on 74% of benign paths — its return on those paths is pure coupon.
+These are better odds than a plain LP position on the same pair, and they are not certainty; we
+never present them as certainty.
+
+### The mechanism is exactly zero-sum — in dollars, because a percentage hides it
+
+```
+   regime     RANK 1 vs LP    RANKS 2-5 vs LP        NET CREATED
+   ──────────────────────────────────────────────────────────────
+   BENIGN         -$14,604         +$14,603                 -$0
+   NORMAL         -$12,434         +$12,432                 -$2
+   TOXIC           -$6,434          +$6,425                 -$9
+   ──────────────────────────────────────────────────────────────
+   ▶ QUEUE DOES NOT CREATE RETURN. It moves return from the seat at the
+     front to the seats behind it. The residual is undistributed premium
+     still held at path end, not accounting slippage.
+```
 
 ---
 
 ## 6C. WHAT A SEAT COSTS, AND FOR HOW LONG YOU HAVE IT
 
-Three separate numbers, and they are often confused. All are on-chain and visible before you buy.
+**A return quoted without its rent and its purchase price is not a return.** Every benefit claim in
+this document carries five numbers, and this section defines them. All are on-chain and visible
+before you buy.
 
 ```
    1. THE PRICE OF THE RANK  —  paid ONCE, to the incumbent
    ─────────────────────────────────────────────────────────────────────
       Whatever that seat's holder has posted as their own self-price.
-      `buyPrice(seatId)` is the ask. You pay it to THEM.
+      `buyPrice(seatId)` is the ask. You pay it to THEM, not to us.
       A never-priced seat asks ZERO — the founding roster starts there.
 
    2. YOUR CAPITAL  —  not a cost, you still own it
    ─────────────────────────────────────────────────────────────────────
       The seat changes hands EMPTY: the seller's capital is returned to
-      the seller, to the wei. You then fund the seat yourself, or the
-      seat drops to the tail for want of depth. Rank is BACKED BY DEPTH.
+      the seller, to the wei. You then fund the seat yourself, or it
+      drops to the tail for want of depth. RANK IS BACKED BY DEPTH.
 
-   3. RENT  —  paid CONTINUOUSLY, forward, to the seats ahead of you
+   3. RENT  —  paid CONTINUOUSLY, FORWARD, to the seats ahead of you
    ─────────────────────────────────────────────────────────────────────
-      tau = 10%/yr of YOUR OWN posted self-price. You set the number.
-      Post a high price and you are safe but you pay for it; post a low
-      one and you pay little but anyone may take the seat at it.
-      That is Harberger, and it is the whole of it.
+      τ = 10%/yr of YOUR OWN posted self-price. You set the number.
+      Post high and you are safe but you pay for it; post low and you
+      pay little but anyone may take the seat at it. That is Harberger.
+
+   4. WHAT YOU RECEIVE IN RENT  —  from every seat BEHIND you
+   ─────────────────────────────────────────────────────────────────────
+      Each seat's rent is split over the seats AHEAD of it, weighted by
+      the depth each of them contributed. Worked example below.
 
    THE TERM  —  7 days  (`MIN_TENURE`)
    ─────────────────────────────────────────────────────────────────────
-      For 7 days after funding a seat you may NOT voluntarily give up
-      its rank. You can still SELL it at your own posted price, in any
-      block. It is a lock on the RANK, never on the capital.
+      For 7 days after funding a seat you may NOT voluntarily give up its
+      rank. You can still SELL it at your own posted price, in any block.
+      IT IS A LOCK ON THE RANK, NEVER ON THE CAPITAL.
 ```
 
-### Why the rent runs FORWARD — the reversal, and what it does to the front seat's cost
+### THE RENT CASCADE, WITH AMOUNTS — who receives *how much*, from whom
 
-Until this phase the rent ran **backward**, from the front to the back. That was written when being
-first was believed to be the prize; Phases 7–8 disproved that and nobody revisited it, so the
-contract was charging the seat that absorbs the losses and paying the seats it was already
-subsidising. **The front SUPPLIES subordination and the back CONSUMES it, so the back pays the
-front** — the same way round as every insurance market. Reversed, tested, and the old direction is
-now the negative control (`Harberger.t.sol::test_4_9b`).
-
-**This is how rank 1 monetises what it provides, and it answers the one question we previously said
-no simulator could answer.**
+`_distributeRent` pays the seats **ahead** of the payer, **weighted by contributed depth**. Worked
+on the shipped weights, with demo self-prices that rise with rank because the deep seats are the
+protected ones:
 
 ```
-   In a Harberger market a seat's posted price settles where the RENT
-   equals the EXCESS RETURN the rank delivers — otherwise somebody takes it.
-   So at tau = 10%/yr the equilibrium self-prices are:
+   ONE YEAR · SHIPPED ROSTER 90:44:33:22:11 · τ = 10%/yr
+   ┌──────┬────────┬────────────┬──────────┬─────────────┬──────────┐
+   │ RANK │ WEIGHT │ SELF-PRICE │ PAYS/yr  │ RECEIVES/yr │  NET/yr  │
+   ├──────┼────────┼────────────┼──────────┼─────────────┼──────────┤
+   │  1   │   90   │    100e18  │   10.00  │      85.52  │  +75.52  │
+   │  2   │   44   │    200e18  │   20.00  │      32.03  │  +12.03  │
+   │  3   │   33   │    300e18  │   30.00  │      16.63  │  -13.37  │
+   │  4   │   22   │    400e18  │   40.00  │       5.82  │  -34.18  │
+   │  5   │   11   │    500e18  │   50.00  │       0.00  │  -50.00  │
+   └──────┴────────┴────────────┴──────────┴─────────────┴──────────┘
+    HELD (rank 1 has nobody ahead, so its own rent has no recipient): 10.00
+    CONSERVATION:  Σ(net) + held  =  0.000000  exactly
 
-      RANK 2   excess $7,680/yr   →  posts ~$76,800   →  pays $7,680/yr
-      RANK 3   excess $10,560/yr  →  posts ~$105,600  →  pays $10,560/yr
-      RANK 4   excess $7,840/yr   →  posts ~$78,400   →  pays $7,840/yr
-      RANK 5   excess $4,320/yr   →  posts ~$43,200   →  pays $4,320/yr
-                                                        ─────────────
-                                        forward to rank 1  $30,400/yr
-
-   ┌──────────────────────────────────────────────────────────────────┐
-   │  RANK 1's GROSS SUBSIDY        -$34,800/yr   (-10.4% of capital) │
-   │  RENT IT COLLECTS AT EQUILIB.  +$30,400/yr                       │
-   │  ────────────────────────────────────────────────────────────────│
-   │  NET COST OF RUNNING THE       -$4,400/yr    ( -1.3% of capital) │
-   │  PROGRAMME                                                       │
-   └──────────────────────────────────────────────────────────────────┘
+   HOW ONE ROW IS BUILT — rank 4 pays 40.00, split over ranks 1,2,3 by depth:
+        rank 1 gets 40.00 × 90/(90+44+33) = 40.00 × 90/167 = 21.56
+        rank 2 gets 40.00 × 44/167                         = 10.54
+        rank 3 gets 40.00 × 33/167                         =  7.90
 ```
 
-**THE HONEST BOOKENDS, because the number above is an equilibrium and not a measurement:**
+> **Read the direction carefully: the BACK pays the FRONT.** The front supplies subordination and
+> the back consumes it, so the back pays for it — the same way round as every insurance market.
+> Until Phase 12 this ran backward, charging the seat that absorbs the losses and paying the seats
+> it was already subsidising. Reversed, tested, and the old direction is now the negative control
+> (`Harberger.t.sol::test_4_9b`).
 
-| how contested the seats are | rent that flows | rank 1's net cost |
-|---|---|---|
-| **nobody competes** — all self-prices stay at 0 | $0 | **−$34,800/yr (−10.4%)** |
-| **fully contested** — Harberger equilibrium | ~$30,400/yr | **−$4,400/yr (−1.3%)** |
+### WHAT A SEAT IS WORTH — and the pricing rule this document previously got wrong
 
-> The subsidy's true cost is **set by an on-chain market, continuously, not by us.** `BUSINESS.md`
-> used to say *"we did not measure demand, and no simulator can."* That is still true of the
-> simulator — and it is now beside the point, because **the seat market prices demand directly and
-> the price is a public number.** That is what the Harberger layer is FOR, and until the reversal it
-> was pointed the wrong way and priced nothing.
+```
+   ✗ THE OLD RULE, and it was self-defeating:      value = excess ÷ τ
+   ✓ THE CORRECT RULE:                             value = excess ÷ (τ + k)
 
-**Labelled honestly: the equilibrium prices above are DERIVED** — from the measured per-seat excess,
-the identity in §3, and τ — **not simulated.** `sim.py` models no rent at all. The direction is
-proven in the contract; the magnitude is arithmetic on top of measured returns.
+     k is the buyer's cost of capital. A buyer does not only pay rent on
+     the seat — they also want a RETURN on the money. At τ = 10% and a 24%
+     cost of capital that is ÷ 0.34, NOT ÷ 0.10.
+   ─────────────────────────────────────────────────────────────────────
+   ▶ WHY THE OLD RULE WAS WRONG AND NOT MERELY IMPRECISE: dividing by τ
+     alone sets the seat price so that rent EXACTLY equals the excess. The
+     back seats then net ZERO and the sponsor pays ZERO — a degenerate
+     equilibrium in which nobody gains anything and the product has no
+     reason to exist. It overstated the fair ask by (τ+k)/τ = 3.4×, in our
+     own favour, and the frontend had already corrected it.
+```
+
+### THE FIVE NUMBERS, PER SEAT — the honest bottom line
+
+Benign regime, ~6 bands a year, at the Harberger equilibrium (`value = excess ÷ (τ+k)`):
+
+```
+  ┌──────┬──────────┬──────────┬──────────┬──────────┬──────────┬────────┐
+  │ RANK │ CAPITAL  │ EARNS/yr │ RENT PAID│ RENT RECD│  NET/yr  │ ON ITS │
+  │      │          │ (fees +  │  (τ × own│  (from   │          │ CAPITAL│
+  │      │          │  premium)│self-price)│ behind) │          │        │
+  ├──────┼──────────┼──────────┼──────────┼──────────┼──────────┼────────┤
+  │  1   │ $450,000 │ -$87,624 │       -$0│ +$18,936 │ -$68,688 │ -15.3% │
+  ├──────┼──────────┼──────────┼──────────┼──────────┼──────────┼────────┤
+  │  2   │ $220,000 │ +$30,144 │  -$8,866 │  +$4,923 │ +$26,201 │ +11.9% │
+  │  3   │ $165,000 │ +$29,196 │  -$8,587 │  +$1,578 │ +$22,187 │ +13.5% │
+  │  4   │ $110,000 │ +$18,534 │  -$5,451 │    +$334 │ +$13,416 │ +12.2% │
+  │  5   │  $55,000 │  +$9,744 │  -$2,866 │      +$0 │  +$6,878 │ +12.5% │
+  └──────┴──────────┴──────────┴──────────┴──────────┴──────────┴────────┘
+   "EARNS" is the measured edge OVER a plain LP, annualised at 6 benign
+   bands. "ON ITS CAPITAL" is that edge net of rent, over the seat's own
+   capital — i.e. HOW MUCH BETTER THAN THE POOL NEXT DOOR, after all costs.
+
+   PLUS, for every back seat:
+     THE RANK COST   paid once to the incumbent — at equilibrium
+                     rank 2 $88,659 · rank 3 $85,871 · rank 4 $54,512
+                     · rank 5 $28,659.  Rank 1 posts ZERO: its excess is
+                     negative, so the seat is worth nothing to a buyer.
+     THE TERM        7 days, on the RANK. The capital is never locked.
+```
+
+```
+   ▶ THE IDENTITY THAT POLICES ALL OF IT:
+
+        the sponsor's NET COST   ≡   the back seats' NET EXCESS
+             -$68,688                      +$68,682
+                        (differ by $6 on rounding)
+
+     The Harberger rent CREATES NOTHING. It slides one quantity between
+     the two sides of the same trade. Raising τ does not make the product
+     better — it moves money from the LPs to the sponsor, and the LPs
+     then require a lower seat price to compensate.
+```
+
+**THE HONEST BOOKENDS, because the table above is an equilibrium and not a measurement:**
+
+| how contested the seats are | rent that flows | sponsor's net cost | LPs' net excess |
+|---|---|---|---|
+| **nobody competes** — all self-prices stay at 0 | $0 | **−$87,624/yr (−19.5%)** | **+$87,618/yr** |
+| **fully contested** — Harberger equilibrium | ~$25,770/yr | **−$68,688/yr (−15.3%)** | **+$68,682/yr** |
+
+> **Labelled honestly: the equilibrium prices are DERIVED**, from the measured per-seat excess in
+> §6B, the identity in §3, τ, and an assumed 24% cost of capital — **not simulated.** `sim.py`
+> models no rent at all. **The direction is proven in the contract; the magnitude is arithmetic on
+> top of measured returns, and it moves with k.** What the seat market actually prices is a public
+> on-chain number that no simulator has to guess.
 
 ---
 
@@ -538,6 +644,98 @@ hurry, and what it costs you is exactly what the rank is worth — a number you 
 
 ---
 
+## 6E. WHY 45% AND φ = 5,500 — the parameter decision, and what it cost
+
+**These numbers were measured, not chosen.** Source:
+`docs/research/seat-economics/results-headsize.txt`.
+
+### What "the window" is
+
+A single shipped φ has to work in every market it will meet, so the object that matters is the
+**intersection** across all three regimes. A φ is inside the window when **both** of these hold:
+
+```
+   LOWER BOUND   every BACK seat beats a plain pro-rata LP.
+                 Below this φ the coupon is too small and somebody in the
+                 back is better off in the pool next door.
+
+   UPPER BOUND   the FRONT seat still beats ITS OWN best alternative — a
+                 keeper-managed at-the-money range holding the same capital,
+                 with L2 gas and re-mint costs itemised. Above this φ the
+                 sponsor should just run that instead.
+   ─────────────────────────────────────────────────────────────────────────
+   ▶ Note what the upper bound is NOT: it is not "the front beats a passive
+     LP". The front is a sponsor with a real alternative use for the money,
+     and that alternative is the honest bar.
+```
+
+### The efficiency table
+
+```
+    c₁     BENIGN         NORMAL          TOXIC        ALL-REGIME      verdict
+   ─────────────────────────────────────────────────────────────────────────────────
+   33.3% [4542,5670]  [2560,6251]        EMPTY           EMPTY      rank 2 never
+                                                                    clears in TOXIC
+   35.0% [4432,5824]  [2441,6734]        EMPTY           EMPTY      same
+   37.5% [4280,6104]  [2259,7535]        EMPTY           EMPTY      the front falls
+                                                                    below its own
+                                                                    alternative
+   40.0% [4122,6447]  [2128,8444]   [5668,8628]     [5668, 6447]    t = +0.3
+                                                                    ✗ COIN FLIP
+   45.0% [3777,7340] [1740,9500+]    [0,9500+]      [3777, 7340]    t = +5.4
+                                                                    ◀ SHIPPED
+   66.7% [2189,9500+] [929,9500+]    [0,9500+]      [2189, 9500+]   sponsor posts
+                                                                    2/3 of the book
+   ─────────────────────────────────────────────────────────────────────────────────
+   SHIPPED φ = 5,500 is the midpoint of [3777, 7340].
+```
+
+### Why 40% was rejected, and this is the part that matters
+
+```
+   40% has a non-empty window on the POINT ESTIMATE. It was still rejected.
+
+     at c₁ = 40%, φ = 6000, TOXIC, binding seat (rank 2):
+         gap to the plain LP      +0.010 pp
+         paired standard error     0.032 pp
+         t                         +0.3      ← a COIN FLIP
+     at c₁ = 45%, φ = 5500, TOXIC, binding seat (rank 2):
+         gap to the plain LP      +0.209 pp
+         paired standard error     0.039 pp
+         t                         +5.4      ← CLEARS
+   ─────────────────────────────────────────────────────────────────────
+   ▶ A window whose binding seat clears by LESS THAN ITS OWN STANDARD
+     ERROR is a window on a coin flip. Shipping the smallest head share
+     whose point estimate happens to cross zero is exactly the
+     green-number-chasing this project calls its first sin.
+   ▶ SO THE SMALLEST **DEFENSIBLE** HEAD SHARE IS 45%, NOT THE 40% THE
+     POINT ESTIMATE GIVES.
+```
+
+### WHAT THE 45% HEAD COST THE SPONSOR — stated because it is a real cost
+
+Moving the head from 33.3% to 45% closed the toxic hole. It also made the sponsor's seat
+substantially more expensive, because a bigger head absorbs more of every adverse move:
+
+```
+                              c₁ = 33.3%        c₁ = 45%
+   ─────────────────────────────────────────────────────────────────────
+   sponsor's capital            $333,333        $450,000
+   gross subsidy / yr           ~$34,700        ~$87,624
+   as % of its OWN capital         10.4%           19.5%
+   every back seat beats a
+     plain LP in every regime          NO             YES
+   ─────────────────────────────────────────────────────────────────────
+   ▶ THE TRADE, PLAINLY: the sponsor pays roughly TWICE as much, per
+     dollar of its own capital, to buy a programme that still holds in a
+     crash. We think that is the right trade — a subordination promise
+     that fails in exactly the conditions it was bought for is not worth
+     running — but it is the sponsor's money and the sponsor's call, and
+     the number belongs on the page rather than in a footnote.
+```
+
+---
+
 ## 7. WHAT WE KILLED — five theses, pre-registered criteria, our own numbers
 
 | the thesis | what killed it |
@@ -561,8 +759,8 @@ not as rigour.
 
 ```
    plain v4 pool, same tokens/fee/price       69,970 gas
-   QUEUE, premium off                        141,036 gas   (+102%)
-   QUEUE as shipped (φ = 5,100)              153,177 gas   (+119%)
+   QUEUE, premium off                        140,969 gas   (+101%)
+   QUEUE as shipped (φ = 5,500)              153,110 gas   (+119%)
 ```
 
 * **+119% network compute on a typical swap.** On an L2 this is cents; on mainnet it is a real bill.
