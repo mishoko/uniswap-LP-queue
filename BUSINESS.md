@@ -209,7 +209,7 @@ same $5,800. That is the identity in §3, in dollars.
        when it stops
 ```
 
-**Say this out loud rather than let a judge find it:** the case for QUEUE over emissions is *not*
+**We are stating clearly:** the case for QUEUE over emissions is *not*
 cost. It is **no dilution, no sell pressure, and the subsidy being an invariant rather than a
 promise** — bought at the price of locking real treasury capital.
 
