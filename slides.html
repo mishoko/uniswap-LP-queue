@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>QUEUE — rent liquidity without printing it</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+/* SHARED LOOK — used verbatim by slides.html AND video/index.html.
+   Sizes are in px (the 1920x1080 video). slides.html overrides the type scale in vh so the
+   same markup presents full-screen at any resolution. */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0b0e12; --ink:#eef2f6; --dim:#8b98a5; --line:#232c36;
+  --hot:#ff8a3d; --cool:#4ec9b0; --pro:#7aa2f7; --bad:#f7768e;
+  --mono: 'JetBrains Mono',ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans: 'Inter',system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+}
+body{background:
+    radial-gradient(1200px 700px at 78% -8%, rgba(255,138,61,.10), transparent 60%),
+    radial-gradient(1000px 640px at 8% 108%, rgba(78,201,176,.09), transparent 62%),
+    var(--bg);
+  color:var(--ink); font-family:var(--sans);}
+.kick{font-size:19px;letter-spacing:.34em;text-transform:uppercase;color:var(--dim);font-weight:600}
+h1{font-size:104px;line-height:1.05;letter-spacing:-.025em;font-weight:750}
+h2{font-size:62px;line-height:1.1;letter-spacing:-.02em;font-weight:680}
+h3{font-size:46px;line-height:1.14;letter-spacing:-.015em;font-weight:660}
+em{font-style:normal;color:var(--hot)}
+.lead{font-size:36px;line-height:1.42;color:#d3dce6;max-width:58ch}
+.dim{color:var(--dim)}
+b.hot,.hot{color:var(--hot)} b.cool,.cool{color:var(--cool)}
+b.bad,.bad{color:var(--bad)} .pro{color:var(--pro)}
+.pull{font-size:33px;line-height:1.44;padding-left:26px;border-left:4px solid var(--hot);
+      color:#e7edf4;max-width:84ch}
+.pull.p2{border-left-color:var(--cool)}
+.cap{font-size:24px;line-height:1.45;color:var(--dim)}
+.cap2{font-size:29px;line-height:1.45;color:#c3ced9;max-width:90ch}
+.foot{font-family:var(--mono);font-size:22px;color:var(--dim)}
+.file{font-family:var(--mono);font-size:22px;color:var(--dim)}
+
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.box{background:#111820;border:1px solid var(--line);border-radius:14px;padding:30px 28px}
+.box .bt{font-size:22px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+         font-weight:650;margin-bottom:14px}
+.box .bd{font-size:27px;line-height:1.4;color:#d3dce6}
+.b1{border-top:3px solid var(--hot)} .b2{border-top:3px solid var(--pro)}
+.b3{border-top:3px solid var(--cool)}
+
+.two{display:grid;grid-template-columns:1fr 1fr;gap:30px}
+.half .lbl{font-size:21px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
+           font-weight:650;margin-bottom:18px}
+.half .lbl.hot{color:var(--hot)}
+.prorata .pr{position:relative;height:44px;margin-bottom:12px;background:#131a22;border-radius:7px;overflow:hidden}
+.prorata .pr span{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,#2c3f57,#3d5a7d);display:block}
+.prorata .pr i{position:absolute;left:16px;top:9px;font-style:normal;font-family:var(--mono);
+               font-size:20px;color:#cfe0f2}
+.ranks{display:flex;gap:10px;align-items:stretch;height:186px}
+.rk{background:#131a22;border:1px solid var(--line);border-radius:10px;display:flex;
+    flex-direction:column;align-items:center;justify-content:center;gap:8px}
+.rk b{font-size:26px} .rk i{font-style:normal;font-family:var(--mono);font-size:20px;color:var(--dim)}
+.r1{flex:45;border-color:#7a4620;background:linear-gradient(180deg,#241710,#141a21)}
+.r1 b{color:var(--hot);font-size:30px}
+.r2{flex:22} .r3{flex:17} .r4{flex:11} .r5{flex:6}
+.r4 b,.r5 b{font-size:22px}
+
+.card2{background:#111820;border:1px solid var(--line);border-radius:14px;padding:34px 32px}
+.card2.hotb{border-top:3px solid var(--hot)}
+.card2.coolb{border-top:3px solid var(--cool)}
+.card2 .ct{font-size:21px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
+           font-weight:650;margin-bottom:16px}
+.card2 .cn{font-size:70px;font-weight:750;letter-spacing:-.02em;line-height:1}
+.card2 .cn small{font-size:26px;font-weight:500;color:var(--dim)}
+.card2 .cd{font-size:25px;line-height:1.42;color:#c3ced9;margin-top:16px}
+.card2 .cd.big2{font-size:28px;margin-top:0}
+
+.erc{display:flex;flex-direction:column;gap:20px}
+.ercrow{display:flex;gap:26px;align-items:flex-start;background:#111820;border:1px solid var(--line);
+        border-radius:14px;padding:26px 30px}
+.ercrow.ok{border-left:4px solid var(--cool)}
+.ercrow.warn{border-left:4px solid var(--pro)}
+.ercbadge{font-family:var(--mono);font-size:27px;font-weight:700;min-width:190px}
+.ercbody{font-size:26px;line-height:1.42;color:#d3dce6}
+.tagok,.tagwarn{font-family:var(--mono);font-size:18px;letter-spacing:.1em;padding:3px 10px;
+                border-radius:5px;margin-left:8px;white-space:nowrap}
+.tagok{color:var(--cool);border:1px solid #1d4d43}
+.tagwarn{color:var(--pro);border:1px solid #2b3f63}
+
+.vs{display:grid;grid-template-columns:1fr 1fr;gap:30px}
+.vscol{background:#111820;border:1px solid var(--line);border-radius:16px;padding:32px 34px}
+.vscol.bad2{border-top:3px solid var(--bad)}
+.vscol.good2{border-top:3px solid var(--cool)}
+.vst{font-size:20px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
+     font-weight:650;margin-bottom:14px}
+.vsn{font-size:78px;font-weight:750;letter-spacing:-.025em;line-height:1;margin-bottom:20px}
+.vsn small{font-size:25px;font-weight:500;color:var(--dim);letter-spacing:0}
+.vsl{font-size:25px;line-height:1.5;color:#c3ced9}
+.vsl .x{color:var(--bad);font-weight:700;margin-right:10px}
+.vsl .t{color:var(--cool);font-weight:700;margin-right:10px}
+
+.meth{display:flex;flex-direction:column;gap:16px}
+.mrow{display:flex;gap:30px;align-items:baseline;background:#111820;border:1px solid var(--line);
+      border-radius:12px;padding:22px 28px}
+.mrow b{font-family:var(--mono);font-size:21px;letter-spacing:.08em;color:var(--hot);min-width:250px}
+.mrow span{font-size:26px;line-height:1.4;color:#cfd8e3}
+
+.cav{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.cv{background:#111820;border:1px solid var(--line);border-radius:12px;padding:26px 28px}
+.cv.wide{grid-column:1 / -1;border-color:#5c2733}
+.cv b{display:block;font-size:29px;margin-bottom:10px}
+.cv span{font-size:25px;line-height:1.4;color:#c3ced9}
+
+.tbl{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:26px}
+.tbl th{text-align:left;font-size:20px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+        font-weight:650;padding:12px 18px;border-bottom:1px solid var(--line)}
+.tbl td{padding:14px 18px;border-bottom:1px solid #18202a}
+.tbl tr.me td{background:#1b1410}
+
+pre.code{font-family:var(--mono);font-size:23px;line-height:1.44;background:#0e141b;
+         border:1px solid var(--line);border-radius:14px;padding:24px 28px;overflow:hidden}
+pre.code .ln{display:block;white-space:pre;color:#c6d2de}
+pre.code .ln i{display:inline-block;width:62px;font-style:normal;color:#78838f}
+pre.code .ln.hi{background:rgba(255,138,61,.13);box-shadow:inset 3px 0 0 var(--hot);color:#fff}
+pre.code .ln.hi i{color:#a8b2bd}
+
+/* ---- ASCII diagrams: the project's preferred way to show a mechanism ---- */
+pre.ascii{font-family:var(--mono);font-size:23px;line-height:1.36;background:#0d1219;
+          border:1px solid var(--line);border-radius:14px;padding:26px 30px;color:#c2cedb;
+          white-space:pre;overflow:hidden;letter-spacing:0}
+pre.ascii b{color:var(--hot);font-weight:700}
+pre.ascii b.cool,pre.ascii .cool{color:var(--cool)}
+pre.ascii b.bad,pre.ascii .bad{color:var(--bad)}
+pre.ascii b.pro,pre.ascii .pro{color:var(--pro)}
+pre.ascii u{color:var(--dim);text-decoration:none}
+pre.ascii.sm{font-size:20px;line-height:1.32}
+pre.ascii.xs{font-size:18px;line-height:1.3}
+.stat{display:grid;grid-template-columns:repeat(4,1fr);gap:22px}
+.st{background:#111820;border:1px solid var(--line);border-radius:14px;padding:26px 24px;
+    border-top:3px solid var(--cool)}
+.st.h{border-top-color:var(--hot)}
+.st .sn{font-size:52px;font-weight:750;letter-spacing:-.02em;line-height:1}
+.st .sl{font-size:20px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);
+        font-weight:650;margin-top:12px}
+.st .sd{font-size:21px;line-height:1.36;color:#aab6c3;margin-top:10px}
+
+/* ---- deck chrome (not used by the video) ---- */
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg)}
+#deck{position:relative;width:100vw;height:100vh}
+.slide{position:absolute;inset:0;display:none;opacity:0;transition:opacity .25s ease}
+.slide.on{display:block;opacity:1}
+.pad{position:absolute;inset:0;padding:5.4vh 6vw;display:flex;flex-direction:column;
+      justify-content:center;gap:2.4vh}
+#bar{position:fixed;left:0;bottom:0;height:3px;background:var(--hot);width:0;transition:width .25s;z-index:9}
+#num{position:fixed;right:1.4vw;bottom:1.6vh;font-family:var(--mono);font-size:1.5vh;color:var(--dim);z-index:9}
+#notes{position:fixed;left:0;right:0;bottom:0;max-height:38vh;overflow:auto;background:#070a0e;
+        border-top:1px solid var(--line);padding:2.4vh 6vw;font-size:2vh;line-height:1.55;
+        color:#c3ced9;display:none;z-index:20}
+#notes.on{display:block}
+#notes b{display:block;font-family:var(--mono);font-size:1.4vh;letter-spacing:.18em;
+          text-transform:uppercase;color:var(--dim);margin-bottom:1.2vh}
+#help{position:fixed;left:1.4vw;bottom:1.6vh;font-family:var(--mono);font-size:1.4vh;color:#4d5661;z-index:9}
+/* scale the shared type to the viewport for presenting */
+h1{font-size:8.4vh} h2{font-size:5.4vh} h3{font-size:4vh}
+.lead{font-size:3vh} .pull{font-size:2.8vh} .cap2{font-size:2.5vh} .cap{font-size:2vh}
+.kick{font-size:1.5vh} .box .bd,.cv span,.ercbody,.mrow span{font-size:2.2vh}
+.box .bt,.card2 .ct,.vst{font-size:1.6vh} .card2 .cd{font-size:2.1vh}
+.card2 .cn{font-size:6vh} .vsn{font-size:6.4vh} .tnum{font-size:5vh}
+pre.code{font-size:2vh} pre.code .ln i{width:4.4vw}
+pre.ascii{font-size:1.82vh;line-height:1.36}
+pre.ascii.sm{font-size:1.58vh} pre.ascii.xs{font-size:1.42vh}
+.st .sn{font-size:4.6vh} .st .sl{font-size:1.6vh} .st .sd{font-size:1.75vh}
+.file,.foot{font-size:1.8vh} .vsl{font-size:2.1vh} .ercbadge{font-size:2.3vh;min-width:11vw}
+.fseat{font-size:2vh} .farr span{font-size:1.8vh} .tbl{font-size:2.1vh}
+</style></head><body>
+<div id="deck">
+<section class="slide"><div class="pad">
+  <div class="kick">the problem</div>
+  <h2>You're renting liquidity &mdash;<br>and paying the rent in <em>equity</em>.</h2>
+<pre class="ascii">   <b>THE EMISSIONS TREADMILL</b> &mdash; how every protocol buys depth today
+   ─────────────────────────────────────────────────────────────────────
+
+     ┌──────────────┐  prints new  ┌──────────┐   paid as   ┌──────────┐
+     │   <b>NOVA</b>&#39;s     │    supply    │  $NOVA   │   rewards   │   LPs    │
+     │   TREASURY   │─────────────▶│  tokens  │────────────▶│          │
+     └──────────────┘              └──────────┘             └──────────┘
+            ▲                                                          │
+            │                                                          │ <b class="bad">sold</b> &mdash;
+            │  <b class="bad">every existing holder now owns a little less</b>            │ that is
+            └──────────────────────────────────────────────────────────┘ what a
+                             <b class="bad">dilution</b>                            reward <b class="bad">IS</b>
+
+   <b class="bad">STOP PAYING AND THE LIQUIDITY IS GONE THE SAME WEEK.</b>
+   You rented it. You paid the rent in equity. And you own nothing at the end.</pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">the idea</div>
+  <h1><em>Somebody</em> has to be<br>filled first.</h1>
+  <div class="lead">Today nobody chooses, and everyone shares the damage.<br>
+  QUEUE lets somebody volunteer &mdash; and get paid for volunteering.</div>
+  <div class="pull p1">Nothing printed. Nobody diluted. The trader never notices.</div>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">how it works</div>
+  <h3>Today, everyone shares every trade.</h3>
+<pre class="ascii">   <b>TODAY</b> &mdash; every concentrated AMM on earth, no exceptions
+   ────────────────────────────────────────────────────────────────────
+     a <b>$180,000</b> trade arrives
+             │
+             ▼
+     ┌────────────────────────────────────────────────────────────┐
+     │  <b>ONE POSITION</b> &mdash; everybody filled <b>PRO-RATA</b>                  │
+     │                                                            │
+     │    NOVA ▓▓▓▓▓▓▓▓▓   MAYA ▓▓▓▓   BEN ▓▓▓   CARA ▓▓   DEE ▓  │
+     │         ↑             ↑          ↑         ↑        ↑      │
+     │         a slice taken out of every single one of them      │
+     └────────────────────────────────────────────────────────────┘
+
+     Nobody chose. <b>Nobody could.</b> One fill quality, for everyone,
+     forever. That is not a parameter &mdash; it is what an AMM <b>is</b>.</pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">how it works</div>
+  <h3>QUEUE gives each of them a rank.</h3>
+<pre class="ascii">   <b>WITH QUEUE</b> &mdash; same pool, same router, same 0.30% fee
+   ────────────────────────────────────────────────────────────────────
+     the same <b>$180,000</b> trade arrives
+             │
+             ▼
+     ┌──────────┐  ┌────────┐  ┌──────┐  ┌─────┐   ┌─────┐
+     │  RANK 1  │─▶│ RANK 2 │─▶│RANK 3│─▶│ R4  │─▶ │R5   │
+     │   NOVA   │  │  MAYA  │  │ BEN  │  │CARA │   │DEE  │
+     │ <b>$450,000</b> │  │$220,000│  │$165k │  │$110k│   │$55k │
+     └──────────┘  └────────┘  └──────┘  └─────┘   └─────┘
+       <b>▲</b> filled by    filled      filled    filled    filled on
+       EVERY trade   2.2 turns   1.5 turns  0.8 turns  <b class="cool">0.09 turns</b>
+       111 turns
+       <b>WORST prices</b>                                <b class="cool">BEST prices</b>
+
+     <b>THE TRADER SEES NOTHING.</b> Same price, same fee, any router.
+     What changed is <b>WHICH</b> LP inside the position ate that trade.</pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">one trade, walked</div>
+  <h3>The cursor stops. The coupon goes backward.</h3>
+<pre class="ascii">   <b>A $180,000 SELL ARRIVES. WATCH WHO PAYS FOR IT.</b>
+   ─────────────────────────────────────────────────────────────────────
+    rank 1  <b>NOVA</b>  $450,000  <b>████████████░░░░░░░</b>  <b>$180,000 absorbed</b>
+    rank 2  MAYA  $220,000  ░░░░░░░░░░░░░░░░░░░  untouched
+    rank 3  BEN   $165,000  ░░░░░░░░░░░░░░░░░░░  untouched
+    rank 4  CARA  $110,000  ░░░░░░░░░░░░░░░░░░░  untouched
+    rank 5  DEE    $55,000  ░░░░░░░░░░░░░░░░░░░  untouched
+                            <b>▲</b>
+                       the fill cursor stops <b>here</b>
+
+    NOVA ate <b>100%</b> of it, at the <b>first and worst</b> prices of the move.
+
+    AND THEN THE MONEY GOES <b class="cool">BACKWARD</b>:
+        NOVA earned the 0.30% fee on that trade . . . . . . . . $540
+        <b class="cool">55%</b> of it is handed to the seats it did <b>not</b> reach  <b class="cool">−$297</b>
+                                          │
+            ┌───────────────────┬─────────┴─────────┬───────────────────┐
+            ▼                   ▼                   ▼                   ▼
+           MAYA                BEN                 CARA                DEE
+   <b class="cool">the coupon every one of them is paid for standing behind NOVA</b></pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">being first is bad</div>
+  <h3>And that is the <em>invention</em>, not a flaw.</h3>
+<pre class="ascii">  ONE 61-DAY BAND · CALM · $1,000,000 BOOK · <b class="pro">120 SIMULATED PATHS</b>
+  ┌──────┬───────────┬────────┬─────────────┬────────┬────────┐
+  │ SEAT │  CAPITAL  │ RETURN │ vs PLAIN LP │  TURNS │ FILLED │
+  ├──────┼───────────┼────────┼─────────────┼────────┼────────┤
+  │RANK 1│  $450,000 │ +1.78% │  <b class="bad">−$14,604</b>   │ <b>111.57</b> │  100%  │
+  ├──────┼───────────┼────────┼─────────────┼────────┼────────┤
+  │RANK 2│  $220,000 │ +7.29% │   <b class="cool">+$5,024</b>   │   2.22 │  100%  │
+  │RANK 3│  $165,000 │ +7.97% │   <b class="cool">+$4,866</b>   │   1.52 │  100%  │
+  │RANK 4│  $110,000 │ +7.84% │   <b class="cool">+$3,089</b>   │   0.80 │   92%  │
+  │RANK 5│   $55,000 │ +7.99% │   <b class="cool">+$1,624</b>   │   0.09 │   26%  │
+  ├──────┼───────────┼────────┼─────────────┼────────┼────────┤
+  │TOTAL │$1,000,000 │ +5.02% │       <b>−$0</b>   │        │        │
+  └──────┴───────────┴────────┴─────────────┴────────┴────────┘
+   A passive pro-rata LP on the same path returns <b>+5.02%</b>.
+
+   ▶ <b>THE TOTAL IS ZERO, AND IT HAS TO BE.</b> This moves money between
+     two named people. It does not create any. We put that here,
+     on slide five &mdash; not in a footnote at the end.</pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">the mechanism &middot; <b class="hot">the real code</b></div>
+  <h3>It's about ten lines.</h3>
+  <div class="file">src/queue/libraries/Allocation.sol</div>
+  <pre class="code"><span class="ln hi"><i>86</i>    take = bal &lt; st.remaining ? bal : st.remaining;</span>
+<span class="ln hi"><i>87</i>    st.remaining -= take;</span>
+<span class="ln"><i>88</i>    if (st.remaining == 0) {</span>
+<span class="ln"><i>89</i>        give = st.amtIn - st.assigned;</span>
+<span class="ln"><i>90</i>    } else if (wTotal == 0) {</span>
+<span class="ln"><i>91</i>        give = FullMath.mulDiv(st.amtIn, take, st.amtOut);</span>
+<span class="ln"><i>92</i>    } else {</span></pre>
+  <div class="cap2">Take what this one can absorb. Pass the rest down the line.</div>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">what a seat costs</div>
+  <h3>A price, a rent, and a term.</h3>
+<pre class="ascii sm">   <b>MAYA BUYS RANK 2 FROM ITS INCUMBENT</b> &mdash; four numbers, all on-chain
+   ──────────────────────────────────────────────────────────────────────────
+   <b>1  THE PRICE OF THE RANK</b>   paid <b>once</b>, to the incumbent, at <b>their own</b>
+                              posted self-price.  At equilibrium: <b>$88,659</b>.
+                              A seat nobody has ever priced asks <b>ZERO</b>.
+
+   <b>2  YOUR CAPITAL</b>            <b class="cool">not a cost — you still own it.</b> The seat changes
+                              hands <b>EMPTY</b>: the seller's money is returned to
+                              the seller, to the wei. Maya funds the seat
+                              herself, or it drops to the back for want of
+                              depth. <b>Rank is backed by depth.</b>
+
+   <b>3  RENT   τ = 10%/yr</b>       charged continuously on <b>Maya's own posted
+                              number</b>, and paid <b class="cool">FORWARD</b> to the seats <b>ahead</b> of
+                              her. She is buying protection from them, so
+                              she pays them for it. Same way round as any
+                              insurance market.
+
+   <b>4  THE TERM  = 7 days</b>      she may not <b>voluntarily</b> give up the <b>RANK</b> for a
+                              week. She may <b>SELL</b> it in any block, at her own
+                              posted price. <b class="cool">A lock on RANK. Never on CAPITAL.</b></pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">what a seat costs</div>
+  <h3>And the catch that makes it work.</h3>
+<pre class="ascii">   <b>THE HARBERGER LEASE</b> &mdash; you set your own price, and you must honour it
+   ─────────────────────────────────────────────────────────────────────
+
+     MAYA POSTS <b>$120,000</b>            MAYA POSTS <b>$40,000</b>
+     ┌────────────────────────┐        ┌───────────────────────────┐
+     │ rent bill  $12,000/yr  │        │ rent bill   $4,000/yr     │
+     │ <b class="cool">safe</b> — nobody will pay │        │ <b class="bad">taken</b> — the seat is worth │
+     │ over the odds for it   │        │ $88k and she asked $40k   │
+     └────────────────────────┘        └───────────────────────────┘
+              <b>overpaying in rent</b>              <b>losing the seat</b>
+
+     There is no third option, and that is the design. <b>A valuable
+     place in the line cannot be sat on and left unpriced.</b>
+
+     <u>Plus one hour of firm quote:</u> a price you change stays binding for
+     an hour, so nobody reprices out of a buyout they can see coming.</pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">the rent cascade</div>
+  <h3>The <em>back</em> pays the <em>front</em>.</h3>
+<pre class="ascii sm">   ONE YEAR · SHIPPED DEPTH WEIGHTS 90 : 44 : 33 : 22 : 11 · τ = 10%/yr
+   ┌──────┬────────┬────────────┬──────────┬─────────────┬──────────┐
+   │ RANK │ WEIGHT │ SELF-PRICE │ PAYS/yr  │ RECEIVES/yr │  NET/yr  │
+   ├──────┼────────┼────────────┼──────────┼─────────────┼──────────┤
+   │  1   │   90   │    100e18  │   10.00  │      85.52  │  <b class="cool">+75.52</b>  │
+   │  2   │   44   │    200e18  │   20.00  │      32.03  │  <b class="cool">+12.03</b>  │
+   │  3   │   33   │    300e18  │   30.00  │      16.63  │  <b class="bad">−13.37</b>  │
+   │  4   │   22   │    400e18  │   40.00  │       5.82  │  <b class="bad">−34.18</b>  │
+   │  5   │   11   │    500e18  │   50.00  │       0.00  │  <b class="bad">−50.00</b>  │
+   └──────┴────────┴────────────┴──────────┴─────────────┴──────────┘
+    HELD (rank 1 has nobody ahead, so its rent has no recipient):  10.00
+    <b>CONSERVATION:  Σ(net) + held  =  0.000000  exactly</b>
+
+   <b>HOW ONE ROW IS BUILT</b> — rank 4 pays 40.00, split over ranks 1, 2 and 3
+   by the depth each of them contributed:
+        rank 1 gets 40.00 × 90/(90+44+33) = 40.00 × 90/167 = <b class="cool">21.56</b>
+        rank 2 gets 40.00 × 44/167                         = <b class="cool">10.54</b>
+        rank 3 gets 40.00 × 33/167                         =  <b class="cool">7.90</b></pre>
+  <div class="cap">This ran <b class="bad">backward</b> until Phase 12 &mdash; charging the seat that absorbs the
+  losses. Reversed, tested, and the old direction is now a negative control.</div>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">what a seat is worth</div>
+  <h3>The tempting rule is wrong &mdash; <em>in our favour</em>.</h3>
+<pre class="ascii">   <b class="bad">✗ THE TEMPTING RULE</b>      value  =  extra P&amp;L  ÷  τ
+   <b class="cool">✓ THE CORRECT RULE</b>       value  =  extra P&amp;L  ÷  (τ + k)
+
+       τ = the rent, 10%/yr.   k = the buyer's own cost of capital, 24%.
+       So you divide by <b>0.34</b> — <b>not</b> by 0.10.
+
+   <b>WHY THE FIRST ONE IS NOT MERELY IMPRECISE:</b> dividing by the rent alone
+   sets the price so that the rent <b>exactly equals</b> the extra P&amp;L. The back
+   seats then net <b>zero</b>, the sponsor pays <b>nothing</b>, and you have a dead
+   equilibrium in which nobody gains and the product has no reason to
+   exist. It overstates the fair ask by (τ+k)/τ = <b class="bad">3.4×</b>, <b>in our favour</b>.
+
+   ┌─ MAYA, RANK 2, WORKED THROUGH ──────────────────────────────────┐
+   │  edge over a plain LP  $5,024 per band × 6 bands  =  $30,144    │
+   │  seat value            30,144 ÷ 0.34             =  <b>$88,659</b>     │
+   │  rent she pays         10% × 88,659              =   −$8,866    │
+   │  rent she receives     from ranks 3, 4 and 5     =   +$4,923    │
+   │  <b class="cool">NET, after everything</b>                        =  <b class="cool">+$26,201</b>       │
+   │                                                    <b class="cool">+11.9%</b> on    │
+   │                                                    her capital  │
+   └─────────────────────────────────────────────────────────────────┘</pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">how many seats</div>
+  <h3>Two questions. Two different answers.</h3>
+<pre class="ascii sm">   <b>THE STRUCTURAL CEILING = 32</b>, and it is a storage fact, not a taste
+   ──────────────────────────────────────────────────────────────────────
+     the entire fill order is <b>ONE 256-BIT WORD</b>, one seat id per byte:
+
+       ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬── … ──┬──┬──┬──┬──┐
+       │03│01│05│02│04│ │ │ │ │ │  32 bytes  │ │ │ │ │   │
+       └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴── … ──┴──┴──┴──┴──┘
+        rank1 rank2 …                        ▲ 32 bytes = <b>32 seats</b>
+
+     One <b>SLOAD</b> reads the whole order. One <b>SSTORE</b> rewrites it. There is
+     deliberately <b>no second copy</b> of the order — on this project a rule
+     kept in two places has been wrong four separate times.
+
+   <b>WHAT WE DEMONSTRATE = 5</b> — a head, a middle and a tail, and small
+     enough that every number on these slides can be checked by hand.
+     Shipped 5-seat sweep: <b>667,969 gas = 2.2% of a block.</b>
+
+   <b>AND THE ECONOMICS BARELY CARE ABOUT N AT ALL:</b>
+
+            <b class="cool">SLACK  =  c₁ × (LP − B₁)</b>
+                      <b>▲</b>
+            the <b>HEAD's share of the book</b> (45%) — <b>not</b> the seat count.
+            <b>N cancels out of the closed form entirely.</b></pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">how many seats &middot; <b class="bad">where we were wrong</b></div>
+  <h3>We overturned our own headline.</h3>
+<pre class="ascii">   <b class="bad">WHAT WE PUBLISHED:</b>  "five seats is near the measured maximum"
+   <b class="cool">WHAT IS TRUE:</b>        every back seat clears at every depth to <b>32</b>
+
+   THE DEFECT, and it is our own rule broken in our own experiment:
+
+     the depth sweep moved <b>TWO</b> variables and credited <b>ONE</b>
+
+        seats   N =  2      5      8     16     32
+        head   c₁ = 66.7%  33.3%  22.2%  11.8%  <b class="bad">6.1%</b>   ← <b class="bad">collapsing!</b>
+                                                    with N
+
+     So "more seats stops working" was really "a shrinking head stops
+     working" — and the head is the <b>dominant</b> parameter. The confound
+     ran in the direction that <b>flattered the shipped configuration</b>,
+     which is exactly why it survived review.
+
+   <b class="cool">RE-RUN WITH THE HEAD HELD FIXED AT 45%</b>, both ladder shapes, 120 paths:
+     the control reproduced four independent published numbers first,
+     and then every back seat cleared at every N up to 32.
+
+   ▶ <b>We corrected it in our own documents rather than quietly dropping it.</b></pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">who's at the table</div>
+  <h2>Two very different people</h2>
+  <div class="two">
+    <div class="card2 hotb">
+      <div class="ct">AT THE FRONT &mdash; NOVA</div>
+      <div class="cn hot" style="font-size:52px;line-height:1.06">A TREASURY<div>OR A DAO</div></div>
+      <div class="cd">Needs depth for its own token and would otherwise print it.
+      <b class="hot">Not chasing a return &mdash; buying liquidity</b>, and paying for it by taking
+      the worse trades. Its seat is a <b>bad investment on purpose</b>.</div>
+    </div>
+    <div class="card2 coolb">
+      <div class="ct">BEHIND THEM &mdash; MAYA, BEN, CARA, DEE</div>
+      <div class="cn cool" style="font-size:52px;line-height:1.06">ORDINARY<div>PROVIDERS</div></div>
+      <div class="cd">Same pool, same fee, same pair. The difference is they're
+      <b class="cool">paid to stand behind that treasury</b> &mdash; by a named counterparty who
+      volunteered, not by a token printer.</div>
+    </div>
+  </div>
+  <div class="cap2">Every place in the line is an <b>ERC&#8209;6909</b> token &mdash; one each, and
+  only one &mdash; which is what lets it be bought, sold, priced and rented.
+  <b class="pro">A pooled vault for the back of the line is DESIGNED, NOT BUILT</b>, and we label it
+  so: a vault in the <b>middle</b> of the line would cost everyone in it their place on one small
+  withdrawal.</div>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">the business case</div>
+  <h3>Both routes buy the <em>same thing</em>. One of them you keep.</h3>
+<pre class="ascii sm">   BUYING THE SAME <b>+15.9% APR UPLIFT</b> FOR $550,000 OF OUTSIDE LPs
+   ═══════════════════════════════════════════════════════════════════════
+
+   <b class="bad">ROUTE A — EMISSIONS</b>                                <b class="bad">$87,624 / yr</b>
+   ───────────────────────────────────────────────────────────────────────
+     NOVA ──prints──▶ $NOVA ──rewards──▶ LPs ──sells──▶ the market
+       │                                                     │
+       └──────────── <b class="bad">every holder diluted</b> ◀──────────────────┘
+
+     <b class="bad">The money has left the building. Permanently.</b>
+
+
+   <b class="cool">ROUTE B — QUEUE</b>                              <b class="cool">$68,688 / yr, NET</b>
+   ───────────────────────────────────────────────────────────────────────
+     NOVA ──funds──▶ <b>RANK 1</b> ──takes the worse fills──▶ ranks 2–5
+                        <b>▲</b>                                   │
+                        └──────────── rent ─────────────────┘
+
+       gross cost, on its own $450,000 . . . . . . . . <b class="bad">−$87,624</b>
+       less the rent the back pays it . . . . . . . .  <b class="cool">+$18,936</b>
+                                                       ─────────
+       <b>NET COST OF THE PROGRAMME</b> . . . . . . . . . . . <b>−$68,688</b>
+                                             = 15.3% of its capital
+
+     <b class="cool">Nothing printed. Nobody diluted. The capital is STILL NOVA's.</b></pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">the business case</div>
+  <h2>Cheaper is the <em>smaller</em> half of the argument.</h2>
+  <div class="grid3">
+    <div class="box b3"><div class="bt">Nothing is printed</div><div class="bd">No new supply. No
+    dilution. No structural sellers appearing every week.</div></div>
+    <div class="box b3"><div class="bt">You keep the money</div><div class="bd">It's an opportunity
+    cost on capital that's still on your balance sheet &mdash; not value issued away.</div></div>
+    <div class="box b3"><div class="bt">It can't be voted away</div><div class="bd">It isn't a
+    programme somebody administers. It's the order trades get filled in.</div></div>
+  </div>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">what a provider gets</div>
+  <h3>You're not out-trading anyone. You're being <em>paid</em>.</h3>
+<pre class="ascii">   <b>MAYA'S EDGE OVER A PLAIN LP SPLITS INTO EXACTLY TWO LEGS</b>
+   ────────────────────────────────────────────────────────────────────
+
+   <b class="cool">LEG 1 — THE COUPON</b>          <b>a transfer, and we say so</b>
+     She is rarely reached, so she earns almost nothing in fees.
+     55% of what the front earns is handed <b>backward</b> to her every
+     time a trade doesn't get that far.
+     ▶ Paid by <b>a named counterparty who volunteered</b>. Not printed.
+
+   <b class="hot">LEG 2 — THE PROTECTION</b>      <b>a real difference in outcome</b>
+     In a sharp move it flips. NOVA absorbs the move at the first
+     and worst prices; Maya is only reached once it is already large.
+     ▶ She is genuinely better off than the pool next door, because
+       the people in front of her <b>ate it first</b>.
+
+   ┌─────────────────────────────────────────────────────────────────┐
+   │  <b>BE HONEST ABOUT WHICH IS WHICH.</b> Leg 1 is a better <b>payer</b>.       │
+   │  Leg 2 is a better <b>trade</b>. Quoting the sum as skill is the       │
+   │  lie we refuse to tell.                                         │
+   └─────────────────────────────────────────────────────────────────┘</pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">how it is built</div>
+  <h3>Nothing is mocked.</h3>
+<pre class="ascii sm">   <b>EVERY TEST RUNS THE REAL THING</b>
+   ──────────────────────────────────────────────────────────────────────
+     real <b>PoolManager</b>       ┐
+     real <b>PositionManager</b>   ├──▶  a real pool: <b>18/6 decimals</b>, price <b>1:4</b>
+     real <b>V4SwapRouter</b>      ┘            <b class="bad">never 18/18.  never 1:1.</b>
+                                  │
+                                  ▼
+                    <b>QueueHook</b> — production bytecode, reached
+                    through the ordinary public API
+                                  │
+                 ┌────────────────┴────────────────┐
+                 ▼                                 ▼
+   ┌─────────────────────────────┐   ┌─────────────────────────────────┐
+   │ an <b class="cool">INDEPENDENTLY WRITTEN</b>    │   │ conservation measured on the    │
+   │ reference allocator         │   │ <b class="cool">PoolManager&#39;s OWN balances</b>,     │
+   │ recomputes every fill, and  │   │ net of protocol fees — <b>never</b>    │
+   │ must agree <b>to the wei</b>       │   │ on the hook&#39;s own bookkeeping   │
+   └─────────────────────────────┘   └─────────────────────────────────┘
+
+     <u>because a hook that miscounts will happily agree with itself.</u>
+
+   ┌────────────┬─────────────┬──────────────────┬──────────────────────────┐
+   │ <b>325</b> tests  │ <b>0</b> failed    │ <b>1</b> loudly         │ deploy script itself     │
+   │            │             │ skipped (needs   │ executed under test,     │
+   │            │             │ a live fork)     │ and on a <b>real fork</b>       │
+   └────────────┴─────────────┴──────────────────┴──────────────────────────┘</pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">how it is attacked</div>
+  <h3>A passing suite is a claim about the <em>tests</em>.</h3>
+<pre class="ascii sm">   <b>WE DO NOT TRY TO PASS. WE TRY TO BREAK IT.</b>
+   ──────────────────────────────────────────────────────────────────────
+   ┌─ <b>MUTATION TESTING</b> ─────────────────────────────────────────────────┐
+   │  Edit <b>ONE line</b> of production Solidity. Run everything.             │
+   │  Stays <b class="cool">GREEN</b>? Then the <b>test suite</b> is the broken thing.             │
+   │                                                                    │
+   │   most recent campaign:  <b class="cool">10 RED</b> · <b class="bad">2 SURVIVED</b> · 0 bad-pattern       │
+   │   and the two survivors got <b>different</b> honest answers:              │
+   │     · one was a <b class="bad">real hole in our suite</b>  → wrote the missing test   │
+   │     · one was a branch that can never be taken → <b>deleted it</b>        │
+   │   <u>widening a tolerance until it goes green is not on that list.</u>    │
+   └────────────────────────────────────────────────────────────────────┘
+   ┌─ <b>INVARIANT CAMPAIGN</b> ───────────────────────────────────────────────┐
+   │  <b>13 properties</b> × <b>256 random runs</b> × <b>64 calls deep</b>. Deposits,        │
+   │  withdrawals, swaps and buyouts, in any order a chain permits.     │
+   │                                                                    │
+   │   found <b class="bad">THREE REAL BUGS</b> in code that had already passed            │
+   │   <b>135 tests and 61 mutations</b>. None was visible to any              │
+   │   correctness test. One of them <b class="bad">bricked every path capital</b>         │
+   │   <b class="bad">had into the queue</b> on any pool holding accrued fees.             │
+   └────────────────────────────────────────────────────────────────────┘
+   ▶ <b>Mutation testing has found a defect EVERY TIME it has been run here.
+     Nine out of nine.</b></pre>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">how it is attacked &middot; <b class="hot">the real code</b></div>
+  <h3>&ldquo;Probably fine&rdquo; isn't a finding.</h3>
+  <div class="file">test/queue/Harberger.t.sol</div>
+  <pre class="code"><span class="ln"><i>2263</i>assertEq(hook.rankOfId(2), 3, "the evacuation did not reach the tail");</span>
+<span class="ln"><i>2264</i>assertTrue(rankBefore != 3, "the seat began at the tail: the demotion is vacuous");</span>
+<span class="ln"><i>2265</i>assertEq(_price(2), 5000e18, "the reprice did not land");</span>
+<span class="ln hi"><i>2266</i>assertEq(hook.buyPrice(2), 0, "THE FREE LANE IS OPEN: self-foreclosure escapes in one tx");</span></pre>
+  <div class="pull p1">The previous session looked at this, decided it was <b>probably fine</b>, and
+  wrote that down. We wrote the test instead. It was a <b class="bad">free lane</b> &mdash; a seat
+  could walk out of a live commitment, land on the best rank, and be re-taken for
+  <b class="bad">nothing</b>. That's the assertion that caught it. It's closed.</div>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">the honest part</div>
+  <h2>What we <em>won't</em> claim</h2>
+  <div class="cav">
+    <div class="cv"><b>It moves money. It doesn't make it.</b><span>The front loses exactly what the
+    back gains. You have seen that arithmetic twice in this deck, not once at the end.</span></div>
+    <div class="cv"><b>The front seat is a bad investment.</b><span><b class="hot">On purpose.</b>
+    It's for someone buying liquidity, not chasing a return. Its own self-price is
+    <b>zero</b>.</span></div>
+    <div class="cv"><b>The economics are simulated.</b><span>Modelled hard, 120 paths a cell, and
+    <b>not yet live</b>. The contract is tested; the market isn't real yet.</span></div>
+    <div class="cv"><b>+119% gas per swap.</b><span>153,110 against 69,970 with no hook. A constant
+    a trader can price &mdash; but it makes this an <b>L2 product</b>.</span></div>
+    <div class="cv wide"><b class="bad">Not audited. Testnet only.</b><span>No mainnet deployment,
+    and no plans for one until that changes. The pooled vault for small providers is
+    <b>designed, not built</b>, and labelled so everywhere it appears.</span></div>
+  </div>
+</div></section>
+<section class="slide"><div class="pad">
+  <div class="kick">QUEUE</div>
+  <h1>Rent liquidity<br>without <em>printing</em> it.</h1>
+  <div class="lead">A treasury funds the front of a pool, takes the worse trades on purpose, and
+  pays outside providers to stand behind it.</div>
+  <div class="stat">
+    <div class="st h"><div class="sn hot">45%</div><div class="sl">head share</div>
+      <div class="sd">The dominant economic parameter. Not the seat count.</div></div>
+    <div class="st"><div class="sn cool">55%</div><div class="sl">the coupon</div>
+      <div class="sd">Handed backward, by the seats that were filled.</div></div>
+    <div class="st"><div class="sn">10% <small style="font-size:24px">/yr</small></div>
+      <div class="sl">rent &middot; 7-day term</div>
+      <div class="sd">On your own posted price. A lock on rank, never on capital.</div></div>
+    <div class="st"><div class="sn">325</div><div class="sl">tests &middot; 0 failed</div>
+      <div class="sd">Real v4 contracts. Nine-for-nine on mutation testing.</div></div>
+  </div>
+  <div class="foot">Every number in this deck is reproducible from a named file in the repository.</div>
+</div></section>
+</div>
+<div id="bar"></div><div id="num"></div>
+<div id="help">← → move · N speaker notes · F fullscreen</div>
+<div id="notes"><b>What you say here</b><span id="ntext"></span></div>
+<script>
+const S=[...document.querySelectorAll('.slide')];
+const N=["Every protocol needs deep liquidity. And the way you get it today is you print your own token and hand it out. It works. It also dilutes everyone who already holds it, and the day you stop paying, the money walks. You're renting. And you're paying in equity.", "So here's the question we started from. What if somebody volunteered to take the worst trades on purpose, and everyone behind them got a better deal for it? That's QUEUE. It's a Uniswap hook. It puts the people funding a pool into a line and fills them in order. Nothing printed, nobody diluted.", "Today every pool works the same way. A trade comes in and everybody gives up a slice. You can't opt out, go first, or go last. QUEUE gives each of them a rank. The trade hits whoever's first until they're used up, then the second. Same price, same fee. What changed is who ate it.", "", "Let's walk one trade through, because this is the whole idea. A hundred and eighty thousand of selling shows up. It hits NOVA, the treasury at the front, and NOVA takes all of it. Maya, Ben, Cara and Dee behind her never feel it. Then the money goes backwards. NOVA earned the fee, and hands most of it to the four people it just protected.", "And here's the surprise. Being first is bad. The front eats every move at its worst moment, and everyone behind does better because it's there. These are the measured numbers. The front ends up fifteen thousand worse off. The four behind, fifteen thousand better. Look at the bottom row. Zero. This moves money. It doesn't make money.", "And this is the actual thing. Take what this one can absorb, pass the rest down the line. Everything else exists to make that safe.", "A place in that line is worth something, so it needs a price. You post your own number, you pay rent on it, and anyone can buy the seat off you at that number, any time. Post high and you're safe but you pay for it. Post low and someone takes it. No third option. Nobody sits on a valuable spot and refuses to price it.", "", "The rent runs forwards. The back pays the front, because the back is buying protection and the front is supplying it. It ran the other way until recently. We caught it, turned it round, and the old direction is now a test we make sure fails.", "What's a seat worth? There's a tempting answer, and it's wrong in our own favour. Divide by the rent alone and everybody nets zero, and there's nothing left for anyone. You have to count what the buyer wanted on their money too.", "How many seats? Thirty-two is the limit. We show five, because five is enough to see a front, a middle and a back. And the number barely matters. What matters is how big the front one is. We used to publish that five was the maximum. It was wrong, and we corrected our own headline.", "", "Two very different people here. At the front, a treasury that needs depth for its own token and would otherwise print it. Not chasing a return, buying liquidity. Behind them, ordinary providers, paid to stand there by somebody who volunteered.", "So what does it cost? A million dollar pool. Either way you're buying the same thing: about eighty-eight thousand a year for the people behind you. Print it, and that's your own token, gone. Do it this way and it's sixty-nine, net. And cheaper is the smaller half. You printed nothing, and the money is still yours.", "", "From the other side. Most of the time you're barely touched, and you're paid for waiting. In a sharp move it flips. You're genuinely better off, because the people in front ate it first.", "So why believe any of this. Nothing is faked. Every test runs against real Uniswap contracts, and a separately written copy of the maths has to agree exactly. Three hundred and twenty-five tests, none failing.", "Then we attack it. We change one line of the real contract and run everything again. If it still passes, the tests are what's broken. That's found something every single time. My favourite: the last session looked at this, decided it was probably fine, and wrote that down. We wrote the test instead. It wasn't fine.", "", "Now the honest part. This moves money between people. It doesn't create any. The front seat is a bad investment on purpose. The economics are simulated. It costs about twice the gas, so it belongs on a cheap chain. And it hasn't been audited.", "So that's QUEUE. A treasury stands at the front, takes the worse trades on purpose, and pays everyone behind it, without printing a single token."];
+let i=0, showNotes=false;
+function go(n){
+  i=Math.max(0,Math.min(S.length-1,n));
+  S.forEach((s,k)=>s.classList.toggle('on',k===i));
+  document.getElementById('bar').style.width=((i+1)/S.length*100)+'%';
+  document.getElementById('num').textContent=(i+1)+' / '+S.length;
+  document.getElementById('ntext').textContent=N[i]||'—';
+  location.hash=i+1;
+}
+addEventListener('keydown',e=>{
+  if(['ArrowRight','PageDown',' ','Enter','j'].includes(e.key)){e.preventDefault();go(i+1);}
+  else if(['ArrowLeft','PageUp','Backspace','k'].includes(e.key)){e.preventDefault();go(i-1);}
+  else if(e.key==='Home')go(0); else if(e.key==='End')go(S.length-1);
+  else if(e.key==='n'||e.key==='N'){showNotes=!showNotes;document.getElementById('notes').classList.toggle('on',showNotes);}
+  else if(e.key==='f'||e.key==='F'){document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();}
+});
+addEventListener('click',e=>{if(!e.target.closest('#notes'))go(i+(e.clientX<innerWidth*0.25?-1:1));});
+go(Math.max(0,(parseInt(location.hash.slice(1))||1)-1));
+</script></body></html>
